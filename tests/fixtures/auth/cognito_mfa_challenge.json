@@ -1,0 +1,35 @@
+{
+  "name": "cognito_mfa_challenge",
+  "source": "observed_portal_js_ChallengeName_SMS_MFA",
+  "request": {
+    "method": "POST",
+    "url": "https://cognito-idp.us-west-2.amazonaws.com/",
+    "headers": {
+      "Content-Type": "application/x-amz-json-1.1",
+      "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth"
+    },
+    "body": {
+      "AuthFlow": "USER_PASSWORD_AUTH",
+      "ClientId": "4q9nbgmi0gcks5t7d6fkhubfnm",
+      "AuthParameters": {
+        "USERNAME": "<EMAIL>",
+        "PASSWORD": "<PASSWORD>"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/x-amz-json-1.1"
+    },
+    "cookies": [],
+    "body": {
+      "ChallengeName": "SMS_MFA",
+      "ChallengeParameters": {
+        "CODE_DELIVERY_DELIVERY_MEDIUM": "SMS",
+        "CODE_DELIVERY_DESTINATION": "<REDACTED_PHONE>"
+      },
+      "Session": "<COGNITO_SESSION>"
+    }
+  }
+}

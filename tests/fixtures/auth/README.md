@@ -1,0 +1,22 @@
+# Auth fixtures
+
+Sanitized PGE credential-login fixtures for `portal_auth` / CLI tests.
+
+## Files
+
+| File | Role |
+| --- | --- |
+| `login_chain.json` | Ordered Hybrid auth chain summary |
+| `cognito_initiate_auth_success.json` | Cognito `USER_PASSWORD_AUTH` success shape |
+| `cognito_initiate_auth_not_authorized.json` | Live-captured reject (`NotAuthorizedException`) |
+| `cognito_mfa_challenge.json` | Observed MFA challenge (`SMS_MFA`) |
+| `cognito_refresh_token_auth.json` | Cognito `REFRESH_TOKEN_AUTH` renewal |
+| `apigee_token_success.json` | Apigee `pg-token-implicit-aws` exchange |
+| `graphql_get_account_info.json` | Account discovery GraphQL shape |
+
+## Rules
+
+- Preserve status codes, redirect hosts/paths, cookie **names**/attributes, JSON keys.
+- Replace every cookie value, token, nonce, email, person ID, and account number.
+- Never commit live secrets.
+- Public Cognito/Apigee **client IDs** from the portal bundle are not secrets and may appear.

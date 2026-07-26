@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "ha-pge-energy"
+description = "Home Assistant integration for Portland General Electric energy usage"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# Keep unit tests free of pytest-homeassistant-custom-component autouse fixtures.
+# Canonical full suite: bash scripts/run_tests.sh
+# Recorder suite alone: pytest tests/recorder -p homeassistant -o addopts= -q
+testpaths = ["tests/components"]
+addopts = ["-p", "no:homeassistant"]
+filterwarnings = [
+  "error::RuntimeWarning",
+  "ignore:Inheritance class HomeAssistantApplication from web.Application is discouraged:DeprecationWarning",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true

@@ -1,0 +1,5 @@
+{
+  "name": "Portland General Electric Energy Usage",
+  "render_readme": true,
+  "homeassistant": "2026.7.0"
+}

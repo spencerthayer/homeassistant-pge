@@ -1,0 +1,164 @@
+{
+  "getAccountDetailList": {
+    "accounts": [
+      {
+        "accountNumber": "0000000000",
+        "paymentHistory": {
+          "totalDetailsRecords": 72,
+          "paymentHistoryDetails": [
+            {
+              "date": "2026-07-13T07:00:00.000Z",
+              "amountPaid": 0,
+              "type": "Bill",
+              "amountDue": 300.13,
+              "kwh": 1358,
+              "billingPeriodStartDate": "2026-06-04T07:00:00.000Z",
+              "billingPeriodEndDate": "2026-07-06T07:00:00.000Z",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2026-06-30T07:00:00.000Z",
+              "amountPaid": 293.01,
+              "type": "Payment",
+              "amountDue": 0,
+              "kwh": 0,
+              "billingPeriodStartDate": "",
+              "billingPeriodEndDate": "",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2026-06-04T07:00:00.000Z",
+              "amountPaid": 0,
+              "type": "Bill",
+              "amountDue": 293.01,
+              "kwh": 1322,
+              "billingPeriodStartDate": "2026-05-05T07:00:00.000Z",
+              "billingPeriodEndDate": "2026-06-04T07:00:00.000Z",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2026-06-01T07:00:00.000Z",
+              "amountPaid": 304.05,
+              "type": "Payment",
+              "amountDue": 0,
+              "kwh": 0,
+              "billingPeriodStartDate": "",
+              "billingPeriodEndDate": "",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2026-05-05T07:00:00.000Z",
+              "amountPaid": 0,
+              "type": "Bill",
+              "amountDue": 304.05,
+              "kwh": 1358,
+              "billingPeriodStartDate": "2026-04-15T07:00:00.000Z",
+              "billingPeriodEndDate": "2026-05-05T07:00:00.000Z",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2026-04-30T07:00:00.000Z",
+              "amountPaid": 222.87,
+              "type": "Payment",
+              "amountDue": 0,
+              "kwh": 0,
+              "billingPeriodStartDate": "",
+              "billingPeriodEndDate": "",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2026-04-06T07:00:00.000Z",
+              "amountPaid": 0,
+              "type": "Bill",
+              "amountDue": 222.87,
+              "kwh": 1050,
+              "billingPeriodStartDate": "2026-03-06T08:00:00.000Z",
+              "billingPeriodEndDate": "2026-04-06T07:00:00.000Z",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2026-03-30T07:00:00.000Z",
+              "amountPaid": 229.18,
+              "type": "Payment",
+              "amountDue": 0,
+              "kwh": 0,
+              "billingPeriodStartDate": "",
+              "billingPeriodEndDate": "",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2026-03-06T08:00:00.000Z",
+              "amountPaid": 0,
+              "type": "Bill",
+              "amountDue": 229.18,
+              "kwh": 1092,
+              "billingPeriodStartDate": "2026-02-05T08:00:00.000Z",
+              "billingPeriodEndDate": "2026-03-06T08:00:00.000Z",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2026-03-02T08:00:00.000Z",
+              "amountPaid": 236.04,
+              "type": "Payment",
+              "amountDue": 0,
+              "kwh": 0,
+              "billingPeriodStartDate": "",
+              "billingPeriodEndDate": "",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2026-02-05T08:00:00.000Z",
+              "amountPaid": 0,
+              "type": "Bill",
+              "amountDue": 239.24,
+              "kwh": 1143,
+              "billingPeriodStartDate": "2026-01-06T08:00:00.000Z",
+              "billingPeriodEndDate": "2026-02-05T08:00:00.000Z",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2026-01-30T08:00:00.000Z",
+              "amountPaid": 227.35,
+              "type": "Payment",
+              "amountDue": 0,
+              "kwh": 0,
+              "billingPeriodStartDate": "",
+              "billingPeriodEndDate": "",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2026-01-06T08:00:00.000Z",
+              "amountPaid": 0,
+              "type": "Bill",
+              "amountDue": 227.85,
+              "kwh": 1072,
+              "billingPeriodStartDate": "2025-12-04T08:00:00.000Z",
+              "billingPeriodEndDate": "2026-01-06T08:00:00.000Z",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2025-12-30T08:00:00.000Z",
+              "amountPaid": 199.56,
+              "type": "Payment",
+              "amountDue": 0,
+              "kwh": 0,
+              "billingPeriodStartDate": "",
+              "billingPeriodEndDate": "",
+              "encryptedBillId": "<REDACTED>"
+            },
+            {
+              "date": "2025-12-04T08:00:00.000Z",
+              "amountPaid": 0,
+              "type": "Bill",
+              "amountDue": 199.56,
+              "kwh": 928,
+              "billingPeriodStartDate": "2025-11-03T08:00:00.000Z",
+              "billingPeriodEndDate": "2025-12-04T08:00:00.000Z",
+              "encryptedBillId": "<REDACTED>"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

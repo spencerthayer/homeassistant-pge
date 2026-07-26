@@ -1,0 +1,23 @@
+{
+  "name": "apigee_token_success",
+  "source": "observed_portal_js_pg-token-implicit-aws",
+  "request": {
+    "method": "POST",
+    "url": "https://apix.portlandgeneral.com/pg-token-implicit-aws/token?client_id=rHuS10KrfsLwFAr2sZ7MHh7oHELGx6YK&response_type=token&redirect_uri=",
+    "headers": {
+      "idp_access_token": "<COGNITO_ID_TOKEN>"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "cookies": [],
+    "body": {
+      "access_token": "<APIGEE_ACCESS_TOKEN>",
+      "expires_at": 1893456000
+    }
+  }
+}

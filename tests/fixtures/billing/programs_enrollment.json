@@ -1,0 +1,55 @@
+{
+  "getProgramsEnrollmentStatusDetails": {
+    "energyShifting": [
+      {
+        "isEligible": true,
+        "isEnrolled": false,
+        "programName": "EV_SMART_CHARGING"
+      },
+      {
+        "isEligible": true,
+        "isEnrolled": true,
+        "programName": "PEAK_TIME_REBATES"
+      },
+      {
+        "isEligible": false,
+        "isEnrolled": false,
+        "programName": "SMART_THERMOSTAT"
+      },
+      {
+        "isEligible": true,
+        "isEnrolled": false,
+        "programName": "TIME_OF_DAY"
+      },
+      {
+        "isEligible": true,
+        "isEnrolled": false,
+        "programName": "SMART_BATTERY_PILOT"
+      }
+    ],
+    "renewables": [
+      {
+        "isEligible": true,
+        "isEnrolled": false,
+        "programName": "NET_METERING_PROJECT_IN_PROCESS"
+      },
+      {
+        "isEligible": true,
+        "isEnrolled": true,
+        "programName": "GREEN_FUTURE_CHOICE"
+      },
+      {
+        "isEligible": true,
+        "isEnrolled": false,
+        "programName": "GREEN_FUTURE_BLOCK"
+      },
+      {
+        "isEligible": true,
+        "isEnrolled": false,
+        "programName": "COMMUNITY_SOLAR"
+      }
+    ],
+    "onBillFlexLoadEarnings": "0.00",
+    "ytdFlexLoadEarnings": "3.70"
+  }
+}

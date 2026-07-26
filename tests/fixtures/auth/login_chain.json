@@ -1,0 +1,44 @@
+{
+  "name": "pge_hybrid_login_chain",
+  "discovered_at": "2026-07-23",
+  "auth_type": "Hybrid",
+  "steps": [
+    {
+      "order": 1,
+      "name": "cognito_initiate_auth",
+      "fixture": "cognito_initiate_auth_success.json",
+      "role": "Email/password → Cognito USER_PASSWORD_AUTH"
+    },
+    {
+      "order": 2,
+      "name": "apigee_token_exchange",
+      "fixture": "apigee_token_success.json",
+      "role": "Exchange Cognito IdToken for Apigee GraphQL bearer via idp_access_token header"
+    },
+    {
+      "order": 3,
+      "name": "graphql_get_account_info",
+      "fixture": "graphql_get_account_info.json",
+      "role": "Discover encryptedPersonId and accountNumber list"
+    },
+    {
+      "order": 4,
+      "name": "cognito_refresh_token_auth",
+      "fixture": "cognito_refresh_token_auth.json",
+      "role": "Durable renewal: Cognito REFRESH_TOKEN_AUTH then repeat Apigee exchange"
+    }
+  ],
+  "public_client_ids": {
+    "cognito_user_pool_id": "us-west-2_rnEzd20tN",
+    "cognito_client_id": "4q9nbgmi0gcks5t7d6fkhubfnm",
+    "apigee_client_id": "rHuS10KrfsLwFAr2sZ7MHh7oHELGx6YK"
+  },
+  "mfa_signals_observed": [
+    "ChallengeName=SMS_MFA",
+    "ChallengeName=SOFTWARE_TOKEN_MFA",
+    "ChallengeName=SELECT_MFA_TYPE",
+    "ChallengeName=MFA_SETUP",
+    "status=MFA_REQUIRED"
+  ],
+  "live_capture_note": "First live InitiateAuth with local .env returned NotAuthorizedException; see cognito_initiate_auth_not_authorized.json. Apigee/GraphQL success bodies are shape-faithful from portal JS until a successful live re-run."
+}

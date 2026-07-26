@@ -1,0 +1,35 @@
+{
+  "name": "cognito_refresh_token_auth",
+  "source": "observed_portal_js_REFRESH_TOKEN_AUTH",
+  "request": {
+    "method": "POST",
+    "url": "https://cognito-idp.us-west-2.amazonaws.com/",
+    "headers": {
+      "Content-Type": "application/x-amz-json-1.1",
+      "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth"
+    },
+    "body": {
+      "AuthFlow": "REFRESH_TOKEN_AUTH",
+      "ClientId": "4q9nbgmi0gcks5t7d6fkhubfnm",
+      "AuthParameters": {
+        "REFRESH_TOKEN": "<COGNITO_REFRESH_TOKEN>"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/x-amz-json-1.1"
+    },
+    "cookies": [],
+    "body": {
+      "AuthenticationResult": {
+        "AccessToken": "<COGNITO_ACCESS_TOKEN>",
+        "ExpiresIn": 3600,
+        "IdToken": "<COGNITO_ID_TOKEN>",
+        "TokenType": "Bearer"
+      },
+      "ChallengeParameters": {}
+    }
+  }
+}

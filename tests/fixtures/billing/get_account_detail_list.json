@@ -1,0 +1,56 @@
+{
+  "getAccountDetailList": {
+    "totalCount": 1,
+    "accounts": [
+      {
+        "accountNumber": "0000000000",
+        "encryptedAccountNumber": "<REDACTED>",
+        "encryptedPersonId": "<REDACTED>",
+        "billInfo": {
+          "amountDue": 300.13,
+          "dueDate": "07/30/2026",
+          "lastPaymentAmount": 293.01,
+          "lastPaymentDate": "06/30/2026",
+          "billDetails": {
+            "amountDue": 300.13,
+            "kwh": 1358,
+            "billDate": "2026-07-13T07:00:00.000Z",
+            "dueDate": "2026-07-30T07:00:00.000Z",
+            "previousBalance": 293.01,
+            "totalAdjustments": -293.01,
+            "totalCurrentCharges": 300.13,
+            "totalBalanceAfterBill": 0,
+            "billingPeriodStartDate": "2026-06-04T07:00:00.000Z",
+            "billingPeriodEndDate": "2026-07-06T07:00:00.000Z",
+            "encryptedBillId": "<REDACTED>"
+          }
+        },
+        "autoPay": {
+          "isEnrolled": true
+        },
+        "isPaperlessBillEnrolled": {
+          "result": true
+        },
+        "premiseInfo": [
+          {
+            "encryptedPremiseId": "<REDACTED>",
+            "saDetails": [
+              {
+                "encryptedSAId": "<REDACTED>"
+              }
+            ]
+          }
+        ],
+        "viewBillAverageTemperature": {
+          "temperatureSource": "Portland International Airport",
+          "currentBillingPeriod": {
+            "averageTemperature": 64.88,
+            "date": "2026-07-13T07:00:00.000Z",
+            "totalCost": 300.13,
+            "totalKwh": 1358
+          }
+        }
+      }
+    ]
+  }
+}

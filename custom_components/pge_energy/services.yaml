@@ -1,0 +1,59 @@
+refresh:
+  name: Refresh
+  description: >
+    Request an immediate data refresh for one or all PGE Energy entries.
+    When billing import is enabled (include_billing), also advances the account
+    snapshot, payment/bill ledger page, and programs sync.
+  fields:
+    entry_id:
+      name: Config entry ID
+      description: Optional. When set, only that entry is refreshed.
+      required: false
+      selector:
+        text:
+
+backfill:
+  name: Backfill history
+  description: >
+    Backfill history for a single config entry using automatic tiering —
+    hourly for the newest days, then daily, then monthly for older gaps.
+    When billing import is enabled, also pages the bill/payment ledger until
+    the Store checkpoint reports complete.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: true
+      selector:
+        text:
+    start_date:
+      name: Start date
+      description: ISO datetime for the oldest interval to fetch.
+      required: true
+      selector:
+        text:
+    end_date:
+      name: End date
+      description: ISO datetime for the newest interval to fetch.
+      required: true
+      selector:
+        text:
+
+retry_failed_ranges:
+  name: Retry failed ranges
+  description: Retry failed local calendar days for a single config entry.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: true
+      selector:
+        text:
+
+reset_import_checkpoint:
+  name: Reset import checkpoint
+  description: Clear persisted backfill/checkpoint state for a single entry (does not delete recorder history).
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: true
+      selector:
+        text:

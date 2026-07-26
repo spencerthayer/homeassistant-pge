@@ -1,0 +1,32 @@
+{
+  "name": "cognito_initiate_auth_not_authorized",
+  "source": "live_capture_2026-07-23",
+  "request": {
+    "method": "POST",
+    "url": "https://cognito-idp.us-west-2.amazonaws.com/",
+    "headers": {
+      "Content-Type": "application/x-amz-json-1.1",
+      "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth"
+    },
+    "body": {
+      "AuthFlow": "USER_PASSWORD_AUTH",
+      "ClientId": "4q9nbgmi0gcks5t7d6fkhubfnm",
+      "AuthParameters": {
+        "USERNAME": "<EMAIL>",
+        "PASSWORD": "<PASSWORD>"
+      }
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "Content-Type": "application/x-amz-json-1.1",
+      "x-amzn-ErrorType": "NotAuthorizedException:"
+    },
+    "cookies": [],
+    "body": {
+      "__type": "NotAuthorizedException",
+      "message": "Incorrect username or password."
+    }
+  }
+}

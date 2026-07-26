@@ -1,0 +1,37 @@
+{
+  "name": "cognito_initiate_auth_success",
+  "source": "observed_portal_js_AuthenticationResult_shape",
+  "request": {
+    "method": "POST",
+    "url": "https://cognito-idp.us-west-2.amazonaws.com/",
+    "headers": {
+      "Content-Type": "application/x-amz-json-1.1",
+      "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth"
+    },
+    "body": {
+      "AuthFlow": "USER_PASSWORD_AUTH",
+      "ClientId": "4q9nbgmi0gcks5t7d6fkhubfnm",
+      "AuthParameters": {
+        "USERNAME": "<EMAIL>",
+        "PASSWORD": "<PASSWORD>"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/x-amz-json-1.1"
+    },
+    "cookies": [],
+    "body": {
+      "AuthenticationResult": {
+        "AccessToken": "<COGNITO_ACCESS_TOKEN>",
+        "ExpiresIn": 3600,
+        "IdToken": "<COGNITO_ID_TOKEN>",
+        "RefreshToken": "<COGNITO_REFRESH_TOKEN>",
+        "TokenType": "Bearer"
+      },
+      "ChallengeParameters": {}
+    }
+  }
+}

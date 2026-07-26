@@ -1,0 +1,452 @@
+"""Dual-publish billing / programs series into Home Assistant statistics.
+
+Every graphable billing numeric series is written both as an external
+``pge_energy:<account_key>_*`` statistic (source ``pge_energy``) and mirrored
+onto the matching ``sensor.pge_*`` recorder statistic_id, reusing the helpers
+from :mod:`.statistics` so the History / Statistics / Energy pickers behave the
+same as consumption / cost / temperature.
+
+Two shapes are used:
+
+* **mean** series (account balance, amount due, last payment amount, bill
+  period average temperature, YTD program savings) — one non-cumulative row per
+  billing snapshot timestamp.
+* **sum** series (bill amount, bill kWh, payment amount) — one cumulative row
+  per ledger event, upserted by hour so re-syncing the paged feed is
+  idempotent.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime
+from typing import Any
+
+from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.const import DOMAIN as RECORDER_DOMAIN
+from homeassistant.components.recorder.models.statistics import StatisticMetaData
+from homeassistant.components.recorder.statistics import (
+    StatisticMeanType,
+    async_add_external_statistics,
+    get_last_statistics,
+    statistics_during_period,
+)
+from homeassistant.const import UnitOfEnergy, UnitOfTemperature
+from homeassistant.core import HomeAssistant
+
+from .billing_models import AccountSnapshot, LedgerEvent, LedgerEventType, ProgramsSnapshot
+from .const import (
+    DOMAIN,
+    ENTITY_UNIQUE_ACCOUNT_BALANCE,
+    ENTITY_UNIQUE_AMOUNT_DUE,
+    ENTITY_UNIQUE_BILL_AVG_TEMPERATURE,
+    ENTITY_UNIQUE_LAST_PAYMENT_AMOUNT,
+    ENTITY_UNIQUE_LIFETIME_BILLED,
+    ENTITY_UNIQUE_LIFETIME_PAYMENTS,
+    ENTITY_UNIQUE_YTD_PROGRAM_SAVINGS,
+    STATISTIC_ID_SUFFIX_ACCOUNT_BALANCE,
+    STATISTIC_ID_SUFFIX_AMOUNT_DUE,
+    STATISTIC_ID_SUFFIX_BILL_AMOUNT,
+    STATISTIC_ID_SUFFIX_BILL_AVG_TEMPERATURE,
+    STATISTIC_ID_SUFFIX_BILL_KWH,
+    STATISTIC_ID_SUFFIX_LAST_PAYMENT_AMOUNT,
+    STATISTIC_ID_SUFFIX_PAYMENT_AMOUNT,
+    STATISTIC_ID_SUFFIX_YTD_PROGRAM_SAVINGS,
+)
+from .options import pge_display_name
+
+# Reuse the module-private helpers from statistics.py rather than re-deriving
+# statistic ids / row shapes. They are underscore-prefixed but stable, and the
+# plan explicitly calls for importing them here.
+from .statistics import (  # noqa: PLC2701
+    _as_utc_datetime,
+    _async_mirror_entity_statistics,
+    _get_statistic_id,
+    _mean_stat_row,
+    _stat_row,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+# Matches the lookback floor used by statistics.py (_async_anchor_sum).
+_STATS_FLOOR = datetime(2019, 1, 1, tzinfo=UTC)
+
+_USD = "USD"
+
+
+def _billing_base_name(account_id: str | None, account_key: str) -> str:
+    return pge_display_name(account_id) if account_id else pge_display_name(account_key[:8])
+
+
+def _floor_hour(value: datetime) -> datetime:
+    """External statistics require whole-hour starts in UTC."""
+    aware = _as_utc_datetime(value) or datetime.now(UTC)
+    return aware.replace(minute=0, second=0, microsecond=0)
+
+
+# ---------------------------------------------------------------------------
+# Metadata builders
+# ---------------------------------------------------------------------------
+
+
+def _external_mean_metadata(stat_id: str, name: str, *, unit: str | None, unit_class: str | None) -> StatisticMetaData:
+    return StatisticMetaData(
+        has_mean=True,
+        mean_type=StatisticMeanType.ARITHMETIC,
+        has_sum=False,
+        name=name,
+        source=DOMAIN,
+        statistic_id=stat_id,
+        unit_class=unit_class,
+        unit_of_measurement=unit,
+    )
+
+
+def _external_sum_metadata(stat_id: str, name: str, *, unit: str | None, unit_class: str | None) -> StatisticMetaData:
+    return StatisticMetaData(
+        has_mean=False,
+        mean_type=StatisticMeanType.NONE,
+        has_sum=True,
+        name=name,
+        source=DOMAIN,
+        statistic_id=stat_id,
+        unit_class=unit_class,
+        unit_of_measurement=unit,
+    )
+
+
+def _entity_mean_metadata(entity_id: str, name: str, *, unit: str | None, unit_class: str | None) -> StatisticMetaData:
+    return StatisticMetaData(
+        has_mean=True,
+        mean_type=StatisticMeanType.ARITHMETIC,
+        has_sum=False,
+        name=name,
+        source=RECORDER_DOMAIN,
+        statistic_id=entity_id,
+        unit_class=unit_class,
+        unit_of_measurement=unit,
+    )
+
+
+def _entity_sum_metadata(entity_id: str, name: str, *, unit: str | None, unit_class: str | None) -> StatisticMetaData:
+    return StatisticMetaData(
+        has_mean=False,
+        mean_type=StatisticMeanType.NONE,
+        has_sum=True,
+        name=name,
+        source=RECORDER_DOMAIN,
+        statistic_id=entity_id,
+        unit_class=unit_class,
+        unit_of_measurement=unit,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Recorder read helpers (mirror statistics.py patterns, kept local)
+# ---------------------------------------------------------------------------
+
+
+async def _async_load_sum_states(hass: HomeAssistant, statistic_id: str) -> dict[datetime, float]:
+    """Load existing hourly rows into a start→state map for a sum series."""
+    try:
+        result = await get_instance(hass).async_add_executor_job(
+            statistics_during_period,
+            hass,
+            _STATS_FLOOR,
+            None,
+            {statistic_id},
+            "hour",
+            None,
+            {"state", "sum"},
+        )
+    except Exception as exc:  # pragma: no cover - recorder failure is soft
+        _LOGGER.debug("statistics_during_period failed for %s: %s", statistic_id, exc)
+        return {}
+    rows = result.get(statistic_id) or []
+    out: dict[datetime, float] = {}
+    for row in rows:
+        start = _as_utc_datetime(row.get("start"))
+        if start is None:
+            continue
+        state = row.get("state")
+        if state is None:
+            state = row.get("sum")
+        out[start] = float(state or 0.0)
+    return out
+
+
+async def _async_last_sum(hass: HomeAssistant, statistic_id: str) -> float | None:
+    """Return the most recent cumulative ``sum`` for a series, or None."""
+    try:
+        last = await get_instance(hass).async_add_executor_job(
+            get_last_statistics,
+            hass,
+            1,
+            statistic_id,
+            True,
+            {"sum"},
+        )
+    except Exception as exc:  # pragma: no cover - recorder failure is soft
+        _LOGGER.debug("get_last_statistics failed for %s: %s", statistic_id, exc)
+        return None
+    if not last or statistic_id not in last:
+        return None
+    rows = last[statistic_id]
+    if not rows:
+        return None
+    value = rows[0].get("sum")
+    return float(value) if value is not None else None
+
+
+# ---------------------------------------------------------------------------
+# Import primitives
+# ---------------------------------------------------------------------------
+
+
+def _import_mean_point(
+    hass: HomeAssistant,
+    account_key: str,
+    account_id: str | None,
+    *,
+    suffix: str,
+    entity_suffix: str | None,
+    value: float | None,
+    when: datetime,
+    unit: str | None,
+    unit_class: str | None,
+    label: str,
+) -> None:
+    if value is None:
+        return
+    stat_id = _get_statistic_id(account_key, suffix)
+    row = _mean_stat_row(_floor_hour(when), float(value))
+    name = f"{_billing_base_name(account_id, account_key)} {label}"
+    async_add_external_statistics(
+        hass,
+        _external_mean_metadata(stat_id, name, unit=unit, unit_class=unit_class),
+        [row],
+    )
+    if entity_suffix is not None:
+        _async_mirror_entity_statistics(
+            hass,
+            account_key=account_key,
+            unique_suffix=entity_suffix,
+            entity_metadata=_entity_mean_metadata("sensor._", name, unit=unit, unit_class=unit_class),
+            stats=[row],
+        )
+
+
+async def _async_import_sum_series(
+    hass: HomeAssistant,
+    account_key: str,
+    account_id: str | None,
+    *,
+    suffix: str,
+    entity_suffix: str | None,
+    points: dict[datetime, float],
+    unit: str | None,
+    unit_class: str | None,
+    label: str,
+) -> None:
+    """Upsert cumulative sum rows (by hour) and rebuild running totals."""
+    if not points:
+        return
+    stat_id = _get_statistic_id(account_key, suffix)
+    existing = await _async_load_sum_states(hass, stat_id)
+    merged = dict(existing)
+    for start, state in points.items():
+        merged[_floor_hour(start)] = float(state)
+
+    running = 0.0
+    rows: list[dict[str, Any]] = []
+    for start in sorted(merged):
+        running += merged[start]
+        rows.append(_stat_row(start, merged[start], running))
+    if not rows:
+        return
+
+    name = f"{_billing_base_name(account_id, account_key)} {label}"
+    async_add_external_statistics(
+        hass,
+        _external_sum_metadata(stat_id, name, unit=unit, unit_class=unit_class),
+        rows,
+    )
+    if entity_suffix is not None:
+        _async_mirror_entity_statistics(
+            hass,
+            account_key=account_key,
+            unique_suffix=entity_suffix,
+            entity_metadata=_entity_sum_metadata("sensor._", name, unit=unit, unit_class=unit_class),
+            stats=rows,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+async def async_import_billing_snapshot(
+    hass: HomeAssistant,
+    account_key: str,
+    account_id: str | None,
+    snapshot: AccountSnapshot,
+    when: datetime,
+) -> None:
+    """Write mean rows for the account summary + latest-bill sample.
+
+    Current-bill amount / kWh are surfaced directly on their sensors from the
+    snapshot rather than written here, because the ``_bill_amount`` /
+    ``_bill_kwh`` statistic ids are cumulative *sum* series owned by
+    :func:`async_import_ledger_events` and cannot double as mean series.
+    """
+    # Both series currently use billInfo.amountDue — the portal balance banner
+    # is not a separate GraphQL field yet. Keep both entity/stat IDs stable so a
+    # distinct balance source can land later without breaking History graphs.
+    _import_mean_point(
+        hass,
+        account_key,
+        account_id,
+        suffix=STATISTIC_ID_SUFFIX_ACCOUNT_BALANCE,
+        entity_suffix=ENTITY_UNIQUE_ACCOUNT_BALANCE,
+        value=snapshot.amount_due,
+        when=when,
+        unit=_USD,
+        unit_class=None,
+        label="account balance",
+    )
+    _import_mean_point(
+        hass,
+        account_key,
+        account_id,
+        suffix=STATISTIC_ID_SUFFIX_AMOUNT_DUE,
+        entity_suffix=ENTITY_UNIQUE_AMOUNT_DUE,
+        value=snapshot.amount_due,
+        when=when,
+        unit=_USD,
+        unit_class=None,
+        label="amount due",
+    )
+    _import_mean_point(
+        hass,
+        account_key,
+        account_id,
+        suffix=STATISTIC_ID_SUFFIX_LAST_PAYMENT_AMOUNT,
+        entity_suffix=ENTITY_UNIQUE_LAST_PAYMENT_AMOUNT,
+        value=snapshot.last_payment_amount,
+        when=when,
+        unit=_USD,
+        unit_class=None,
+        label="last payment amount",
+    )
+    if snapshot.bill is not None:
+        _import_mean_point(
+            hass,
+            account_key,
+            account_id,
+            suffix=STATISTIC_ID_SUFFIX_BILL_AVG_TEMPERATURE,
+            entity_suffix=ENTITY_UNIQUE_BILL_AVG_TEMPERATURE,
+            value=snapshot.bill.avg_temperature_f,
+            when=when,
+            unit=UnitOfTemperature.FAHRENHEIT,
+            unit_class="temperature",
+            label="bill average temperature",
+        )
+
+
+async def async_import_ledger_events(
+    hass: HomeAssistant,
+    account_key: str,
+    account_id: str | None,
+    events: list[LedgerEvent],
+) -> None:
+    """Import BILL / PAYMENT ledger rows into cumulative sum series.
+
+    BILL rows contribute ``amount_due`` → ``_bill_amount`` and ``kwh`` →
+    ``_bill_kwh``; PAYMENT rows contribute ``abs(amount_paid)`` →
+    ``_payment_amount``. Rows are aggregated by hour so multiple same-hour
+    events in a page combine rather than clobber each other.
+    """
+    if not events:
+        return
+
+    bill_amount: dict[datetime, float] = {}
+    bill_kwh: dict[datetime, float] = {}
+    payment_amount: dict[datetime, float] = {}
+
+    for event in events:
+        start = _floor_hour(event.date)
+        if event.event_type is LedgerEventType.BILL:
+            if event.amount_due is not None:
+                bill_amount[start] = bill_amount.get(start, 0.0) + float(event.amount_due)
+            if event.kwh is not None:
+                bill_kwh[start] = bill_kwh.get(start, 0.0) + float(event.kwh)
+        elif event.event_type is LedgerEventType.PAYMENT:
+            if event.amount_paid is not None:
+                payment_amount[start] = payment_amount.get(start, 0.0) + abs(float(event.amount_paid))
+
+    await _async_import_sum_series(
+        hass,
+        account_key,
+        account_id,
+        suffix=STATISTIC_ID_SUFFIX_BILL_AMOUNT,
+        entity_suffix=ENTITY_UNIQUE_LIFETIME_BILLED,
+        points=bill_amount,
+        unit=_USD,
+        unit_class=None,
+        label="lifetime billed",
+    )
+    await _async_import_sum_series(
+        hass,
+        account_key,
+        account_id,
+        suffix=STATISTIC_ID_SUFFIX_BILL_KWH,
+        entity_suffix=None,
+        points=bill_kwh,
+        unit=UnitOfEnergy.KILO_WATT_HOUR,
+        unit_class="energy",
+        label="billed energy",
+    )
+    await _async_import_sum_series(
+        hass,
+        account_key,
+        account_id,
+        suffix=STATISTIC_ID_SUFFIX_PAYMENT_AMOUNT,
+        entity_suffix=ENTITY_UNIQUE_LIFETIME_PAYMENTS,
+        points=payment_amount,
+        unit=_USD,
+        unit_class=None,
+        label="lifetime payments",
+    )
+
+
+async def async_import_programs_metrics(
+    hass: HomeAssistant,
+    account_key: str,
+    account_id: str | None,
+    programs: ProgramsSnapshot,
+    when: datetime,
+) -> None:
+    """Write a mean YTD program-savings sample from flex-load earnings."""
+    _import_mean_point(
+        hass,
+        account_key,
+        account_id,
+        suffix=STATISTIC_ID_SUFFIX_YTD_PROGRAM_SAVINGS,
+        entity_suffix=ENTITY_UNIQUE_YTD_PROGRAM_SAVINGS,
+        value=programs.ytd_flex_load_earnings,
+        when=when,
+        unit=_USD,
+        unit_class=None,
+        label="YTD program savings",
+    )
+
+
+async def async_refresh_billing_lifetime_totals(
+    hass: HomeAssistant,
+    account_key: str,
+) -> tuple[float | None, float | None]:
+    """Return (lifetime_payments_usd, lifetime_billed_usd) from the recorder."""
+    payments = await _async_last_sum(hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_PAYMENT_AMOUNT))
+    billed = await _async_last_sum(hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_BILL_AMOUNT))
+    return payments, billed

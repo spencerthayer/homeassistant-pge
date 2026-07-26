@@ -1,0 +1,52 @@
+{
+  "name": "graphql_get_account_info",
+  "source": "observed_portal_js_getAccountInfo_fragment",
+  "request": {
+    "method": "POST",
+    "url": "https://apix.portlandgeneral.com/pge-graphql",
+    "headers": {
+      "Authorization": "Bearer <APIGEE_ACCESS_TOKEN>",
+      "aws_graphql_server": "graphql_server",
+      "Content-Type": "application/json",
+      "Origin": "https://portlandgeneral.com",
+      "Referer": "https://portlandgeneral.com/"
+    },
+    "body": {
+      "operationName": "getAccountInfo",
+      "query": "query getAccountInfo($params: GetAccountInfoParams) { getAccountInfo(params: $params) { encryptedPersonId groups { defaultAccount { accountNumber encryptedAccountNumber encryptedPersonId } } } }",
+      "variables": {
+        "params": null
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "cookies": [],
+    "body": {
+      "data": {
+        "getAccountInfo": {
+          "encryptedPersonId": "<ENCRYPTED_PERSON_ID>",
+          "accountMeta": {
+            "totalAccounts": 1,
+            "hasInactiveAccounts": false
+          },
+          "groups": [
+            {
+              "groupId": "<GROUP_ID>",
+              "numberOfAccounts": 1,
+              "isDefault": true,
+              "defaultAccount": {
+                "accountNumber": "0000000000",
+                "encryptedAccountNumber": "<ENCRYPTED_ACCOUNT_NUMBER>",
+                "encryptedPersonId": "<ENCRYPTED_PERSON_ID>"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

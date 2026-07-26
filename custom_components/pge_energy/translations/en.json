@@ -1,0 +1,157 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Portland General Electric",
+        "description": "Sign in with the PGE account email and password. MFA-enabled accounts are not supported."
+      },
+      "credential": {
+        "title": "PGE email and password",
+        "description": "Enter the PGE login and the account number for this entry. The same email/password can be used for multiple entries with different account numbers. MFA-enabled accounts are not supported.",
+        "data": {
+          "email": "Email",
+          "password": "Password",
+          "account_id": "Account number"
+        }
+      },
+      "reauth_credential": {
+        "title": "Reauthenticate with PGE",
+        "description": "Enter your PGE email and password. MFA accounts are unsupported. Account number stays fixed for this entry.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to PGE API",
+      "invalid_auth": "Invalid authentication credentials",
+      "mfa_unsupported": "This PGE account requires MFA, which is not supported",
+      "captcha_unsupported": "PGE login requires CAPTCHA/device challenge, which is not supported",
+      "discovery_incomplete": "Email/password login is not ready yet — MFA/CAPTCHA accounts are unsupported; retry with a non-MFA PGE login",
+      "no_accounts": "No PGE accounts were discovered for this login",
+      "account_not_found": "That account number was not found for this login. Check the number, or add a separate entry with different credentials.",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This PGE account is already configured",
+      "reauth_successful": "Reauthentication successful"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "PGE Energy options",
+        "menu_options": {
+          "settings": "Sync settings",
+          "credentials": "Update credentials",
+          "manual_sync": "Manual sync"
+        }
+      },
+      "manual_sync": {
+        "title": "Manual sync",
+        "description": "Start a one-off sync. **Refresh now** re-fetches the correction window. **Backfill missing history** uses your current Sync settings history bounds (Full history or From start date). Progress appears on the PGE device page — {link}",
+        "data": {
+          "manual_sync_action": "Action"
+        },
+        "data_description": {
+          "manual_sync_action": "Choose refresh (recent days) or backfill (missing history from Sync settings)."
+        }
+      },
+      "settings": {
+        "title": "Sync settings",
+        "description": "Control polling, history depth, and automatic tiered backfill (hourly → daily → monthly).",
+        "data": {
+          "polling_interval": "Polling interval",
+          "polling_interval_unit": "Polling interval unit",
+          "sync_local_time": "Sync clock (Pacific)",
+          "correction_window": "Correction window",
+          "history_mode": "History mode",
+          "history_start_date": "History start date",
+          "hourly_backfill_days": "Hourly history days",
+          "auto_backfill": "Auto backfill on setup",
+          "include_cost": "Import cost statistics",
+          "include_diagnostics": "Include diagnostic sensors",
+          "include_billing": "Import billing & programs",
+          "backfill_concurrency": "Backfill concurrency"
+        },
+        "data_description": {
+          "polling_interval": "How often to refresh recent usage. Default is every 4 hours on the Pacific clock grid.",
+          "polling_interval_unit": "Unit for the polling interval (minutes, hours, or days). Default is hours.",
+          "sync_local_time": "America/Los_Angeles clock that anchors hour- and day-unit schedules (default midnight). Example: every 4 hours from 12:00 AM → 12am, 4am, 8am, noon, 4pm, 8pm. Ignored for minutes.",
+          "correction_window": "Closed days re-fetched each poll for estimated→actual corrections.",
+          "history_mode": "Full history from 2019-01-01, or from a chosen start date.",
+          "history_start_date": "Used when history mode is From start date (YYYY-MM-DD).",
+          "hourly_backfill_days": "Newest days fetched at hourly resolution before falling back to daily.",
+          "auto_backfill": "When enabled, missing history is backfilled after setup or options changes.",
+          "include_cost": "Import USD cost alongside kWh into Energy statistics.",
+          "include_diagnostics": "Expose auth expiration and last API error sensors.",
+          "include_billing": "Import account balance, bill/payment history, and program enrollment as sensors, binary sensors, and long-term statistics.",
+          "backfill_concurrency": "Parallel day fetches for the hourly tier (1–4)."
+        }
+      },
+      "credentials": {
+        "title": "Update PGE credentials",
+        "description": "Account {account_id} stays fixed. Email/password renew auth only; statistic IDs are unchanged. {password_status}",
+        "data": {
+          "account_id": "Account number",
+          "email": "Email",
+          "password": "Password"
+        },
+        "data_description": {
+          "password": "When a password is already saved, this field is pre-filled (masked). Use the eye icon to reveal it."
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid authentication credentials",
+      "mfa_unsupported": "This PGE account requires MFA, which is not supported",
+      "captcha_unsupported": "PGE login requires CAPTCHA/device challenge, which is not supported",
+      "discovery_incomplete": "Email/password login is not ready yet",
+      "history_start_required": "History start date is required when mode is From start date",
+      "invalid_history_start": "History start date must be YYYY-MM-DD",
+      "sync_busy": "A sync job is already running",
+      "sync_start_failed": "Could not start the sync job",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "credentials_updated": "Credentials updated",
+      "sync_started": "Sync started. {link}",
+      "sync_busy": "A sync job is already running ({status}: {detail}). {link}"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "account_balance": { "name": "Account balance" },
+      "amount_due": { "name": "Amount due" },
+      "due_date": { "name": "Due date" },
+      "last_payment_amount": { "name": "Last payment amount" },
+      "last_payment_date": { "name": "Last payment date" },
+      "current_bill_amount": { "name": "Current bill amount" },
+      "current_bill_kwh": { "name": "Current bill energy" },
+      "current_bill_start": { "name": "Current bill period start" },
+      "current_bill_end": { "name": "Current bill period end" },
+      "bill_previous_balance": { "name": "Previous balance" },
+      "bill_current_charges": { "name": "Current charges" },
+      "bill_avg_temperature": { "name": "Bill period avg temperature" },
+      "ytd_program_savings": { "name": "YTD program savings" },
+      "lifetime_payments": { "name": "Lifetime payments" },
+      "lifetime_billed": { "name": "Lifetime billed" },
+      "billing_last_sync": { "name": "Billing last sync" },
+      "est_current_charges": { "name": "Estimated current charges" },
+      "est_next_bill_min": { "name": "Estimated next bill (low)" },
+      "est_next_bill_max": { "name": "Estimated next bill (high)" },
+      "billing_cycle_day": { "name": "Billing cycle day" },
+      "billing_cycle_total_days": { "name": "Billing cycle length" }
+    },
+    "binary_sensor": {
+      "autopay": { "name": "Auto Pay" },
+      "paperless_bill": { "name": "Paperless bill" },
+      "program_peak_time_rebates": { "name": "Peak Time Rebates" },
+      "program_green_future": { "name": "Green Future" },
+      "program_time_of_day": { "name": "Time of Day" },
+      "program_smart_thermostat": { "name": "Smart thermostat" },
+      "program_habitat_support": { "name": "Habitat Support" }
+    }
+  }
+}
