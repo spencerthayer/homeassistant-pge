@@ -630,9 +630,7 @@ def _scrub_monthly_lumps_for_days(
         if hours <= 0:
             continue
         # Monthly-sized always; daily-sized when a substantial hourly batch arrives.
-        drop = state >= lump_min or (
-            daily_lump_min is not None and state >= daily_lump_min and hours >= 12
-        )
+        drop = state >= lump_min or (daily_lump_min is not None and state >= daily_lump_min and hours >= 12)
         if not drop:
             continue
         overlay[start] = 0.0

@@ -203,9 +203,7 @@ async def test_auth_connection_error_keeps_retained_data():
     coord._recent_intervals = list(prior)
     coord._lifetime_energy_kwh = 99.0
     coord.data = {"intervals": list(prior), "failed_days": []}
-    coord.auth_manager.ensure_valid_token = AsyncMock(
-        side_effect=PGEConnectionError("DNS timeout contacting Apigee")
-    )
+    coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=PGEConnectionError("DNS timeout contacting Apigee"))
 
     data = await coord._async_update_data()
     assert data["stale"] is True
