@@ -277,7 +277,9 @@ class PGEHourlyEnergySensor(PGEBaseEntity, SensorEntity):
 
     _attr_name = "Hourly energy"
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_device_class = SensorDeviceClass.ENERGY
+    # No ENERGY device_class: HA rejects energy + measurement; this is a
+    # point-in-time tip sample (lifetime sensors own Energy dashboard).
+    _attr_device_class = None
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_unique_id: str
 
@@ -308,7 +310,9 @@ class PGEHourlyCostSensor(PGEBaseEntity, SensorEntity):
 
     _attr_name = "Hourly cost"
     _attr_native_unit_of_measurement = "USD"
-    _attr_device_class = SensorDeviceClass.MONETARY
+    # No MONETARY device_class: HA rejects monetary + measurement; this is a
+    # point-in-time tip sample (lifetime sensors own Energy dashboard).
+    _attr_device_class = None
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_unique_id: str
 

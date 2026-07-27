@@ -15,6 +15,7 @@ from custom_components.pge_energy.const import (
 from custom_components.pge_energy.models import UsageInterval, UsageResolution
 from custom_components.pge_energy.sensor import (
     PGEEnergySensor,
+    PGEHourlyCostSensor,
     PGEHourlyEnergySensor,
     _intervals_in_range,
     _sum_cost,
@@ -90,3 +91,14 @@ class TestStatisticLinkedAttributes:
         sensor = PGEHourlyEnergySensor(coordinator, "abc")
         assert sensor.native_value == 2.5
         assert sensor.state_class == SensorStateClass.MEASUREMENT
+        # Point-in-time kWh; ENERGY + measurement is rejected by HA core.
+        assert sensor.device_class is None
+
+    def test_hourly_cost_is_measurement_without_device_class(self):
+        coordinator = MagicMock()
+        coordinator.recent_intervals = [_iv(5, 2.5, amount=0.42)]
+        sensor = PGEHourlyCostSensor(coordinator, "abc")
+        assert sensor.native_value == 0.42
+        assert sensor.state_class == SensorStateClass.MEASUREMENT
+        # Point-in-time USD; MONETARY + measurement is rejected by HA core.
+        assert sensor.device_class is None

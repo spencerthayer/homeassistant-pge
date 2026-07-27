@@ -27,7 +27,7 @@ import {
   stateDisplay,
   stateNumber,
   sumStatisticChange,
-} from "./data.js?v=0.5.47";
+} from "./data.js?v=0.5.48";
 import {
   createBarChart,
   createLineChart,
@@ -37,9 +37,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.5.47";
-import { sparklineSvg } from "./svg-helpers.js?v=0.5.47";
-import { applyPanelTheme } from "./theme.js?v=0.5.47";
+} from "./charts.js?v=0.5.48";
+import { sparklineSvg } from "./svg-helpers.js?v=0.5.48";
+import { applyPanelTheme } from "./theme.js?v=0.5.48";
 
 const STYLE = `
 :host {
@@ -1411,10 +1411,12 @@ class PgeEnergyPanel extends HTMLElement {
       cycleDay != null && cycleDays
         ? `Day ${this._fmt(cycleDay, "")} of ${this._fmt(cycleDays, "")}`
         : "Open billing cycle";
+    // If either estNextMin or estNextMax is null, use an em dash ("—") as a placeholder; otherwise, format as min/max with no spaces and a '/'.
     const estRange =
       estNextMin != null && estNextMax != null
-        ? `${this._fmt(estNextMin, "", true)} – ${this._fmt(estNextMax, "", true)}`
+        ? `${this._fmt(estNextMin, "", true)}/${this._fmt(estNextMax, "", true)}`
         : "—";
+ 
 
     const spark = (vals, color) => sparklineSvg(vals || [], { stroke: color });
     el.innerHTML = `
