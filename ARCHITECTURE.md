@@ -89,9 +89,10 @@ Auth blips and partial poll failures must **not** blank the panel or erase recor
 2. End = yesterday (closed local days, `America/Los_Angeles`).
 3. **Hourly** for newest `hourly_backfill_days`; **daily** for older incomplete days (month windows, padded ≥31d for API); **monthly** via paged `get_monthly_usage_paged` for remaining gaps.
 4. MONTHLY stats write a billing-period total onto calendar month-start **only when that month has no finer completed days**. Otherwise gap days are closed without importing the lump (avoids double-count with hourly). Startup repair zeros any leftover monthly lump that shares a Pacific day with smaller rows.
-5. Scheduled poll (default every 4 hours from midnight Pacific) re-fetches the correction window. If yesterday’s hourly is still incomplete, import any hours returned, demote the day from `completed`, and catch up every 2 hours until it validates.
+5. Scheduled poll (default every 4 hours from midnight Pacific) re-fetches the correction window. If yesterday’s hourly is still incomplete, import any hours returned, demote the day from `completed`, and catch up every 2 hours until it validates. While a backfill is in progress, the poll returns the retained payload and does **not** contend for `import_lock`.
 6. Auto-backfill on setup/reload when `auto_backfill` and history is incomplete.
-7. Service `pge_energy.backfill` uses the same tiering; reject overlapping jobs; persist completed/failed local dates; resume after restart.
+7. Service `pge_energy.backfill` uses the same tiering; reject overlapping jobs; persist completed/failed local dates; resume after restart (targets kept on unload cancel; cleared on stall abort / hard failure).
+8. **Hang recovery:** long-lived jobs use `hass.async_create_background_task` (never `hass.async_block_till_done` from import paths — that deadlocks when a tracked backfill waits on `import_lock` held by a poll). Progress heartbeat + stall watchdog (default 30m), hard-release after cancel grace, generation-guarded state so orphans cannot clobber a newer job, per-tier `asyncio.wait_for` (2h), and bounded `.storage` saves (30s; critical vs non-critical). Boot rewrites a restored `backfilling` status to `failed` until a real resume task starts.
 
 Implemented in `backfill.py` + helpers in `options.py`; wired from `__init__.py`.
 

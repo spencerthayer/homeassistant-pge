@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -7,10 +9,15 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN
+from .const import DOMAIN, IMPORT_STATE_SAVE_TIMEOUT
+
+_LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.import_state"
+
+# One Store per entry so Store._write_lock serializes concurrent saves.
+_STORES: dict[str, Store] = {}
 
 
 @dataclass
@@ -33,7 +40,8 @@ class ImportStoreData:
     sync_done: int | None = None
     sync_total: int | None = None
     sync_percent: int | None = None
-    sync_started_at: float | None = None
+    # Wall-clock ISO when the job started (monotonic values are process-local).
+    sync_started_at: str | float | None = None
     sync_eta_seconds: float | None = None
     sync_message: str | None = None
     sync_error: str | None = None
@@ -52,6 +60,7 @@ class ImportStoreData:
     def from_dict(cls, data: dict[str, Any] | None) -> ImportStoreData:
         if not data:
             return cls()
+        started_raw = data.get("sync_started_at")
         return cls(
             schema_version=int(data.get("schema_version", STORAGE_VERSION)),
             account_key=str(data.get("account_key", "")),
@@ -68,7 +77,7 @@ class ImportStoreData:
             sync_done=int(data["sync_done"]) if data.get("sync_done") is not None else None,
             sync_total=int(data["sync_total"]) if data.get("sync_total") is not None else None,
             sync_percent=(int(data["sync_percent"]) if data.get("sync_percent") is not None else None),
-            sync_started_at=(float(data["sync_started_at"]) if data.get("sync_started_at") is not None else None),
+            sync_started_at=started_raw,
             sync_eta_seconds=(float(data["sync_eta_seconds"]) if data.get("sync_eta_seconds") is not None else None),
             sync_message=data.get("sync_message"),
             sync_error=data.get("sync_error"),
@@ -84,7 +93,11 @@ class ImportStoreData:
 
 
 def _store_for_entry(hass: HomeAssistant, entry_id: str) -> Store:
-    return Store(hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry_id}")
+    store = _STORES.get(entry_id)
+    if store is None or store.hass is not hass:
+        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry_id}")
+        _STORES[entry_id] = store
+    return store
 
 
 async def async_load_import_state(hass: HomeAssistant, entry_id: str) -> ImportStoreData:
@@ -93,10 +106,26 @@ async def async_load_import_state(hass: HomeAssistant, entry_id: str) -> ImportS
     return ImportStoreData.from_dict(raw)
 
 
-async def async_save_import_state(hass: HomeAssistant, entry_id: str, data: ImportStoreData) -> None:
+async def async_save_import_state(
+    hass: HomeAssistant,
+    entry_id: str,
+    data: ImportStoreData,
+    *,
+    critical: bool = True,
+) -> None:
+    """Persist import state with a wall-clock save timeout.
+
+    ``critical=True`` (default) re-raises on timeout so checkpoint-bearing callers
+    fail closed. ``critical=False`` logs and returns for cosmetic progress writes.
+    """
     store = _store_for_entry(hass, entry_id)
     data.last_commit = datetime.now(UTC).isoformat()
-    await store.async_save(data.to_dict())
+    try:
+        await asyncio.wait_for(store.async_save(data.to_dict()), timeout=IMPORT_STATE_SAVE_TIMEOUT)
+    except TimeoutError:
+        _LOGGER.warning("PGE import state save timed out for %s", entry_id[:8])
+        if critical:
+            raise
 
 
 async def async_clear_import_state(hass: HomeAssistant, entry_id: str) -> None:

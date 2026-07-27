@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    BACKFILL_TIER_TIMEOUT,
     CONF_BACKFILL_CONCURRENCY,
     CONF_HOURLY_BACKFILL_DAYS,
     CONF_INCLUDE_COST,
@@ -200,7 +201,7 @@ async def _async_import_batch(
         return True
     store = coordinator.import_store
     store.dirty_from = min(iv.start for iv in intervals).isoformat()
-    await async_save_import_state(hass, entry_id, store)
+    await async_save_import_state(hass, entry_id, store, critical=True)
     try:
         async with coordinator.import_lock:
             await async_import_with_baseline(
@@ -217,7 +218,7 @@ async def _async_import_batch(
     store.dirty_from = None
     store.last_imported_start = min(iv.start for iv in intervals).isoformat()
     store.last_imported_end = max(iv.end for iv in intervals).isoformat()
-    await async_save_import_state(hass, entry_id, store)
+    await async_save_import_state(hass, entry_id, store, critical=True)
     return True
 
 
@@ -549,17 +550,38 @@ async def async_backfill_range(
             hourly_range[1],
             hourly_days,
         )
-        await _async_backfill_hourly(hass, entry_id, coordinator, hourly_range[0], hourly_range[1])
+        try:
+            # Timeout only fires if the tier is at a cancellable await; hard release
+            # covers non-cancellable hangs. A cancelled tier may leave dirty_from set
+            # for async_repair_dirty_if_needed on the next boot.
+            await asyncio.wait_for(
+                _async_backfill_hourly(hass, entry_id, coordinator, hourly_range[0], hourly_range[1]),
+                timeout=BACKFILL_TIER_TIMEOUT.total_seconds(),
+            )
+        except TimeoutError:
+            _LOGGER.error("Hourly tier exceeded %s — continuing to daily", BACKFILL_TIER_TIMEOUT)
 
     remaining = [d for d in days if d.isoformat() not in store.completed_local_dates]
     if remaining:
         _LOGGER.info("Backfill daily tier for %s incomplete day(s)", len(remaining))
-        await _async_backfill_daily(hass, entry_id, coordinator, remaining[0], remaining[-1])
+        try:
+            await asyncio.wait_for(
+                _async_backfill_daily(hass, entry_id, coordinator, remaining[0], remaining[-1]),
+                timeout=BACKFILL_TIER_TIMEOUT.total_seconds(),
+            )
+        except TimeoutError:
+            _LOGGER.error("Daily tier exceeded %s — continuing to monthly", BACKFILL_TIER_TIMEOUT)
 
     remaining = [d for d in days if d.isoformat() not in store.completed_local_dates]
     if remaining:
         _LOGGER.info("Backfill monthly tier for %s incomplete day(s)", len(remaining))
-        await _async_backfill_monthly(hass, entry_id, coordinator, remaining[0], remaining[-1])
+        try:
+            await asyncio.wait_for(
+                _async_backfill_monthly(hass, entry_id, coordinator, remaining[0], remaining[-1]),
+                timeout=BACKFILL_TIER_TIMEOUT.total_seconds(),
+            )
+        except TimeoutError:
+            _LOGGER.error("Monthly tier exceeded %s — leaving remaining days incomplete", BACKFILL_TIER_TIMEOUT)
 
     remaining = [d for d in days if d.isoformat() not in store.completed_local_dates]
     # Drop stale failures that were later completed. Days outside this job's range

@@ -45,14 +45,17 @@ def idle_snapshot() -> SyncProgressSnapshot:
 
 
 def snapshot_to_store_fields(snapshot: SyncProgressSnapshot) -> dict[str, Any]:
-    """Flatten a snapshot into ImportStoreData field names."""
+    """Flatten a snapshot into ImportStoreData field names.
+
+    ``sync_started_at`` is omitted here — the coordinator writes a wall-clock ISO
+    (monotonic ``started_at`` is process-local and must not be persisted).
+    """
     return {
         "sync_status": snapshot.status,
         "sync_phase": snapshot.phase,
         "sync_done": int(snapshot.done),
         "sync_total": int(snapshot.total),
         "sync_percent": int(snapshot.percent),
-        "sync_started_at": snapshot.started_at,
         "sync_eta_seconds": snapshot.eta_seconds,
         "sync_message": snapshot.message,
         "sync_error": snapshot.error,
@@ -73,8 +76,9 @@ def snapshot_from_store_fields(data: dict[str, Any] | Any) -> SyncProgressSnapsh
     total = int(_get("sync_total") or 0)
     percent_raw = _get("sync_percent")
     percent = int(percent_raw) if percent_raw is not None else compute_percent(done, total)
-    started_raw = _get("sync_started_at")
-    started_at = float(started_raw) if started_raw is not None else None
+    # Monotonic clocks and prior-process values are not usable after reload.
+    # Keep ETA unset until the next live progress mutation.
+    started_at = None
     eta_raw = _get("sync_eta_seconds")
     eta_seconds = float(eta_raw) if eta_raw is not None else None
     message = str(_get("sync_message") or "")

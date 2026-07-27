@@ -17,3 +17,5 @@ outputs/
 .DS_Store
 */.DS_Store
 *.code-workspace
+
+.venv

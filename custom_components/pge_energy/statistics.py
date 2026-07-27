@@ -426,10 +426,14 @@ async def _async_anchor_sum(
 
 
 async def async_wait_recorder_queue(hass: HomeAssistant) -> None:
-    """Block until queued recorder tasks (including statistics imports) finish."""
-    await hass.async_block_till_done()
+    """Block until queued recorder tasks (including statistics imports) finish.
+
+    Only wait on the recorder instance — never ``hass.async_block_till_done()``.
+    That helper waits for every tracked HA task and deadlocks when a scheduled
+    poll holds ``import_lock`` while a long-lived backfill task is also tracked
+    and waiting on the same lock.
+    """
     await get_instance(hass).async_block_till_done()
-    await hass.async_block_till_done()
 
 
 async def async_verify_statistic_states(

@@ -225,11 +225,11 @@ async def test_try_reserve_backfill_rejects_overlap():
 async def test_try_reserve_backfill_blocked_during_refresh_job():
     coord = _make_coordinator()
 
-    def _fake_create_task(coro):
+    def _fake_create_background_task(coro, name="", eager_start=False):
         coro.close()
         return MagicMock()
 
-    coord.hass.async_create_task = MagicMock(side_effect=_fake_create_task)
+    coord.hass.async_create_background_task = MagicMock(side_effect=_fake_create_background_task)
     with patch(
         "custom_components.pge_energy.coordinator.async_save_import_state",
         AsyncMock(),
@@ -238,7 +238,7 @@ async def test_try_reserve_backfill_blocked_during_refresh_job():
     assert coord.sync_job_in_progress is True
     assert coord.sync_progress.status == "refreshing"
     assert coord.try_reserve_backfill() is False
-    coord.hass.async_create_task.assert_called_once()
+    coord.hass.async_create_background_task.assert_called_once()
 
 
 @pytest.mark.asyncio

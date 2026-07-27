@@ -41,14 +41,17 @@ def test_snapshot_store_round_trip():
         error=None,
     )
     fields = snapshot_to_store_fields(snap)
-    store = ImportStoreData(account_key="abc", **fields)
+    # Monotonic started_at is not persisted (process-local); wall-clock is set by coordinator.
+    assert "sync_started_at" not in fields
+    store = ImportStoreData(account_key="abc", sync_started_at="2026-07-26T19:00:00+00:00", **fields)
     restored = snapshot_from_store_fields(store)
     assert restored.status == "backfilling"
     assert restored.phase == "hourly"
     assert restored.done == 4
     assert restored.total == 20
     assert restored.percent == 20
-    assert restored.started_at == 100.5
+    # Reloaded snapshots must not treat wall-clock/legacy floats as monotonic.
+    assert restored.started_at is None
     assert restored.eta_seconds == 40.0
     assert restored.message == "Hourly 4/20"
     assert restored.error is None

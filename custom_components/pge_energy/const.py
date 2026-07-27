@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
@@ -93,6 +93,13 @@ DAILY_LUMP_MIN_COST = 3.0
 # When a scheduled poll finds yesterday still incomplete, retry this often until
 # hourly validates complete (PGE often publishes after midnight).
 CATCHUP_RETRY_HOURS = 2
+
+# Backfill hang recovery (progress watchdog + hard release + tier/save bounds).
+BACKFILL_STALL_TIMEOUT = timedelta(minutes=30)
+BACKFILL_STALL_POLL_SECONDS = 60
+BACKFILL_TIER_TIMEOUT = timedelta(hours=2)
+BACKFILL_CANCEL_GRACE = 30.0  # seconds to honour cancel before orphaning the task
+IMPORT_STATE_SAVE_TIMEOUT = 30.0
 STATISTIC_ID_SUFFIX_CONSUMPTION = "_consumption"
 STATISTIC_ID_SUFFIX_COST = "_cost"
 STATISTIC_ID_SUFFIX_TEMPERATURE = "_temperature"

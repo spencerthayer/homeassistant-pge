@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import logging
 import time
 from datetime import UTC, date, datetime, timedelta
@@ -22,6 +23,7 @@ from .billing_models import (
 )
 from .billing_sync import async_run_billing_sync
 from .const import (
+    BACKFILL_CANCEL_GRACE,
     CATCHUP_RETRY_HOURS,
     CONF_ACCOUNT_ID,
     CONF_ACCOUNT_KEY,
@@ -36,6 +38,11 @@ from .const import (
     SYNC_STATUS_COMPLETE,
     SYNC_STATUS_FAILED,
     SYNC_STATUS_REFRESHING,
+)
+
+# Bound to the running backfill coroutine so orphaned tasks cannot mutate a newer job.
+_backfill_run_generation: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "pge_backfill_run_generation", default=None
 )
 from .day_validation import clip_hourly_to_local_day, is_invalid_closed_day, validate_hourly_day
 from .exceptions import (
@@ -108,6 +115,10 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.job_lock = asyncio.Lock()
         self._backfill_task: asyncio.Task | None = None
         self._backfill_reserved = False
+        self._backfill_generation = 0
+        self._last_progress_monotonic: float | None = None
+        self._backfill_abort_reason: str | None = None
+        self._backfill_abort_clears_targets = False
         self._catchup_retry = False
         self._import_store = ImportStoreData(account_key=self.account_key)
 
@@ -240,19 +251,93 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def release_backfill_reservation(self) -> None:
         self._backfill_reserved = False
 
-    def set_backfill_task(self, task: asyncio.Task | None) -> None:
-        self._backfill_task = task
+    def note_backfill_activity(self) -> None:
+        """Heartbeat used by the stall watchdog (any progress mutation)."""
+        self._last_progress_monotonic = time.monotonic()
+
+    def progress_stalled(self, timeout: timedelta) -> bool:
+        """True when no progress heartbeat has fired within ``timeout``."""
+        if self._last_progress_monotonic is None:
+            return False
+        return (time.monotonic() - self._last_progress_monotonic) > timeout.total_seconds()
+
+    @property
+    def backfill_generation(self) -> int:
+        """Monotonic generation for the current backfill ownership token."""
+        return self._backfill_generation
+
+    def set_backfill_task(self, task: asyncio.Task | None, *, generation: int | None = None) -> int | None:
+        """Attach or clear the backfill task.
+
+        Setting a non-None task bumps the generation and returns it. Clearing is a
+        no-op when ``generation`` is stale (orphaned task after hard release).
+        """
+        if task is not None:
+            self._backfill_generation += 1
+            self._backfill_task = task
+            return self._backfill_generation
+        if generation is not None and generation != self._backfill_generation:
+            return None
+        self._backfill_task = None
+        return None
+
+    def bind_backfill_run_generation(self, generation: int) -> contextvars.Token[int | None]:
+        """Bind ``generation`` to the current task context for orphan guards."""
+        return _backfill_run_generation.set(generation)
+
+    def reset_backfill_run_generation(self, token: contextvars.Token[int | None]) -> None:
+        _backfill_run_generation.reset(token)
+
+    def _is_stale_backfill_generation(self) -> bool:
+        run_gen = _backfill_run_generation.get()
+        return run_gen is not None and run_gen != self._backfill_generation
+
+    def request_backfill_abort(self, reason: str, *, clear_targets: bool) -> None:
+        """Cancel the backfill task without awaiting (stall watchdog)."""
+        self._backfill_abort_reason = reason
+        self._backfill_abort_clears_targets = clear_targets
+        task = self._backfill_task
+        if task is not None and not task.done():
+            task.cancel()
+
+    def consume_backfill_abort(self) -> tuple[str | None, bool]:
+        reason = self._backfill_abort_reason
+        clear_targets = self._backfill_abort_clears_targets
+        self._backfill_abort_reason = None
+        self._backfill_abort_clears_targets = False
+        return reason, clear_targets
+
+    async def force_release_backfill(self, reason: str) -> None:
+        """Orphan a non-responsive backfill task and unblock sync_job_in_progress."""
+        orphan = self._backfill_task
+        self._backfill_generation += 1
+        self._backfill_task = None
+        self._backfill_in_progress = False
+        self._backfill_reserved = False
+        if orphan is not None and not orphan.done():
+            _LOGGER.error(
+                "Orphaning PGE backfill task that ignored cancellation: %r",
+                orphan,
+            )
+        self.fail_sync_job(reason)
+        if not self.hass.is_stopping:
+            await self.async_persist_sync_progress()
 
     async def async_cancel_backfill(self) -> None:
-        if self._backfill_task and not self._backfill_task.done():
-            self._backfill_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._backfill_task
+        task = self._backfill_task
+        if task is not None and not task.done():
+            task.cancel()
+            done, _pending = await asyncio.wait({task}, timeout=BACKFILL_CANCEL_GRACE)
+            if not done:
+                _LOGGER.error("Backfill task ignored cancellation; orphaning it")
+                self._backfill_generation += 1
         self._backfill_task = None
         self._backfill_in_progress = False
         self._backfill_reserved = False
         if self._sync_progress.status == SYNC_STATUS_BACKFILLING:
             self.fail_sync_job("Cancelled")
+            if not self.hass.is_stopping:
+                await self.async_persist_sync_progress()
 
     async def async_load_store(self) -> None:
         """Load import checkpoint. Do not repair here — that blocks HA bootstrap."""
@@ -261,6 +346,10 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._import_store.account_key = self.account_key
         if self._import_store.sync_status:
             self._sync_progress = snapshot_from_store_fields(self._import_store)
+        # Never restore a live-looking backfilling status with no task behind it.
+        if self._sync_progress.status == SYNC_STATUS_BACKFILLING:
+            self.fail_sync_job("Interrupted by restart")
+            self._apply_sync_progress_to_store()
         await self.async_refresh_lifetime_totals()
 
     def update_sync_progress(
@@ -271,11 +360,14 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         **fields: Any,
     ) -> None:
         """Mutate the sync snapshot, recompute percent/ETA, optionally persist."""
+        if self._is_stale_backfill_generation():
+            return
         for key, value in fields.items():
             if not hasattr(self._sync_progress, key):
                 raise AttributeError(f"Unknown sync progress field: {key}")
             setattr(self._sync_progress, key, value)
         apply_progress_math(self._sync_progress, now_monotonic=time.monotonic())
+        self.note_backfill_activity()
         if persist:
             self._apply_sync_progress_to_store()
         if notify:
@@ -284,10 +376,24 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _apply_sync_progress_to_store(self) -> None:
         for key, value in snapshot_to_store_fields(self._sync_progress).items():
             setattr(self._import_store, key, value)
+        # Persist wall-clock ISO; keep monotonic only in the in-memory snapshot.
+        if self._sync_progress.started_at is None:
+            self._import_store.sync_started_at = None
+        elif isinstance(self._import_store.sync_started_at, str) and self._import_store.sync_started_at:
+            pass  # preserve first stamp for this job
+        else:
+            self._import_store.sync_started_at = datetime.now(UTC).isoformat()
 
     async def async_persist_sync_progress(self) -> None:
+        if self._is_stale_backfill_generation():
+            return
         self._apply_sync_progress_to_store()
-        await async_save_import_state(self.hass, self.entry.entry_id, self._import_store)
+        await async_save_import_state(
+            self.hass,
+            self.entry.entry_id,
+            self._import_store,
+            critical=False,
+        )
 
     def begin_sync_job(
         self,
@@ -298,6 +404,8 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         message: str = "",
     ) -> None:
         """Initialize snapshot for a new manual refresh or backfill job."""
+        self._import_store.sync_started_at = None
+        self.note_backfill_activity()
         self.update_sync_progress(
             status=status,
             phase=phase,
@@ -356,8 +464,12 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             message=f"Correction 0/{len(days)}",
         )
         await self.async_persist_sync_progress()
-        # Schedule refresh so Manual sync / services return immediately with progress live.
-        self.hass.async_create_task(self.async_request_refresh())
+        # Background task so import paths waiting on the recorder never deadlock on it.
+        self.hass.async_create_background_task(
+            self.async_request_refresh(),
+            name=f"{DOMAIN}_manual_refresh_{self.entry.entry_id[:8]}",
+            eager_start=False,
+        )
 
     async def async_refresh_lifetime_totals(self) -> None:
         """Refresh cumulative energy/cost/temperature from recorder for sensors."""
@@ -573,6 +685,20 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._refresh_update_interval()
 
     async def _async_poll_usage(self) -> dict[str, Any]:
+        # Recover from a backfill task that died without clearing flags.
+        if self._backfill_task is not None and self._backfill_task.done():
+            if self._backfill_in_progress or self._sync_progress.status == SYNC_STATUS_BACKFILLING:
+                _LOGGER.warning(
+                    "PGE backfill task finished outside the normal path; releasing stuck state"
+                )
+                await self.force_release_backfill("Backfill task terminated unexpectedly")
+                return self._retained_poll_payload()
+
+        # Do not contend for import_lock while a backfill is importing the same days.
+        if self._backfill_in_progress or self._backfill_reserved:
+            _LOGGER.debug("Skipping scheduled poll while backfill is in progress")
+            return self._retained_poll_payload()
+
         tracking = self._refresh_job_active
         try:
             # Short-lived bearer: force a fresh login at the start of each poll.
@@ -654,7 +780,12 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 failed_days.append(iso)
                 if iso not in self._import_store.failed_local_dates:
                     self._import_store.failed_local_dates.append(iso)
-                await async_save_import_state(self.hass, self.entry.entry_id, self._import_store)
+                await async_save_import_state(
+                    self.hass,
+                    self.entry.entry_id,
+                    self._import_store,
+                    critical=False,
+                )
                 days_finished += 1
                 if tracking:
                     self.update_sync_progress(
@@ -679,7 +810,12 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._import_store.completed_local_dates.remove(iso)
                 if clipped:
                     all_intervals.extend(clipped)
-                await async_save_import_state(self.hass, self.entry.entry_id, self._import_store)
+                await async_save_import_state(
+                    self.hass,
+                    self.entry.entry_id,
+                    self._import_store,
+                    critical=False,
+                )
                 days_finished += 1
                 if tracking:
                     self.update_sync_progress(
@@ -822,7 +958,14 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         in_progress: bool,
         oldest: datetime | None = None,
         newest: datetime | None = None,
+        *,
+        generation: int | None = None,
     ) -> None:
+        if generation is not None:
+            if generation != self._backfill_generation:
+                return
+        elif self._is_stale_backfill_generation():
+            return
         self._backfill_in_progress = in_progress
         if not in_progress:
             self._backfill_reserved = False

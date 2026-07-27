@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from datetime import date, datetime
 
@@ -18,6 +20,9 @@ from .backfill import async_backfill_range, async_fetch_hourly_day
 from .billing_sync import async_run_billing_sync
 from .const import (
     AUTH_MODE_CREDENTIAL,
+    BACKFILL_CANCEL_GRACE,
+    BACKFILL_STALL_POLL_SECONDS,
+    BACKFILL_STALL_TIMEOUT,
     CONF_ACCOUNT_ID,
     CONF_ACCOUNT_KEY,
     CONF_AUTH_MODE,
@@ -159,8 +164,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
             and coordinator.import_store.target_end
             and coordinator.try_reserve_backfill()
         ):
-            task = hass.async_create_task(_async_resume_backfill(hass, entry.entry_id, coordinator))
-            coordinator.set_backfill_task(task)
+            _start_backfill_task(
+                hass,
+                entry.entry_id,
+                coordinator,
+                coroutine=_async_resume_backfill(hass, entry.entry_id, coordinator),
+                name_suffix="resume",
+            )
             return
         await _async_maybe_start_auto_backfill(hass, entry, coordinator)
 
@@ -193,7 +203,29 @@ async def _async_maybe_start_auto_backfill(
         start_day.isoformat(),
         end_day.isoformat(),
     )
-    task = hass.async_create_task(_async_run_backfill(hass, entry.entry_id, coordinator, start, end))
+    _start_backfill_task(
+        hass,
+        entry.entry_id,
+        coordinator,
+        coroutine=_async_backfill_with_watchdog(hass, entry.entry_id, coordinator, start, end),
+        name_suffix="auto",
+    )
+
+
+def _start_backfill_task(
+    hass: HomeAssistant,
+    entry_id: str,
+    coordinator: PGECoordinator,
+    *,
+    coroutine,
+    name_suffix: str,
+) -> None:
+    """Launch a long-lived backfill as a background task (never tracked by block_till_done)."""
+    task = hass.async_create_background_task(
+        coroutine,
+        name=f"{DOMAIN}_backfill_{name_suffix}_{entry_id[:8]}",
+        eager_start=False,
+    )
     coordinator.set_backfill_task(task)
 
 
@@ -271,8 +303,13 @@ async def async_start_history_backfill(hass: HomeAssistant, entry_id: str) -> st
         message=f"Hourly 0/{len(incomplete)}",
     )
     await coordinator.async_persist_sync_progress()
-    task = hass.async_create_task(_async_run_backfill(hass, entry_id, coordinator, start, end))
-    coordinator.set_backfill_task(task)
+    _start_backfill_task(
+        hass,
+        entry_id,
+        coordinator,
+        coroutine=_async_backfill_with_watchdog(hass, entry_id, coordinator, start, end),
+        name_suffix="manual",
+    )
     await async_notify_sync_started(
         hass,
         account_id=coordinator.account_id,
@@ -326,8 +363,13 @@ def _async_setup_services(hass: HomeAssistant) -> None:
             message=f"Hourly 0/{len(incomplete)}",
         )
         await coordinator.async_persist_sync_progress()
-        task = hass.async_create_task(_async_run_backfill(hass, entry_id, coordinator, start, end))
-        coordinator.set_backfill_task(task)
+        _start_backfill_task(
+            hass,
+            entry_id,
+            coordinator,
+            coroutine=_async_backfill_with_watchdog(hass, entry_id, coordinator, start, end),
+            name_suffix="service",
+        )
         await async_notify_sync_started(
             hass,
             account_id=coordinator.account_id,
@@ -370,10 +412,67 @@ async def _async_resume_backfill(
 ) -> None:
     store = coordinator.import_store
     if not store.target_start or not store.target_end:
+        coordinator.release_backfill_reservation()
+        coordinator.set_backfill_task(None, generation=coordinator.backfill_generation)
         return
     start = datetime.fromisoformat(store.target_start)
     end = datetime.fromisoformat(store.target_end)
-    await _async_run_backfill(hass, entry_id, coordinator, start, end)
+    await _async_backfill_with_watchdog(hass, entry_id, coordinator, start, end)
+
+
+async def _async_persist_on_teardown(
+    hass: HomeAssistant,
+    coordinator: PGECoordinator,
+    entry_id: str,
+    store,
+) -> None:
+    """Best-effort persist during cancel/fail; never raise during HA shutdown."""
+    if hass.is_stopping:
+        return
+    with contextlib.suppress(Exception):
+        await async_save_import_state(hass, entry_id, store, critical=False)
+    with contextlib.suppress(Exception):
+        await coordinator.async_persist_sync_progress()
+
+
+async def _async_watch_backfill_stall(hass: HomeAssistant, coordinator: PGECoordinator) -> None:
+    """Abort (and hard-release) a backfill that stops making progress."""
+    while coordinator.backfill_in_progress:
+        await asyncio.sleep(BACKFILL_STALL_POLL_SECONDS)
+        if not coordinator.backfill_in_progress:
+            return
+        if not coordinator.progress_stalled(BACKFILL_STALL_TIMEOUT):
+            continue
+        _LOGGER.error("Backfill made no progress for %s — aborting", BACKFILL_STALL_TIMEOUT)
+        coordinator.request_backfill_abort(
+            f"Stalled: no progress for {BACKFILL_STALL_TIMEOUT}",
+            clear_targets=True,
+        )
+        await asyncio.sleep(BACKFILL_CANCEL_GRACE)
+        if coordinator.backfill_in_progress:
+            await coordinator.force_release_backfill("Stalled backfill did not respond to cancel")
+        return
+
+
+async def _async_backfill_with_watchdog(
+    hass: HomeAssistant,
+    entry_id: str,
+    coordinator: PGECoordinator,
+    start: datetime,
+    end: datetime,
+) -> None:
+    """Run backfill with a sibling progress-stall watchdog."""
+    stall_task = hass.async_create_background_task(
+        _async_watch_backfill_stall(hass, coordinator),
+        name=f"{DOMAIN}_backfill_watchdog_{entry_id[:8]}",
+        eager_start=False,
+    )
+    try:
+        await _async_run_backfill(hass, entry_id, coordinator, start, end)
+    finally:
+        stall_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await stall_task
 
 
 async def _async_run_backfill(
@@ -383,23 +482,38 @@ async def _async_run_backfill(
     start: datetime,
     end: datetime,
 ) -> None:
-    coordinator.set_backfill_state(True, start, end)
     store = coordinator.import_store
-    store.target_start = start.isoformat()
-    store.target_end = end.isoformat()
-    await async_save_import_state(hass, entry_id, store)
-
+    generation = coordinator.backfill_generation
+    token = coordinator.bind_backfill_run_generation(generation)
     try:
-        await async_backfill_range(hass, entry_id, coordinator, start, end)
-        # Finish the billing ledger + programs alongside history backfill.
-        await async_run_billing_sync(hass, coordinator)
-    except Exception as exc:
-        _LOGGER.error("Backfill job failed for %s: %s", entry_id[:8], exc)
-        coordinator.fail_sync_job(str(exc))
-        await coordinator.async_persist_sync_progress()
+        try:
+            coordinator.set_backfill_state(True, start, end, generation=generation)
+            store.target_start = start.isoformat()
+            store.target_end = end.isoformat()
+            await async_save_import_state(hass, entry_id, store)
+
+            await async_backfill_range(hass, entry_id, coordinator, start, end)
+            # Finish the billing ledger + programs alongside history backfill.
+            await async_run_billing_sync(hass, coordinator)
+        except asyncio.CancelledError:
+            reason, clear_targets = coordinator.consume_backfill_abort()
+            coordinator.fail_sync_job(reason or "Cancelled")
+            if clear_targets:
+                store.target_start = None
+                store.target_end = None
+            await _async_persist_on_teardown(hass, coordinator, entry_id, store)
+            raise
+        except Exception as exc:
+            _LOGGER.error("Backfill job failed for %s: %s", entry_id[:8], exc)
+            coordinator.fail_sync_job(str(exc))
+            store.target_start = None
+            store.target_end = None
+            await _async_persist_on_teardown(hass, coordinator, entry_id, store)
+        finally:
+            coordinator.set_backfill_state(False, generation=generation)
+            coordinator.set_backfill_task(None, generation=generation)
     finally:
-        coordinator.set_backfill_state(False)
-        coordinator.set_backfill_task(None)
+        coordinator.reset_backfill_run_generation(token)
 
 
 async def _async_retry_failed_ranges(
