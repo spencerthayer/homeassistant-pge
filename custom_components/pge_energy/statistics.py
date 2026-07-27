@@ -37,10 +37,10 @@ from .const import (
     ENTITY_UNIQUE_TEMPERATURE,
     MONTHLY_LUMP_MIN_COST,
     MONTHLY_LUMP_MIN_KWH,
-    STATISTICS_ACK_WRITE_ATTEMPTS,
     STATISTIC_ID_SUFFIX_CONSUMPTION,
     STATISTIC_ID_SUFFIX_COST,
     STATISTIC_ID_SUFFIX_TEMPERATURE,
+    STATISTICS_ACK_WRITE_ATTEMPTS,
 )
 from .models import UsageInterval
 from .options import pge_display_name
@@ -490,14 +490,12 @@ async def async_verify_statistic_states(
         raw_state = mapped[key].get("state")
         if raw_state is None:
             raise RuntimeError(
-                f"Recorder row present but state is None {statistic_id} @ {key.isoformat()} "
-                f"(expected state={expected})"
+                f"Recorder row present but state is None {statistic_id} @ {key.isoformat()} (expected state={expected})"
             )
         actual = float(raw_state)
         if abs(actual - expected) > 1e-9:
             raise RuntimeError(
-                f"Recorder state stale {statistic_id} @ {key.isoformat()}: "
-                f"expected={expected} actual={actual}"
+                f"Recorder state stale {statistic_id} @ {key.isoformat()}: expected={expected} actual={actual}"
             )
 
 

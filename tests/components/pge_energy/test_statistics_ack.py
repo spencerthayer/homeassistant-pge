@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from custom_components.pge_energy.const import (
@@ -38,31 +39,35 @@ def _meta(statistic_id: str = "pge_energy:key_consumption") -> dict:
 async def test_verify_distinguishes_absent_from_stale():
     hass = MagicMock()
     start = datetime(2025, 7, 1, 8, tzinfo=UTC)
-    with patch(
-        "custom_components.pge_energy.statistics._async_get_stats_map",
-        new=AsyncMock(return_value={}),
+    with (
+        patch(
+            "custom_components.pge_energy.statistics._async_get_stats_map",
+            new=AsyncMock(return_value={}),
+        ),
+        pytest.raises(RuntimeError, match="row absent"),
     ):
-        with pytest.raises(RuntimeError, match="row absent"):
-            await async_verify_statistic_states(
-                hass,
-                "pge_energy:key_cost",
-                {start: 0.04},
-                start=start,
-                end=start + timedelta(hours=1),
-            )
+        await async_verify_statistic_states(
+            hass,
+            "pge_energy:key_cost",
+            {start: 0.04},
+            start=start,
+            end=start + timedelta(hours=1),
+        )
 
-    with patch(
-        "custom_components.pge_energy.statistics._async_get_stats_map",
-        new=AsyncMock(return_value={start: {"state": 0.01}}),
+    with (
+        patch(
+            "custom_components.pge_energy.statistics._async_get_stats_map",
+            new=AsyncMock(return_value={start: {"state": 0.01}}),
+        ),
+        pytest.raises(RuntimeError, match="state stale"),
     ):
-        with pytest.raises(RuntimeError, match="state stale"):
-            await async_verify_statistic_states(
-                hass,
-                "pge_energy:key_cost",
-                {start: 0.04},
-                start=start,
-                end=start + timedelta(hours=1),
-            )
+        await async_verify_statistic_states(
+            hass,
+            "pge_energy:key_cost",
+            {start: 0.04},
+            start=start,
+            end=start + timedelta(hours=1),
+        )
 
 
 @pytest.mark.asyncio
