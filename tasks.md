@@ -14,6 +14,7 @@
 - [x] Weather vs usage scatter tooltip includes Pacific day date(s) (0.5.45)
 - [x] Clarified `.cursor/rules/bump-version-on-code-changes.mdc`: HACS integration upgrade cycle (bump → commit → push → GitHub Release Latest) required for shipped versions
 - [x] Stop mutating frontend user-store sidebar (`panelOrder` / `hiddenPanels`) so Browser Mod / HA own order and visibility ([issue #2](https://github.com/spencerthayer/homeassistant-pge/issues/2); 0.5.46); regression guards in `test_panel.py`
+- [x] Published GitHub Release [v0.5.46](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.5.46) and asked `@gatlinnewhouse` to retest on [#2](https://github.com/spencerthayer/homeassistant-pge/issues/2)
 
 ## Follow-ups
 
