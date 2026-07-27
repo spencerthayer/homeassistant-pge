@@ -10,6 +10,8 @@
 - [x] Code-review fixes on the hang-recovery commit: generation-scoped abort reason (`consume_backfill_abort(generation)`) and `owns_backfill_generation` guards so an orphaned job cannot clear its successor's `target_*` or flush the shared `import_store`; unload now cancels tracked orphans; stall heartbeat reset at task start; boot repair also clears restored `refreshing`; `_STORES` cache evicted on unload; ruff E402/F401/SIM102 from the original commit
 - [x] Recorder ack rewrite (0.5.43): verify distinguishes row absent vs stale; ack re-issues write (bounded); cost/temperature ack non-fatal + clear `dirty_from`; mirror before cost/temp ack
 - [x] Drop entity mirrors for four monetary mean sensors + one-time `async_clear_statistics` cleanup (`billing_mirror_cleanup_done`); downgrade "already in progress" service logs to warning
+- [x] Remove stock HA energy-date-selection + statistics-graph fallback cards from `/pge` Usage section (0.5.44)
+- [x] Weather vs usage scatter tooltip includes Pacific day date(s) (0.5.45)
 
 ## Follow-ups
 

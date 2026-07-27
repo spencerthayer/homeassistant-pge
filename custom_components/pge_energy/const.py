@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
-VERSION = "0.5.43"
+VERSION = "0.5.45"
 PLATFORMS = ["sensor", "binary_sensor"]
 
 # Sidebar custom panel (registered once per HA instance, not per entry).

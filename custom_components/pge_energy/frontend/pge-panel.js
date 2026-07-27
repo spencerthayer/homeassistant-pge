@@ -27,7 +27,7 @@ import {
   stateDisplay,
   stateNumber,
   sumStatisticChange,
-} from "./data.js?v=0.5.43";
+} from "./data.js?v=0.5.45";
 import {
   createBarChart,
   createLineChart,
@@ -37,9 +37,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.5.43";
-import { sparklineSvg } from "./svg-helpers.js?v=0.5.43";
-import { applyPanelTheme } from "./theme.js?v=0.5.43";
+} from "./charts.js?v=0.5.45";
+import { sparklineSvg } from "./svg-helpers.js?v=0.5.45";
+import { applyPanelTheme } from "./theme.js?v=0.5.45";
 
 const STYLE = `
 :host {
@@ -520,7 +520,6 @@ details.usage-accounting .usage-accounting-body { padding: 0 0 4px; }
 }
 .program:hover .name, .program:focus-within .name { color: var(--primary-color); }
 details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
-.fallback-cards { display: grid; gap: 12px; }
 .pge-heatmap-title { font-size: 0.9rem; margin-bottom: 8px; color: var(--secondary-text-color); }
 .pge-heatmap-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(10px, 1fr)); gap: 2px;
@@ -619,7 +618,6 @@ class PgeEnergyPanel extends HTMLElement {
     this._syncByEntry = {};
     this._unsubSync = null;
     this._charts = [];
-    this._helpers = null;
     this._rangeKey = "24h";
     this._rangeShift = 0;
     this._customRange = null;
@@ -671,9 +669,6 @@ class PgeEnergyPanel extends HTMLElement {
   async _boot() {
     this._renderShell();
     try {
-      if (typeof window.loadCardHelpers === "function") {
-        this._helpers = await window.loadCardHelpers();
-      }
       const res = await this._hass.callWS({ type: "pge_energy/accounts" });
       this._accounts = res.accounts || [];
       if (!this._activeEntryId && this._accounts.length) {
@@ -761,7 +756,6 @@ class PgeEnergyPanel extends HTMLElement {
         <div class="filters" id="filters"></div>
         <div class="chart-host usage-combo" id="chart-usage"></div>
         <div class="usage-stats" id="usage-stats"></div>
-        <div class="fallback-cards" id="energy-fallback"></div>
       </section>
       <section class="card" id="insights-weather">
         <h3>Weather vs usage</h3>
@@ -809,7 +803,6 @@ class PgeEnergyPanel extends HTMLElement {
     await this._renderInsights();
     this._renderBillingPrograms();
     this._renderDiagnostics();
-    await this._renderEnergyFallback();
   }
 
   _normalizeRangeKey(key) {
@@ -2105,15 +2098,23 @@ class PgeEnergyPanel extends HTMLElement {
       const tempMap = new Map((tempDay.xs || []).map((t, i) => [t, tempDay.means[i]]));
       const sx = [];
       const sy = [];
+      const sDates = [];
       for (let i = 0; i < (kwhDay.xs || []).length; i++) {
-        const temp = tempMap.get(kwhDay.xs[i]);
+        const dayStart = kwhDay.xs[i];
+        const temp = tempMap.get(dayStart);
         const usage = kwhDay.values[i];
         if (temp != null && usage != null && usage > 0) {
           sx.push(temp);
           sy.push(usage);
+          sDates.push(dayStart);
         }
       }
-      const chart = await createScatter(scatterHost, { xs: sx, ys: sy, color: colors.kwh });
+      const chart = await createScatter(scatterHost, {
+        xs: sx,
+        ys: sy,
+        dates: sDates,
+        color: colors.kwh,
+      });
       if (chart) this._charts.push(chart);
     }
 
@@ -2358,51 +2359,6 @@ class PgeEnergyPanel extends HTMLElement {
         )}</strong></div>
       </div>
     `;
-  }
-
-  async _renderEnergyFallback() {
-    const host = this.shadowRoot.getElementById("energy-fallback");
-    if (!host || !this._helpers || !this._account) return;
-    host.replaceChildren();
-    const ids = this._account.statistic_ids;
-    const configs = [
-      { type: "energy-date-selection" },
-      {
-        type: "statistics-graph",
-        title: "PGE consumption",
-        entities: [ids.consumption],
-        stat_types: ["change"],
-        chart_type: "bar",
-        period: "hour",
-      },
-      {
-        type: "statistics-graph",
-        title: "PGE cost",
-        entities: [ids.cost],
-        stat_types: ["change"],
-        chart_type: "bar",
-        period: "hour",
-      },
-      {
-        type: "statistics-graph",
-        title: "PGE outdoor temperature",
-        entities: [ids.temperature],
-        stat_types: ["mean"],
-        chart_type: "line",
-        period: "hour",
-      },
-    ];
-    for (const config of configs) {
-      try {
-        const el = await this._helpers.createCardElement(config);
-        el.hass = this._hass;
-        el.style.display = "block";
-        el.style.marginBottom = "8px";
-        host.appendChild(el);
-      } catch (_err) {
-        /* stock energy cards optional */
-      }
-    }
   }
 
   _fmt(value, suffix = "", money = false) {

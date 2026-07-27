@@ -10,7 +10,7 @@ import {
   seriesColors,
   tooltipTheme,
   withAlpha,
-} from "./theme.js?v=0.5.43";
+} from "./theme.js?v=0.5.45";
 
 export { seriesColors };
 
@@ -800,11 +800,34 @@ export async function createUsageComboChart(host, { kwh, cost, temp, colors }) {
   return mount(host, option, { height: 380 });
 }
 
-export async function createScatter(host, { xs, ys, color }) {
+function _scatterDayLabel(ts) {
+  if (ts == null) return null;
+  const ms = typeof ts === "number" && ts < 1e12 ? ts * 1000 : Number(ts);
+  if (!Number.isFinite(ms)) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(ms));
+}
+
+function _formatScatterDates(dates) {
+  if (!dates?.length) return "";
+  const unique = [...new Set(dates.filter(Boolean))];
+  if (!unique.length) return "";
+  if (unique.length === 1) return unique[0];
+  if (unique.length <= 3) return unique.join(", ");
+  return `${unique.slice(0, 3).join(", ")} (+${unique.length - 3} more)`;
+}
+
+/** Daily kWh vs outdoor °F scatter. ``dates`` is optional unix starts parallel to xs/ys. */
+export async function createScatter(host, { xs, ys, dates = null, color }) {
   const root = resolveRoot(host);
   const theme = themeColors(root);
   const tip = tooltipTheme(root);
-  const data = [];
+  // Group identical coordinates so a stacked hover can list every Pacific day.
+  const byCoord = new Map();
   for (let i = 0; i < xs.length; i++) {
     if (ys[i] == null || xs[i] == null) continue;
     const x = Number(xs[i]);
@@ -812,24 +835,32 @@ export async function createScatter(host, { xs, ys, color }) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     // Drop obvious non-weather / non-usage placeholders.
     if (x < -20 || x > 130 || y < 0) continue;
-    data.push([x, y]);
+    const key = `${x}\0${y}`;
+    let point = byCoord.get(key);
+    if (!point) {
+      point = { value: [x, y], dates: [] };
+      byCoord.set(key, point);
+    }
+    const label = _scatterDayLabel(dates?.[i]);
+    if (label && !point.dates.includes(label)) point.dates.push(label);
   }
+  const data = [...byCoord.values()];
   if (data.length < 5) {
     return showChartEmpty(host, "Need more days with both usage and temperature.");
   }
   // Drop rare monthly-aggregate / bad-import outliers so axes stay readable.
-  const sortedY = data.map((d) => d[1]).sort((a, b) => a - b);
+  const sortedY = data.map((d) => d.value[1]).sort((a, b) => a - b);
   const p95 = sortedY[Math.min(sortedY.length - 1, Math.floor(sortedY.length * 0.95))];
   const yCap = Math.max(80, p95 * 2.5);
-  const cleaned = data.filter((d) => d[1] <= yCap);
+  const cleaned = data.filter((d) => d.value[1] <= yCap);
   if (cleaned.length >= 5) data.splice(0, data.length, ...cleaned);
   const xExtent = _paddedExtent(
-    data.map((d) => d[0]),
+    data.map((d) => d.value[0]),
     0.1,
     null
   );
   const yExtent = _paddedExtent(
-    data.map((d) => d[1]),
+    data.map((d) => d.value[1]),
     0.1,
     0
   );
@@ -854,8 +885,13 @@ export async function createScatter(host, { xs, ys, color }) {
       backgroundColor: tip.backgroundColor,
       borderColor: tip.borderColor,
       textStyle: tip.textStyle,
-      formatter: (p) =>
-        `${Number(p.value[0]).toFixed(1)} °F<br/>${Number(p.value[1]).toFixed(2)} kWh`,
+      formatter: (p) => {
+        const x = Number(p.value[0]);
+        const y = Number(p.value[1]);
+        const dateLine = _formatScatterDates(p.data?.dates);
+        const head = dateLine ? `<b>${dateLine}</b><br/>` : "";
+        return `${head}${formatTempLabel(x)}<br/>${formatKwhLabel(y)}`;
+      },
     },
     xAxis: {
       type: "value",
