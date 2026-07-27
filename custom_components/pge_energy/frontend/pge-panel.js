@@ -27,7 +27,7 @@ import {
   stateDisplay,
   stateNumber,
   sumStatisticChange,
-} from "./data.js?v=0.5.48";
+} from "./data.js?v=0.5.49";
 import {
   createBarChart,
   createLineChart,
@@ -37,9 +37,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.5.48";
-import { sparklineSvg } from "./svg-helpers.js?v=0.5.48";
-import { applyPanelTheme } from "./theme.js?v=0.5.48";
+} from "./charts.js?v=0.5.49";
+import { sparklineSvg } from "./svg-helpers.js?v=0.5.49";
+import { applyPanelTheme } from "./theme.js?v=0.5.49";
 
 const STYLE = `
 :host {
@@ -159,6 +159,10 @@ const STYLE = `
 .kpi.kpi-usage { border-left-color: var(--pge-series-kwh); }
 .kpi.kpi-statement { border-left-color: var(--pge-series-cost); }
 .kpi.kpi-estimate { border-left-color: var(--pge-series-savings); }
+/* Min/max dual tip ($a/$b) is longer than a single KPI figure — shrink to fit. */
+.kpi.kpi-estimate.kpi-dual .value {
+  font-size: 1.15rem !important;
+}
 .kpi.status-good:hover, .kpi.status-good:focus-within {
   box-shadow:
     0 6px 16px color-mix(in srgb, var(--pge-status-good) 22%, transparent),
@@ -1434,7 +1438,7 @@ class PgeEnergyPanel extends HTMLElement {
         <div class="kpi kpi-usage"><div class="label">Since statement cost</div><div class="value">${this._fmt(sinceStatementCost, "", true)}</div><div class="delta">${this._escape(sinceStatementRange)}</div></div>
         <div class="kpi kpi-usage"><div class="label">Since statement kWh</div><div class="value">${this._fmt(sinceStatementKwh, " kWh")}</div><div class="delta">${this._escape(sinceStatementRange)}</div></div>
         <div class="kpi kpi-estimate"><div class="label">PGE est. charges so far</div><div class="value">${this._fmt(estCharges, "", true)}</div><div class="delta">${this._escape(cycleProgress)}</div></div>
-        <div class="kpi kpi-estimate"><div class="label">PGE est. next bill</div><div class="value">${this._escape(estRange)}</div><div class="delta">${this._escape(cycleProgress)}</div></div>
+        <div class="kpi kpi-estimate kpi-dual"><div class="label">PGE est. next bill</div><div class="value">${this._escape(estRange)}</div><div class="delta">${this._escape(cycleProgress)}</div></div>
         <div class="kpi status-${dueStatus}"><div class="label">Amount due</div><div class="value">${this._fmt(amountDue, "", true)}</div><div class="delta">Due ${this._escape(this._fmtDate(dueDate) || "—")}</div></div>
         <div class="kpi"><div class="label">Last payment</div><div class="value">${this._fmt(lastPayment, "", true)}</div><div class="delta">${this._escape(this._fmtDate(lastPaymentDate) || "—")}</div></div>
       </div>
