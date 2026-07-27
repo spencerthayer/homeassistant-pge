@@ -15,7 +15,7 @@ Custom Home Assistant integration that imports **Portland General Electric (PGE)
 1. In HACS → **⋯** → **Custom repositories**, add  
    `https://github.com/spencerthayer/homeassistant-pge`  
    with category **Integration**.
-2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.5.46`).
+2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.5.47`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -111,7 +111,7 @@ The integration registers a sidebar item **PGE** (admin users) at [`/pge`](http:
 - Data: `pge_energy/accounts` + `pge_energy/sync/subscribe` (admin websocket); chart series via built-in `recorder/statistics_during_period`.
 - At a glance includes Yesterday and Week (Pacific Sunday → yesterday) kWh/cost from imported intervals, plus statement / since-statement / PGE estimate cards.
 - Usage chart includes **Range accounting** for the selected window: totals, per-hour/day/month/year averages, $/kWh, median/min/max/stdev, and adaptive Pacific hour/day/month/year breakdown tables (scales from short windows through multi-decade history). Range accounting and breakdown accordions remember open/closed in the browser; **Billing** is always expanded (not an accordion).
-- Usage ranges end at Pacific midnight of the current day (exclusive): only complete published data through **yesterday**. Primary fast-select: **24h**, **This cycle**, **Last cycle**, **7 days**, **Month**; **More…** covers `6h` / `12h` / `3mo` / `6mo` / `12mo` / YTD (unavailable options stay visible but disabled). Default `24h`; ◀/▶ and datetime inputs scroll or pick a window; a **PGE publication gaps** card sits between At a glance and Usage.
+- Usage ranges end at Pacific midnight of the current day (exclusive): only complete published data through **yesterday**. Primary fast-select: **24h**, **This cycle**, **Last cycle**, **7 days**, **Month**; **More…** covers `6h` / `12h` / `3mo` / `6mo` / `12mo` / YTD (unavailable options stay visible but disabled). Default `24h`; ◀/▶ and datetime inputs scroll or pick a window. A collapsible **Sync status** section under At a glance (default collapsed; open/closed remembered in the browser) holds live import progress above **PGE publication gaps**.
 - Layout adapts for phone and tablet: summary metrics stack to one column under 640px, cost/heatmap grids stack under 900px, filter controls and charts scale for narrow viewports, and breakdown tables scroll horizontally.
 - Note: `/energy/pge` cannot be a distinct page — HA routes panels by the first URL segment, and `energy` is the built-in Energy panel.
 

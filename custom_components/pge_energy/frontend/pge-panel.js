@@ -27,7 +27,7 @@ import {
   stateDisplay,
   stateNumber,
   sumStatisticChange,
-} from "./data.js?v=0.5.46";
+} from "./data.js?v=0.5.47";
 import {
   createBarChart,
   createLineChart,
@@ -37,9 +37,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.5.46";
-import { sparklineSvg } from "./svg-helpers.js?v=0.5.46";
-import { applyPanelTheme } from "./theme.js?v=0.5.46";
+} from "./charts.js?v=0.5.47";
+import { sparklineSvg } from "./svg-helpers.js?v=0.5.47";
+import { applyPanelTheme } from "./theme.js?v=0.5.47";
 
 const STYLE = `
 :host {
@@ -190,6 +190,21 @@ const STYLE = `
 .sync-row progress {
   flex: 1; min-width: 160px; height: 10px;
   accent-color: var(--primary-color);
+}
+details.sync-gaps-panel {
+  margin: 0;
+  width: 100%;
+  padding: 0;
+}
+.sync-gaps-body {
+  display: grid;
+  gap: 16px;
+  padding: 0 0 4px;
+}
+.sync-gaps-body .data-gaps h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+  font-weight: 600;
 }
 .btn {
   border: 0; border-radius: 8px; padding: 8px 14px; cursor: pointer;
@@ -402,14 +417,17 @@ const STYLE = `
   border-bottom: 0;
 }
 details.usage-accounting,
-details.usage-rollup {
+details.usage-rollup,
+details.sync-gaps-panel {
   margin-top: 16px;
   width: 100%;
   padding: 0;
 }
 .usage-stats details.usage-accounting { margin-top: 0; }
+details.sync-gaps-panel { margin-top: 0; }
 details.usage-accounting > summary,
-details.usage-rollup > summary {
+details.usage-rollup > summary,
+details.sync-gaps-panel > summary {
   cursor: pointer;
   display: block;
   position: relative;
@@ -420,11 +438,14 @@ details.usage-rollup > summary {
   border-radius: 8px;
 }
 details.usage-accounting > summary::-webkit-details-marker,
-details.usage-rollup > summary::-webkit-details-marker { display: none; }
+details.usage-rollup > summary::-webkit-details-marker,
+details.sync-gaps-panel > summary::-webkit-details-marker { display: none; }
 details.usage-accounting > summary::marker,
-details.usage-rollup > summary::marker { content: ""; }
+details.usage-rollup > summary::marker,
+details.sync-gaps-panel > summary::marker { content: ""; }
 details.usage-accounting > summary::before,
-details.usage-rollup > summary::before {
+details.usage-rollup > summary::before,
+details.sync-gaps-panel > summary::before {
   content: "▸";
   position: absolute;
   left: 4px;
@@ -434,9 +455,11 @@ details.usage-rollup > summary::before {
   color: var(--secondary-text-color);
 }
 details.usage-accounting[open] > summary::before,
-details.usage-rollup[open] > summary::before { content: "▾"; }
+details.usage-rollup[open] > summary::before,
+details.sync-gaps-panel[open] > summary::before { content: "▾"; }
 details.usage-accounting > summary:hover,
-details.usage-rollup > summary:hover {
+details.usage-rollup > summary:hover,
+details.sync-gaps-panel > summary:hover {
   color: var(--primary-color);
   background: color-mix(
     in srgb,
@@ -445,7 +468,8 @@ details.usage-rollup > summary:hover {
   );
 }
 details.usage-accounting > summary:hover::before,
-details.usage-rollup > summary:hover::before { color: var(--primary-color); }
+details.usage-rollup > summary:hover::before,
+details.sync-gaps-panel > summary:hover::before { color: var(--primary-color); }
 .rollup-title {
   display: block;
   font-weight: 650;
@@ -465,7 +489,6 @@ details.usage-accounting .usage-accounting-body { padding: 0 0 4px; }
 .insights-cost-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
 .insights-cost-grid .chart-host { min-height: 200px; height: 200px; }
 .chart-empty { margin: 12px 0; font-size: 0.85rem; }
-.data-gaps h2 { margin-bottom: 8px; }
 .data-gaps ul { margin: 0; padding-left: 1.2rem; display: grid; gap: 6px; }
 .data-gaps li { font-size: 0.9rem; color: var(--primary-text-color); }
 .data-gaps .gap-ok { color: var(--pge-status-good); }
@@ -599,7 +622,8 @@ details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 
   .programs { grid-template-columns: 1fr 1fr; gap: 8px; }
   .program { padding: 10px; min-height: 64px; }
   details.usage-accounting > summary,
-  details.usage-rollup > summary {
+  details.usage-rollup > summary,
+  details.sync-gaps-panel > summary {
     padding: 10px 12px 12px 26px;
     min-height: 44px;
   }
@@ -748,9 +772,21 @@ class PgeEnergyPanel extends HTMLElement {
 
     content.innerHTML = `
       ${tabs}
-      <section class="card sync-strip" id="sync"></section>
       <section class="card" id="kpis"></section>
-      <section class="card data-gaps" id="data-gaps"></section>
+      <section class="card sync-gaps" id="sync-gaps">
+        <details class="sync-gaps-panel" data-persist="sync_status"${this._detailsOpenAttr(
+          "sync_status"
+        )}>
+          <summary>
+            <span class="rollup-title">Sync status</span>
+            <span class="rollup-caption">Import progress and upstream PGE publication gaps</span>
+          </summary>
+          <div class="sync-gaps-body">
+            <div class="sync-strip" id="sync"></div>
+            <div class="data-gaps" id="data-gaps"></div>
+          </div>
+        </details>
+      </section>
       <section class="card" id="hero">
         <h2>Usage</h2>
         <div class="filters" id="filters"></div>
@@ -789,6 +825,7 @@ class PgeEnergyPanel extends HTMLElement {
         await this._renderAll();
       });
     });
+    this._bindPersistentDetails(content.querySelector("#sync-gaps"));
   }
 
   async _renderAll() {
@@ -1138,7 +1175,7 @@ class PgeEnergyPanel extends HTMLElement {
     }
 
     el.innerHTML = `
-      <h2>PGE publication gaps</h2>
+      <h3>PGE publication gaps</h3>
       <p class="muted">What Portland General Electric has not published (or not finished publishing) yet — these gaps are upstream of Home Assistant.</p>
       <ul>
         ${items
@@ -1160,7 +1197,6 @@ class PgeEnergyPanel extends HTMLElement {
     const eta =
       sync.eta_seconds != null ? `ETA ${Math.round(sync.eta_seconds / 60)} min` : "";
     el.innerHTML = `
-      <h2>Sync status</h2>
       <div class="sync-row">
         <strong>${this._escape(status)}</strong>
         <span class="muted">${this._escape(sync.phase || "")}</span>
@@ -1600,7 +1636,7 @@ class PgeEnergyPanel extends HTMLElement {
     }
   }
 
-  /** Restore + remember open/closed for Usage accounting/rollup accordions. */
+  /** Restore + remember open/closed for panel `<details data-persist>` accordions. */
   _bindPersistentDetails(host) {
     if (!host) return;
     host.querySelectorAll("details[data-persist]").forEach((el) => {

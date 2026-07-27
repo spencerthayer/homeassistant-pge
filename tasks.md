@@ -15,6 +15,8 @@
 - [x] Clarified `.cursor/rules/bump-version-on-code-changes.mdc`: HACS integration upgrade cycle (bump → commit → push → GitHub Release Latest) required for shipped versions
 - [x] Stop mutating frontend user-store sidebar (`panelOrder` / `hiddenPanels`) so Browser Mod / HA own order and visibility ([issue #2](https://github.com/spencerthayer/homeassistant-pge/issues/2); 0.5.46); regression guards in `test_panel.py`
 - [x] Published GitHub Release [v0.5.46](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.5.46) and asked `@gatlinnewhouse` to retest on [#2](https://github.com/spencerthayer/homeassistant-pge/issues/2)
+- [x] Panel: move Sync status under At a glance; combine with PGE publication gaps in one collapsible (default collapsed, `localStorage` persist key `sync_status`) — 0.5.47
+- [x] Published GitHub Release [v0.5.47](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.5.47)
 
 ## Follow-ups
 
