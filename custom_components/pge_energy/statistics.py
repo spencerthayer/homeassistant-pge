@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
+from functools import partial
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
@@ -13,6 +16,7 @@ from homeassistant.components.recorder.statistics import (
     StatisticMeanType,
     async_add_external_statistics,
     get_last_statistics,
+    get_metadata,
     statistics_during_period,
 )
 from homeassistant.components.recorder.statistics import (
@@ -33,6 +37,7 @@ from .const import (
     ENTITY_UNIQUE_TEMPERATURE,
     MONTHLY_LUMP_MIN_COST,
     MONTHLY_LUMP_MIN_KWH,
+    STATISTICS_ACK_WRITE_ATTEMPTS,
     STATISTIC_ID_SUFFIX_CONSUMPTION,
     STATISTIC_ID_SUFFIX_COST,
     STATISTIC_ID_SUFFIX_TEMPERATURE,
@@ -42,6 +47,29 @@ from .options import pge_display_name
 from .time_util import PGE_TZ, local_day_bounds
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ImportBaselineResult:
+    """Result of ``async_import_with_baseline``.
+
+    Compares equal to ``imported`` (int) so existing call sites/tests that check
+    ``== N`` keep working. ``cost_failed_days`` lists Pacific local dates whose
+    cost ack failed after consumption succeeded (non-fatal).
+    """
+
+    imported: int
+    cost_failed_days: tuple[str, ...] = field(default_factory=tuple)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, int):
+            return self.imported == other
+        if isinstance(other, ImportBaselineResult):
+            return self.imported == other.imported and self.cost_failed_days == other.cost_failed_days
+        return NotImplemented
+
+    def __int__(self) -> int:
+        return self.imported
 
 
 def _get_statistic_id(account_key: str, suffix: str) -> str:
@@ -444,32 +472,98 @@ async def async_verify_statistic_states(
     start: datetime,
     end: datetime,
 ) -> None:
-    """Re-read hour rows and require exact state matches for expected starts."""
+    """Re-read hour rows and require exact state matches for expected starts.
+
+    Distinguishes a missing row (write never landed) from a present row with a
+    stale ``state`` (dropped/partial update or infrastructure fault).
+    """
     if not expected_states:
         return
     mapped = await _async_get_stats_map(hass, statistic_id, start, end)
     for row_start, expected in expected_states.items():
         key = row_start.astimezone(UTC)
         if key not in mapped:
-            raise RuntimeError(f"Recorder missing statistic row {statistic_id} @ {key.isoformat()}")
-        actual = float(mapped[key]["state"])
+            raise RuntimeError(
+                f"Recorder row absent {statistic_id} @ {key.isoformat()} "
+                f"(expected state={expected}; write did not land)"
+            )
+        raw_state = mapped[key].get("state")
+        if raw_state is None:
+            raise RuntimeError(
+                f"Recorder row present but state is None {statistic_id} @ {key.isoformat()} "
+                f"(expected state={expected})"
+            )
+        actual = float(raw_state)
         if abs(actual - expected) > 1e-9:
             raise RuntimeError(
-                f"Recorder state mismatch {statistic_id} @ {key.isoformat()}: expected={expected} actual={actual}"
+                f"Recorder state stale {statistic_id} @ {key.isoformat()}: "
+                f"expected={expected} actual={actual}"
             )
+
+
+async def _async_log_ack_failure_diagnostics(
+    hass: HomeAssistant,
+    statistic_id: str,
+    expected_states: Mapping[datetime, float],
+    last_error: BaseException,
+) -> None:
+    """Log mismatch samples + recorder metadata after the final failed ack."""
+    samples: list[str] = []
+    for start, expected in list(expected_states.items())[:5]:
+        samples.append(f"{start.astimezone(UTC).isoformat()} expected={expected}")
+    meta_summary = "unavailable"
+    try:
+        meta_map = await get_instance(hass).async_add_executor_job(
+            partial(get_metadata, hass, statistic_ids={statistic_id})
+        )
+        entry = meta_map.get(statistic_id) if isinstance(meta_map, dict) else None
+        # get_metadata returns {statistic_id: (id, StatisticMetaData-like)}
+        meta = entry[1] if isinstance(entry, tuple) and len(entry) > 1 else entry
+        if isinstance(meta, dict):
+            meta_summary = (
+                f"unit={meta.get('unit_of_measurement')!r} "
+                f"unit_class={meta.get('unit_class')!r} "
+                f"has_sum={meta.get('has_sum')!r} "
+                f"mean_type={meta.get('mean_type')!r}"
+            )
+        elif meta is not None:
+            meta_summary = repr(meta)
+    except Exception as meta_exc:  # noqa: BLE001 — diagnostics must not mask the ack error
+        meta_summary = f"lookup failed: {meta_exc}"
+    _LOGGER.error(
+        "Statistics ack failed for %s after %s write attempt(s): %s; "
+        "samples=%s; recorder_metadata=%s. "
+        "Persistent mismatch usually means the recorder dropped the import "
+        "(check for 'Cannot operate on a closed database' / 'Unexpected exception "
+        "when updating statistics' and consider recorder.purge with repack).",
+        statistic_id,
+        STATISTICS_ACK_WRITE_ATTEMPTS,
+        last_error,
+        samples,
+        meta_summary,
+    )
 
 
 async def async_ack_external_statistics(
     hass: HomeAssistant,
     *,
     statistic_id: str,
+    metadata: StatisticMetaData | dict[str, Any],
+    stats: list[dict],
     expected_states: dict[datetime, float],
     start: datetime,
     end: datetime,
 ) -> None:
-    """Wait for the recorder queue, then verify exact states were committed."""
+    """Wait for the recorder queue, verify states, and re-issue the write on mismatch.
+
+    Re-reading alone cannot converge when ``import_statistics`` dropped the job
+    (HA swallows SQLAlchemyError inside ``_update_statistics`` and still returns
+    success). Each failed verify re-queues ``async_add_external_statistics``.
+    """
+    if not expected_states:
+        return
     last_error: Exception | None = None
-    for _ in range(8):
+    for attempt in range(STATISTICS_ACK_WRITE_ATTEMPTS):
         await async_wait_recorder_queue(hass)
         try:
             await async_verify_statistic_states(
@@ -482,9 +576,16 @@ async def async_ack_external_statistics(
             return
         except RuntimeError as exc:
             last_error = exc
-            await asyncio.sleep(0.05)
+            if attempt + 1 < STATISTICS_ACK_WRITE_ATTEMPTS:
+                async_add_external_statistics(hass, metadata, stats)
+                await asyncio.sleep(0.05)
     assert last_error is not None
+    await _async_log_ack_failure_diagnostics(hass, statistic_id, expected_states, last_error)
     raise last_error
+
+
+def _expected_from_stats(stats: list[dict]) -> dict[datetime, float]:
+    return {row["start"].astimezone(UTC): float(row["state"]) for row in stats}
 
 
 async def async_repair_suffix_sums(
@@ -516,10 +617,13 @@ async def async_repair_suffix_sums(
         stats.append(_stat_row(start, state, running))
         expected[start] = state
     if stats:
-        async_add_external_statistics(hass, _build_consumption_metadata(account_key, account_id), stats)
+        cons_meta = _build_consumption_metadata(account_key, account_id)
+        async_add_external_statistics(hass, cons_meta, stats)
         await async_ack_external_statistics(
             hass,
             statistic_id=consumption_id,
+            metadata=cons_meta,
+            stats=stats,
             expected_states=expected,
             start=dirty_from,
             end=suffix_end + timedelta(hours=1),
@@ -553,14 +657,8 @@ async def async_repair_suffix_sums(
         cost_stats.append(_stat_row(start, state, cost_running))
         cost_expected[start] = state
     if cost_stats:
-        async_add_external_statistics(hass, _build_cost_metadata(account_key, account_id), cost_stats)
-        await async_ack_external_statistics(
-            hass,
-            statistic_id=cost_id,
-            expected_states=cost_expected,
-            start=dirty_from,
-            end=cost_last[1] + timedelta(hours=1),
-        )
+        cost_meta = _build_cost_metadata(account_key, account_id)
+        async_add_external_statistics(hass, cost_meta, cost_stats)
         _async_mirror_entity_statistics(
             hass,
             account_key=account_key,
@@ -570,6 +668,15 @@ async def async_repair_suffix_sums(
                 _statistic_display_name(account_id, account_key, cost=True),
             ),
             stats=cost_stats,
+        )
+        await async_ack_external_statistics(
+            hass,
+            statistic_id=cost_id,
+            metadata=cost_meta,
+            stats=cost_stats,
+            expected_states=cost_expected,
+            start=dirty_from,
+            end=cost_last[1] + timedelta(hours=1),
         )
 
     # Temperature is mean-only; rewrite dirty window from stored states (no sum rebuild).
@@ -583,14 +690,8 @@ async def async_repair_suffix_sums(
             if start >= dirty_from
         ]
         if temp_stats:
-            async_add_external_statistics(hass, _build_temperature_metadata(account_key, account_id), temp_stats)
-            await async_ack_external_statistics(
-                hass,
-                statistic_id=temp_id,
-                expected_states={row["start"].astimezone(UTC): float(row["state"]) for row in temp_stats},
-                start=dirty_from,
-                end=temp_last[1] + timedelta(hours=1),
-            )
+            temp_meta = _build_temperature_metadata(account_key, account_id)
+            async_add_external_statistics(hass, temp_meta, temp_stats)
             _async_mirror_entity_statistics(
                 hass,
                 account_key=account_key,
@@ -600,6 +701,15 @@ async def async_repair_suffix_sums(
                     _statistic_display_name(account_id, account_key, temperature=True),
                 ),
                 stats=temp_stats,
+            )
+            await async_ack_external_statistics(
+                hass,
+                statistic_id=temp_id,
+                metadata=temp_meta,
+                stats=temp_stats,
+                expected_states=_expected_from_stats(temp_stats),
+                start=dirty_from,
+                end=temp_last[1] + timedelta(hours=1),
             )
 
 
@@ -728,10 +838,13 @@ async def async_repair_monthly_hourly_collisions(
             stats.append(_stat_row(start, state, running))
             expected[start] = state
         if stats:
-            async_add_external_statistics(hass, _build_consumption_metadata(account_key, account_id), stats)
+            cons_meta = _build_consumption_metadata(account_key, account_id)
+            async_add_external_statistics(hass, cons_meta, stats)
             await async_ack_external_statistics(
                 hass,
                 statistic_id=consumption_id,
+                metadata=cons_meta,
+                stats=stats,
                 expected_states=expected,
                 start=dirty_from,
                 end=last[1] + timedelta(hours=1),
@@ -768,14 +881,8 @@ async def async_repair_monthly_hourly_collisions(
             cost_stats.append(_stat_row(start, state, cost_running))
             cost_expected[start] = state
         if cost_stats:
-            async_add_external_statistics(hass, _build_cost_metadata(account_key, account_id), cost_stats)
-            await async_ack_external_statistics(
-                hass,
-                statistic_id=cost_id,
-                expected_states=cost_expected,
-                start=dirty_from,
-                end=cost_last[1] + timedelta(hours=1),
-            )
+            cost_meta = _build_cost_metadata(account_key, account_id)
+            async_add_external_statistics(hass, cost_meta, cost_stats)
             _async_mirror_entity_statistics(
                 hass,
                 account_key=account_key,
@@ -785,6 +892,15 @@ async def async_repair_monthly_hourly_collisions(
                     _statistic_display_name(account_id, account_key, cost=True),
                 ),
                 stats=cost_stats,
+            )
+            await async_ack_external_statistics(
+                hass,
+                statistic_id=cost_id,
+                metadata=cost_meta,
+                stats=cost_stats,
+                expected_states=cost_expected,
+                start=dirty_from,
+                end=cost_last[1] + timedelta(hours=1),
             )
 
     _LOGGER.warning(
@@ -796,6 +912,10 @@ async def async_repair_monthly_hourly_collisions(
     return cleared
 
 
+def _local_dates_from_starts(starts: list[datetime] | set[datetime]) -> tuple[str, ...]:
+    return tuple(sorted({start.astimezone(PGE_TZ).date().isoformat() for start in starts}))
+
+
 async def async_import_with_baseline(
     hass: HomeAssistant,
     account_key: str,
@@ -803,12 +923,18 @@ async def async_import_with_baseline(
     include_cost: bool = True,
     *,
     account_id: str | None = None,
-) -> int:
-    """Upsert intervals and rebuild the affected cumulative-sum suffix."""
+) -> ImportBaselineResult:
+    """Upsert intervals and rebuild the affected cumulative-sum suffix.
+
+    Consumption ack failure propagates. Cost/temperature ack failures are soft:
+    external + entity rows are written together, days are listed in
+    ``cost_failed_days`` for retry, and the poll can clear ``dirty_from``.
+    """
     if not intervals:
-        return 0
+        return ImportBaselineResult(0)
 
     intervals = _dedupe_intervals(intervals)
+    soft_failed: set[str] = set()
     # Temperature is independent of cumulative kWh/cost sums — import even when
     # consumption/cost ack fails (dirty recorder / monthly vs daily collisions).
     try:
@@ -847,7 +973,7 @@ async def async_import_with_baseline(
         # Merge: API overlays, keep existing later rows not in API batch.
         merged_starts = sorted(set(existing_map) | set(overlay_kwh))
         if not merged_starts:
-            return 0
+            return ImportBaselineResult(0)
 
         anchor = await _async_anchor_sum(hass, consumption_id, changed_from)
         running = anchor
@@ -860,11 +986,14 @@ async def async_import_with_baseline(
             consumption_stats.append(_stat_row(start, state, running))
 
         if consumption_stats:
-            async_add_external_statistics(hass, _build_consumption_metadata(account_key, account_id), consumption_stats)
+            cons_meta = _build_consumption_metadata(account_key, account_id)
+            async_add_external_statistics(hass, cons_meta, consumption_stats)
             await async_ack_external_statistics(
                 hass,
                 statistic_id=consumption_id,
-                expected_states={row["start"].astimezone(UTC): float(row["state"]) for row in consumption_stats},
+                metadata=cons_meta,
+                stats=consumption_stats,
+                expected_states=_expected_from_stats(consumption_stats),
                 start=changed_from,
                 end=suffix_end + timedelta(hours=1),
             )
@@ -924,14 +1053,10 @@ async def async_import_with_baseline(
                     cost_running += state
                     cost_stats.append(_stat_row(start, state, cost_running))
                 if cost_stats:
-                    async_add_external_statistics(hass, _build_cost_metadata(account_key, account_id), cost_stats)
-                    await async_ack_external_statistics(
-                        hass,
-                        statistic_id=cost_id,
-                        expected_states={row["start"].astimezone(UTC): float(row["state"]) for row in cost_stats},
-                        start=cost_changed_from,
-                        end=cost_suffix_end + timedelta(hours=1),
-                    )
+                    cost_meta = _build_cost_metadata(account_key, account_id)
+                    async_add_external_statistics(hass, cost_meta, cost_stats)
+                    # Mirror before ack so a failed cost ack cannot leave the
+                    # external series ahead of the entity mirror.
                     _async_mirror_entity_statistics(
                         hass,
                         account_key=account_key,
@@ -942,15 +1067,35 @@ async def async_import_with_baseline(
                         ),
                         stats=cost_stats,
                     )
+                    try:
+                        await async_ack_external_statistics(
+                            hass,
+                            statistic_id=cost_id,
+                            metadata=cost_meta,
+                            stats=cost_stats,
+                            expected_states=_expected_from_stats(cost_stats),
+                            start=cost_changed_from,
+                            end=cost_suffix_end + timedelta(hours=1),
+                        )
+                    except RuntimeError as exc:
+                        failed = _local_dates_from_starts(list(overlay_cost))
+                        soft_failed.update(failed)
+                        _LOGGER.error(
+                            "Cost statistics ack failed (non-fatal); marking days failed: %s (%s)",
+                            ", ".join(failed) or "(none)",
+                            exc,
+                        )
     finally:
-        await _async_import_temperature_overlay(
-            hass,
-            account_key,
-            intervals,
-            account_id=account_id,
+        soft_failed.update(
+            await _async_import_temperature_overlay(
+                hass,
+                account_key,
+                intervals,
+                account_id=account_id,
+            )
         )
 
-    return len(intervals)
+    return ImportBaselineResult(len(intervals), tuple(sorted(soft_failed)))
 
 
 async def _async_import_temperature_overlay(
@@ -959,11 +1104,14 @@ async def _async_import_temperature_overlay(
     intervals: list[UsageInterval],
     *,
     account_id: str | None = None,
-) -> None:
-    """Upsert PGE outdoor temperature (°F). Mean-only; no cumulative sum."""
+) -> set[str]:
+    """Upsert PGE outdoor temperature (°F). Mean-only; no cumulative sum.
+
+    Returns Pacific local dates whose ack failed (empty on success / no data).
+    """
     temp_intervals = [iv for iv in intervals if iv.temperature is not None]
     if not temp_intervals:
-        return
+        return set()
 
     temp_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_TEMPERATURE)
     changed_from = min(iv.start for iv in temp_intervals).astimezone(UTC)
@@ -988,15 +1136,9 @@ async def _async_import_temperature_overlay(
         value = overlay[start] if start in overlay else float(existing[start]["state"])
         stats.append(_mean_stat_row(start, value))
     if not stats:
-        return
-    async_add_external_statistics(hass, _build_temperature_metadata(account_key, account_id), stats)
-    await async_ack_external_statistics(
-        hass,
-        statistic_id=temp_id,
-        expected_states={row["start"].astimezone(UTC): float(row["state"]) for row in stats},
-        start=changed_from,
-        end=suffix_end + timedelta(hours=1),
-    )
+        return set()
+    temp_meta = _build_temperature_metadata(account_key, account_id)
+    async_add_external_statistics(hass, temp_meta, stats)
     _async_mirror_entity_statistics(
         hass,
         account_key=account_key,
@@ -1007,6 +1149,25 @@ async def _async_import_temperature_overlay(
         ),
         stats=stats,
     )
+    try:
+        await async_ack_external_statistics(
+            hass,
+            statistic_id=temp_id,
+            metadata=temp_meta,
+            stats=stats,
+            expected_states=_expected_from_stats(stats),
+            start=changed_from,
+            end=suffix_end + timedelta(hours=1),
+        )
+    except RuntimeError as exc:
+        failed = set(_local_dates_from_starts(list(overlay)))
+        _LOGGER.error(
+            "Temperature statistics ack failed (non-fatal); marking days failed: %s (%s)",
+            ", ".join(sorted(failed)) or "(none)",
+            exc,
+        )
+        return failed
+    return set()
 
 
 async def async_refresh_lifetime_totals(
@@ -1031,7 +1192,7 @@ async def async_import_statistics(
     include_cost: bool = True,
     *,
     account_id: str | None = None,
-) -> int:
+) -> ImportBaselineResult:
     return await async_import_with_baseline(
         hass, account_key, intervals, include_cost=include_cost, account_id=account_id
     )

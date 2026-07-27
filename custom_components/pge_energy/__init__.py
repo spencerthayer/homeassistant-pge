@@ -17,6 +17,7 @@ from homeassistant.helpers import device_registry as dr
 from .api import PGEApiClient
 from .auth import PGEAuthManager
 from .backfill import async_backfill_range, async_fetch_hourly_day
+from .billing_statistics import async_cleanup_orphaned_billing_entity_mirrors
 from .billing_sync import async_run_billing_sync
 from .const import (
     AUTH_MODE_CREDENTIAL,
@@ -159,6 +160,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
 
         await coordinator.async_repair_dirty_if_needed()
         await coordinator.async_repair_monthly_collisions_if_needed()
+        await async_cleanup_orphaned_billing_entity_mirrors(
+            hass,
+            entry_id=entry.entry_id,
+            account_key=coordinator.account_key,
+            store=coordinator.import_store,
+        )
         if (
             coordinator.import_store.target_start
             and coordinator.import_store.target_end
@@ -328,7 +335,7 @@ def _async_setup_services(hass: HomeAssistant) -> None:
         if entry_id:
             err = await async_start_manual_refresh(hass, entry_id)
             if err == "busy":
-                _LOGGER.error("Refresh already in progress for %s", entry_id)
+                _LOGGER.warning("Refresh already in progress for %s", entry_id)
             elif err == "unknown_entry":
                 _LOGGER.error("Unknown entry_id for refresh: %s", entry_id)
             return
@@ -344,7 +351,7 @@ def _async_setup_services(hass: HomeAssistant) -> None:
             _LOGGER.error("Unknown entry_id for backfill: %s", entry_id)
             return
         if coordinator.sync_job_in_progress or not coordinator.try_reserve_backfill():
-            _LOGGER.error("Backfill already in progress for %s", entry_id)
+            _LOGGER.warning("Backfill already in progress for %s", entry_id)
             return
 
         start = datetime.fromisoformat(call.data["start_date"].replace("Z", "+00:00"))
@@ -551,7 +558,7 @@ async def _async_retry_failed_ranges(
                 store.dirty_from = min(iv.start for iv in clipped).isoformat()
                 await async_save_import_state(hass, coordinator.entry.entry_id, store)
                 async with coordinator.import_lock:
-                    await async_import_with_baseline(
+                    import_result = await async_import_with_baseline(
                         hass,
                         coordinator.account_key,
                         clipped,
@@ -559,6 +566,10 @@ async def _async_retry_failed_ranges(
                         account_id=coordinator.account_id,
                     )
                 store.dirty_from = None
+                if iso in import_result.cost_failed_days:
+                    ok_complete = False
+                    if iso not in store.failed_local_dates:
+                        store.failed_local_dates.append(iso)
             if ok_complete:
                 if iso in store.failed_local_dates:
                     store.failed_local_dates.remove(iso)

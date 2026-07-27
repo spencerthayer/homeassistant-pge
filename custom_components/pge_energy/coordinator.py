@@ -901,7 +901,7 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await async_save_import_state(self.hass, self.entry.entry_id, self._import_store)
             try:
                 async with self.import_lock:
-                    await async_import_with_baseline(
+                    import_result = await async_import_with_baseline(
                         self.hass,
                         self.account_key,
                         all_intervals,
@@ -918,6 +918,19 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     tracking=tracking,
                     hard_exc=exc,
                 )
+
+            # Cost/temperature ack soft-fails still clear dirty_from so the
+            # correction window is not stranded; mark those days for retry.
+            soft_failed = set(import_result.cost_failed_days)
+            for iso in soft_failed:
+                if iso not in failed_days:
+                    failed_days.append(iso)
+                if iso in verified_days:
+                    verified_days.remove(iso)
+                if iso not in self._import_store.failed_local_dates:
+                    self._import_store.failed_local_dates.append(iso)
+                if iso in self._import_store.completed_local_dates:
+                    self._import_store.completed_local_dates.remove(iso)
 
             self._import_store.dirty_from = None
             self._import_store.last_imported_start = min(iv.start for iv in all_intervals).isoformat()

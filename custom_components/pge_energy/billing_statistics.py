@@ -10,7 +10,9 @@ Two shapes are used:
 
 * **mean** series (account balance, amount due, last payment amount, bill
   period average temperature, YTD program savings) — one non-cumulative row per
-  billing snapshot timestamp.
+  billing snapshot timestamp. Monetary means are external-only (no entity
+  mirror): those sensors use ``state_class=None`` and HA raises
+  ``STATE_CLASS_REMOVED_ISSUE`` whenever entity recorder metadata exists.
 * **sum** series (bill amount, bill kWh, payment amount) — one cumulative row
   per ledger event, upserted by hour so re-syncing the paged feed is
   idempotent.
@@ -18,6 +20,7 @@ Two shapes are used:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -64,6 +67,17 @@ from .statistics import (  # noqa: PLC2701
     _get_statistic_id,
     _mean_stat_row,
     _stat_row,
+    async_resolve_sensor_entity_id,
+)
+from .store import ImportStoreData, async_save_import_state
+
+# Monetary mean sensors use state_class=None; entity mirrors recreate
+# STATE_CLASS_REMOVED_ISSUE until their recorder metadata is cleared once.
+_MONETARY_MEAN_ENTITY_SUFFIXES = (
+    ENTITY_UNIQUE_ACCOUNT_BALANCE,
+    ENTITY_UNIQUE_AMOUNT_DUE,
+    ENTITY_UNIQUE_LAST_PAYMENT_AMOUNT,
+    ENTITY_UNIQUE_YTD_PROGRAM_SAVINGS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -308,7 +322,7 @@ async def async_import_billing_snapshot(
         account_key,
         account_id,
         suffix=STATISTIC_ID_SUFFIX_ACCOUNT_BALANCE,
-        entity_suffix=ENTITY_UNIQUE_ACCOUNT_BALANCE,
+        entity_suffix=None,
         value=snapshot.amount_due,
         when=when,
         unit=_USD,
@@ -320,7 +334,7 @@ async def async_import_billing_snapshot(
         account_key,
         account_id,
         suffix=STATISTIC_ID_SUFFIX_AMOUNT_DUE,
-        entity_suffix=ENTITY_UNIQUE_AMOUNT_DUE,
+        entity_suffix=None,
         value=snapshot.amount_due,
         when=when,
         unit=_USD,
@@ -332,7 +346,7 @@ async def async_import_billing_snapshot(
         account_key,
         account_id,
         suffix=STATISTIC_ID_SUFFIX_LAST_PAYMENT_AMOUNT,
-        entity_suffix=ENTITY_UNIQUE_LAST_PAYMENT_AMOUNT,
+        entity_suffix=None,
         value=snapshot.last_payment_amount,
         when=when,
         unit=_USD,
@@ -433,7 +447,7 @@ async def async_import_programs_metrics(
         account_key,
         account_id,
         suffix=STATISTIC_ID_SUFFIX_YTD_PROGRAM_SAVINGS,
-        entity_suffix=ENTITY_UNIQUE_YTD_PROGRAM_SAVINGS,
+        entity_suffix=None,
         value=programs.ytd_flex_load_earnings,
         when=when,
         unit=_USD,
@@ -450,3 +464,64 @@ async def async_refresh_billing_lifetime_totals(
     payments = await _async_last_sum(hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_PAYMENT_AMOUNT))
     billed = await _async_last_sum(hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_BILL_AMOUNT))
     return payments, billed
+
+
+async def async_cleanup_orphaned_billing_entity_mirrors(
+    hass: HomeAssistant,
+    *,
+    entry_id: str,
+    account_key: str,
+    store: ImportStoreData,
+) -> bool:
+    """Clear entity statistics for the four monetary mean sensors once per entry.
+
+    HA raises ``STATE_CLASS_REMOVED_ISSUE`` whenever recorder metadata exists for
+    an entity whose live state is numeric with ``state_class=None``. Dropping
+    ``entity_suffix`` stops new mirrors; this clears existing metadata so repairs
+    actually resolve. Returns True when cleanup ran (or was already done).
+    """
+    if store.billing_mirror_cleanup_done:
+        return True
+
+    entity_ids = [
+        eid
+        for suffix in _MONETARY_MEAN_ENTITY_SUFFIXES
+        if (eid := async_resolve_sensor_entity_id(hass, account_key, suffix)) is not None
+    ]
+    if entity_ids:
+        done = asyncio.Event()
+
+        def _on_done() -> None:
+            done.set()
+
+        try:
+            get_instance(hass).async_clear_statistics(entity_ids, on_done=_on_done)
+            try:
+                await asyncio.wait_for(done.wait(), timeout=60.0)
+            except TimeoutError:
+                _LOGGER.warning(
+                    "Timed out waiting for billing mirror statistics clear for %s",
+                    account_key[:8],
+                )
+                # Still mark done so a stuck recorder does not retry forever.
+        except Exception as exc:  # noqa: BLE001 — soft-fail; do not block setup
+            _LOGGER.warning(
+                "Failed to clear orphaned billing entity statistics for %s: %s",
+                account_key[:8],
+                exc,
+            )
+            return False
+        _LOGGER.info(
+            "Cleared orphaned monetary mean entity statistics for %s: %s",
+            account_key[:8],
+            ", ".join(entity_ids),
+        )
+    else:
+        _LOGGER.debug(
+            "No monetary mean entity ids to clear for %s (entities not registered yet)",
+            account_key[:8],
+        )
+
+    store.billing_mirror_cleanup_done = True
+    await async_save_import_state(hass, entry_id, store)
+    return True

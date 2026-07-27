@@ -52,6 +52,9 @@ class ImportStoreData:
     billing_last_success: str | None = None
     billing_failed_pages: list[str] = field(default_factory=list)
     billing_last_error: str | None = None
+    # One-time clear of entity statistics for monetary mean sensors that no
+    # longer carry a state_class (stops STATE_CLASS_REMOVED_ISSUE repairs).
+    billing_mirror_cleanup_done: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -89,6 +92,7 @@ class ImportStoreData:
             billing_last_success=data.get("billing_last_success"),
             billing_failed_pages=list(data.get("billing_failed_pages") or []),
             billing_last_error=data.get("billing_last_error"),
+            billing_mirror_cleanup_done=bool(data.get("billing_mirror_cleanup_done", False)),
         )
 
 

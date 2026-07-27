@@ -14,6 +14,7 @@ from custom_components.pge_energy.exceptions import (
     PGESchemaError,
 )
 from custom_components.pge_energy.models import UsageInterval, UsageResolution, UsageResponse
+from custom_components.pge_energy.statistics import ImportBaselineResult
 from custom_components.pge_energy.store import ImportStoreData
 from custom_components.pge_energy.time_util import local_day_bounds, today_local
 
@@ -85,7 +86,7 @@ async def test_correction_window_refetches_completed_days():
     with (
         patch(
             "custom_components.pge_energy.coordinator.async_import_with_baseline",
-            AsyncMock(return_value=1),
+            AsyncMock(return_value=ImportBaselineResult(1)),
         ),
         patch(
             "custom_components.pge_energy.coordinator.async_save_import_state",
@@ -260,7 +261,7 @@ async def test_poll_invokes_billing_sync_after_usage_import():
     with (
         patch(
             "custom_components.pge_energy.coordinator.async_import_with_baseline",
-            AsyncMock(return_value=1),
+            AsyncMock(return_value=ImportBaselineResult(1)),
         ),
         patch(
             "custom_components.pge_energy.coordinator.async_save_import_state",
@@ -322,7 +323,7 @@ async def test_manual_refresh_tracks_progress_and_completes():
     with (
         patch(
             "custom_components.pge_energy.coordinator.async_import_with_baseline",
-            AsyncMock(return_value=1),
+            AsyncMock(return_value=ImportBaselineResult(1)),
         ),
         patch(
             "custom_components.pge_energy.coordinator.async_save_import_state",
@@ -368,7 +369,7 @@ async def test_incomplete_yesterday_still_imports_and_demotes_completed():
 
     async def capture_import(hass, account_key, intervals, include_cost=True, account_id=None):
         imported.extend(intervals)
-        return len(intervals)
+        return ImportBaselineResult(len(intervals))
 
     coord.async_get_usage_with_auth_retry = AsyncMock(side_effect=fake_usage)
     with (
@@ -414,7 +415,7 @@ async def test_complete_yesterday_clears_catchup_retry():
     with (
         patch(
             "custom_components.pge_energy.coordinator.async_import_with_baseline",
-            AsyncMock(return_value=1),
+            AsyncMock(return_value=ImportBaselineResult(1)),
         ),
         patch(
             "custom_components.pge_energy.coordinator.async_save_import_state",

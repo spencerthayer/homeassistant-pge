@@ -204,7 +204,7 @@ async def _async_import_batch(
     await async_save_import_state(hass, entry_id, store, critical=True)
     try:
         async with coordinator.import_lock:
-            await async_import_with_baseline(
+            import_result = await async_import_with_baseline(
                 hass,
                 coordinator.account_key,
                 intervals,
@@ -215,11 +215,16 @@ async def _async_import_batch(
     except Exception as exc:
         _LOGGER.warning("Backfill import failed: %s", exc)
         return False
+    # Soft cost/temperature ack failures still clear dirty_from; mark days for retry.
+    for iso in import_result.cost_failed_days:
+        _mark_failed(store, iso)
+        if iso in store.completed_local_dates:
+            store.completed_local_dates.remove(iso)
     store.dirty_from = None
     store.last_imported_start = min(iv.start for iv in intervals).isoformat()
     store.last_imported_end = max(iv.end for iv in intervals).isoformat()
     await async_save_import_state(hass, entry_id, store, critical=True)
-    return True
+    return not import_result.cost_failed_days
 
 
 async def async_fetch_hourly_day(

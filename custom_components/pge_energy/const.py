@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
-VERSION = "0.5.42"
+VERSION = "0.5.43"
 PLATFORMS = ["sensor", "binary_sensor"]
 
 # Sidebar custom panel (registered once per HA instance, not per entry).
@@ -100,6 +100,8 @@ BACKFILL_STALL_POLL_SECONDS = 60
 BACKFILL_TIER_TIMEOUT = timedelta(hours=2)
 BACKFILL_CANCEL_GRACE = 30.0  # seconds to honour cancel before orphaning the task
 IMPORT_STATE_SAVE_TIMEOUT = 30.0
+# Recorder ack: verify, then re-issue the write on mismatch (dropped import jobs).
+STATISTICS_ACK_WRITE_ATTEMPTS = 3
 STATISTIC_ID_SUFFIX_CONSUMPTION = "_consumption"
 STATISTIC_ID_SUFFIX_COST = "_cost"
 STATISTIC_ID_SUFFIX_TEMPERATURE = "_temperature"
