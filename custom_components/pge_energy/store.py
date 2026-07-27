@@ -100,6 +100,11 @@ def _store_for_entry(hass: HomeAssistant, entry_id: str) -> Store:
     return store
 
 
+def discard_store_cache(entry_id: str) -> None:
+    """Drop the cached Store on unload so removed entries do not pin a hass ref."""
+    _STORES.pop(entry_id, None)
+
+
 async def async_load_import_state(hass: HomeAssistant, entry_id: str) -> ImportStoreData:
     store = _store_for_entry(hass, entry_id)
     raw = await store.async_load()

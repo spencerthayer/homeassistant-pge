@@ -415,10 +415,13 @@ async def test_boot_repair_clears_restored_backfilling():
     coord._import_store.sync_phase = "hourly"
     coord._import_store.sync_done = 3
     coord._import_store.sync_total = 10
-    with patch(
-        "custom_components.pge_energy.coordinator.async_load_import_state",
-        AsyncMock(return_value=coord._import_store),
-    ), patch.object(coord, "async_refresh_lifetime_totals", AsyncMock()):
+    with (
+        patch(
+            "custom_components.pge_energy.coordinator.async_load_import_state",
+            AsyncMock(return_value=coord._import_store),
+        ),
+        patch.object(coord, "async_refresh_lifetime_totals", AsyncMock()),
+    ):
         await coord.async_load_store()
     assert coord.sync_progress.status == SYNC_STATUS_FAILED
     assert coord.sync_progress.error == "Interrupted by restart"
@@ -432,12 +435,15 @@ async def test_pre_try_zombie_window_on_initial_save_timeout():
     gen = coord.set_backfill_task(asyncio.create_task(asyncio.sleep(0)))
     await asyncio.sleep(0)
 
-    with patch(
-        "custom_components.pge_energy.async_save_import_state",
-        AsyncMock(side_effect=TimeoutError()),
-    ), patch(
-        "custom_components.pge_energy.coordinator.async_save_import_state",
-        AsyncMock(),
+    with (
+        patch(
+            "custom_components.pge_energy.async_save_import_state",
+            AsyncMock(side_effect=TimeoutError()),
+        ),
+        patch(
+            "custom_components.pge_energy.coordinator.async_save_import_state",
+            AsyncMock(),
+        ),
     ):
         await _async_run_backfill(coord.hass, coord.entry.entry_id, coord, start, end)
 
@@ -481,3 +487,111 @@ async def test_watchdog_wrapper_cancels_stall_task():
         await _async_backfill_with_watchdog(coord.hass, coord.entry.entry_id, coord, start, end)
         watch.assert_called()
         del gen
+
+
+@pytest.mark.asyncio
+async def test_orphan_does_not_clear_successor_targets():
+    """An orphaned job shares import_store with its successor; it must not touch it."""
+    coord = _make_coordinator()
+    a_start, a_end = datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 1, 10, tzinfo=UTC)
+    b_start, b_end = datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 1, 10, tzinfo=UTC)
+
+    async def hang(*_a, **_k):
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            # Models a non-cancellable await (recorder executor job): the cancel is
+            # observed only after a newer job has already claimed the coordinator.
+            await asyncio.sleep(0.1)
+            raise
+
+    with (
+        patch("custom_components.pge_energy.async_save_import_state", AsyncMock()),
+        patch("custom_components.pge_energy.async_backfill_range", hang),
+        patch("custom_components.pge_energy.coordinator.async_save_import_state", AsyncMock()),
+    ):
+        orphan = asyncio.create_task(_async_run_backfill(coord.hass, coord.entry.entry_id, coord, a_start, a_end))
+        coord.set_backfill_task(orphan)
+        await asyncio.sleep(0.02)
+
+        coord.request_backfill_abort("Stalled: no progress", clear_targets=True)
+        await coord.force_release_backfill("Stalled backfill did not respond to cancel")
+
+        successor = asyncio.create_task(_async_run_backfill(coord.hass, coord.entry.entry_id, coord, b_start, b_end))
+        coord.set_backfill_task(successor)
+        await asyncio.sleep(0.02)
+        assert coord.import_store.target_start == b_start.isoformat()
+
+        with pytest.raises(asyncio.CancelledError):
+            await orphan
+        await asyncio.sleep(0.02)
+
+        assert coord.import_store.target_start == b_start.isoformat()
+        assert coord.import_store.target_end == b_end.isoformat()
+        assert coord.backfill_in_progress is True
+        successor.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await successor
+
+
+@pytest.mark.asyncio
+async def test_abort_reason_is_not_consumed_by_a_later_job():
+    """A stall abort aimed at job A must not fail job B with A's reason/targets."""
+    coord = _make_coordinator()
+    orphan = asyncio.create_task(asyncio.sleep(3600))
+    coord.set_backfill_task(orphan)
+    coord.request_backfill_abort("Stalled: no progress", clear_targets=True)
+    with patch(
+        "custom_components.pge_energy.coordinator.async_save_import_state",
+        AsyncMock(),
+    ):
+        await coord.force_release_backfill("did not respond to cancel")
+
+    successor = asyncio.create_task(asyncio.sleep(3600))
+    generation = coord.set_backfill_task(successor)
+    reason, clear_targets = coord.consume_backfill_abort(generation)
+    assert reason is None
+    assert clear_targets is False
+
+    orphan.cancel()
+    successor.cancel()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_unload_cancels_orphaned_tasks():
+    coord = _make_coordinator()
+
+    async def swallow():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            await asyncio.sleep(3600)
+
+    orphan = asyncio.create_task(swallow())
+    coord.set_backfill_task(orphan)
+    with patch(
+        "custom_components.pge_energy.coordinator.async_save_import_state",
+        AsyncMock(),
+    ):
+        await coord.force_release_backfill("orphaned")
+        await coord.async_cancel_backfill()
+
+    assert orphan.cancelling() > 0
+    orphan.cancel()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_boot_repair_clears_restored_refreshing():
+    coord = _make_coordinator()
+    coord._import_store.sync_status = "refreshing"
+    with (
+        patch(
+            "custom_components.pge_energy.coordinator.async_load_import_state",
+            AsyncMock(return_value=coord._import_store),
+        ),
+        patch.object(coord, "async_refresh_lifetime_totals", AsyncMock()),
+    ):
+        await coord.async_load_store()
+    assert coord.sync_progress.status == SYNC_STATUS_FAILED

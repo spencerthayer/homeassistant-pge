@@ -55,7 +55,7 @@ from .options import (
 )
 from .panel import async_setup_panel, async_teardown_panel
 from .statistics import async_import_with_baseline, setup_statistics_sensors
-from .store import async_save_import_state
+from .store import async_save_import_state, discard_store_cache
 from .time_util import iter_local_days, today_local
 from .websocket import async_setup_websocket
 
@@ -221,6 +221,9 @@ def _start_backfill_task(
     name_suffix: str,
 ) -> None:
     """Launch a long-lived backfill as a background task (never tracked by block_till_done)."""
+    # Reset the stall heartbeat up front: a stale timestamp from an earlier job would
+    # otherwise let the watchdog abort this one on its first tick.
+    coordinator.note_backfill_activity()
     task = hass.async_create_background_task(
         coroutine,
         name=f"{DOMAIN}_backfill_{name_suffix}_{entry_id[:8]}",
@@ -425,9 +428,15 @@ async def _async_persist_on_teardown(
     coordinator: PGECoordinator,
     entry_id: str,
     store,
+    *,
+    generation: int,
 ) -> None:
-    """Best-effort persist during cancel/fail; never raise during HA shutdown."""
-    if hass.is_stopping:
+    """Best-effort persist during cancel/fail; never raise during HA shutdown.
+
+    Skipped for a stale generation: the ``ImportStoreData`` instance is shared with
+    whatever job replaced us, so an orphan must not flush its own view of it.
+    """
+    if hass.is_stopping or not coordinator.owns_backfill_generation(generation):
         return
     with contextlib.suppress(Exception):
         await async_save_import_state(hass, entry_id, store, critical=False)
@@ -496,19 +505,21 @@ async def _async_run_backfill(
             # Finish the billing ledger + programs alongside history backfill.
             await async_run_billing_sync(hass, coordinator)
         except asyncio.CancelledError:
-            reason, clear_targets = coordinator.consume_backfill_abort()
+            reason, clear_targets = coordinator.consume_backfill_abort(generation)
             coordinator.fail_sync_job(reason or "Cancelled")
-            if clear_targets:
+            # `store` is shared with any successor job — an orphan must not touch it.
+            if clear_targets and coordinator.owns_backfill_generation(generation):
                 store.target_start = None
                 store.target_end = None
-            await _async_persist_on_teardown(hass, coordinator, entry_id, store)
+            await _async_persist_on_teardown(hass, coordinator, entry_id, store, generation=generation)
             raise
         except Exception as exc:
             _LOGGER.error("Backfill job failed for %s: %s", entry_id[:8], exc)
             coordinator.fail_sync_job(str(exc))
-            store.target_start = None
-            store.target_end = None
-            await _async_persist_on_teardown(hass, coordinator, entry_id, store)
+            if coordinator.owns_backfill_generation(generation):
+                store.target_start = None
+                store.target_end = None
+            await _async_persist_on_teardown(hass, coordinator, entry_id, store, generation=generation)
         finally:
             coordinator.set_backfill_state(False, generation=generation)
             coordinator.set_backfill_task(None, generation=generation)
@@ -565,6 +576,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
+        discard_store_cache(entry.entry_id)
         hass.data[DOMAIN].pop(entry.entry_id, None)
         remaining = [key for key, value in hass.data.get(DOMAIN, {}).items() if isinstance(value, PGECoordinator)]
         if not remaining:

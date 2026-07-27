@@ -7,6 +7,7 @@
 - [x] Per-tier `asyncio.wait_for` (2h) and bounded `async_save_import_state` (30s, critical/non-critical)
 - [x] Boot repair: restored `backfilling` → `failed` ("Interrupted by restart") when no live task
 - [x] Unit tests in `tests/components/pge_energy/test_backfill_hang.py` (+ sync_progress / coordinator updates)
+- [x] Code-review fixes on the hang-recovery commit: generation-scoped abort reason (`consume_backfill_abort(generation)`) and `owns_backfill_generation` guards so an orphaned job cannot clear its successor's `target_*` or flush the shared `import_store`; unload now cancels tracked orphans; stall heartbeat reset at task start; boot repair also clears restored `refreshing`; `_STORES` cache evicted on unload; ruff E402/F401/SIM102 from the original commit
 
 ## Follow-ups
 

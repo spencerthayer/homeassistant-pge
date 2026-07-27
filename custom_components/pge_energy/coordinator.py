@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import contextvars
 import logging
 import time
@@ -38,11 +37,6 @@ from .const import (
     SYNC_STATUS_COMPLETE,
     SYNC_STATUS_FAILED,
     SYNC_STATUS_REFRESHING,
-)
-
-# Bound to the running backfill coroutine so orphaned tasks cannot mutate a newer job.
-_backfill_run_generation: contextvars.ContextVar[int | None] = contextvars.ContextVar(
-    "pge_backfill_run_generation", default=None
 )
 from .day_validation import clip_hourly_to_local_day, is_invalid_closed_day, validate_hourly_day
 from .exceptions import (
@@ -84,6 +78,11 @@ from .time_util import iter_local_days, local_day_bounds, today_local
 
 _LOGGER = logging.getLogger(__name__)
 
+# Bound to the running backfill coroutine so orphaned tasks cannot mutate a newer job.
+_backfill_run_generation: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "pge_backfill_run_generation", default=None
+)
+
 
 def _format_statistics_import_error(hass: HomeAssistant, exc: BaseException) -> str:
     """Map recorder/executor failures to a sync message operators can act on."""
@@ -119,6 +118,8 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_progress_monotonic: float | None = None
         self._backfill_abort_reason: str | None = None
         self._backfill_abort_clears_targets = False
+        self._backfill_abort_generation: int | None = None
+        self._orphaned_tasks: set[asyncio.Task] = set()
         self._catchup_retry = False
         self._import_store = ImportStoreData(account_key=self.account_key)
 
@@ -292,20 +293,43 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         run_gen = _backfill_run_generation.get()
         return run_gen is not None and run_gen != self._backfill_generation
 
+    def owns_backfill_generation(self, generation: int) -> bool:
+        """True while ``generation`` is still the live backfill owner.
+
+        Callers that mutate shared state outside the coordinator (notably the
+        ``import_store`` target_* fields) must check this — an orphaned task shares
+        the same ``ImportStoreData`` instance as its successor.
+        """
+        return generation == self._backfill_generation
+
     def request_backfill_abort(self, reason: str, *, clear_targets: bool) -> None:
         """Cancel the backfill task without awaiting (stall watchdog)."""
         self._backfill_abort_reason = reason
         self._backfill_abort_clears_targets = clear_targets
+        # Stamp the owner so an orphan's abort can never be consumed by its successor.
+        self._backfill_abort_generation = self._backfill_generation
         task = self._backfill_task
         if task is not None and not task.done():
             task.cancel()
 
-    def consume_backfill_abort(self) -> tuple[str | None, bool]:
-        reason = self._backfill_abort_reason
-        clear_targets = self._backfill_abort_clears_targets
+    def consume_backfill_abort(self, generation: int | None = None) -> tuple[str | None, bool]:
+        """Take the pending abort reason, but only for the generation it targeted."""
+        stale = generation is not None and generation != self._backfill_abort_generation
+        reason = None if stale else self._backfill_abort_reason
+        clear_targets = False if stale else self._backfill_abort_clears_targets
+        self._clear_backfill_abort()
+        return reason, clear_targets
+
+    def _clear_backfill_abort(self) -> None:
         self._backfill_abort_reason = None
         self._backfill_abort_clears_targets = False
-        return reason, clear_targets
+        self._backfill_abort_generation = None
+
+    def _track_orphan(self, orphan: asyncio.Task | None) -> None:
+        """Keep a handle on tasks we gave up on so unload can still cancel them."""
+        self._orphaned_tasks = {t for t in self._orphaned_tasks if not t.done()}
+        if orphan is not None and not orphan.done():
+            self._orphaned_tasks.add(orphan)
 
     async def force_release_backfill(self, reason: str) -> None:
         """Orphan a non-responsive backfill task and unblock sync_job_in_progress."""
@@ -314,11 +338,14 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._backfill_task = None
         self._backfill_in_progress = False
         self._backfill_reserved = False
+        # The orphan can no longer act on this abort; do not let a successor see it.
+        self._clear_backfill_abort()
         if orphan is not None and not orphan.done():
             _LOGGER.error(
                 "Orphaning PGE backfill task that ignored cancellation: %r",
                 orphan,
             )
+            self._track_orphan(orphan)
         self.fail_sync_job(reason)
         if not self.hass.is_stopping:
             await self.async_persist_sync_progress()
@@ -331,6 +358,14 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if not done:
                 _LOGGER.error("Backfill task ignored cancellation; orphaning it")
                 self._backfill_generation += 1
+                self._track_orphan(task)
+        # Orphans from earlier hard releases keep hitting the PGE API and the
+        # recorder; unload is the last chance to stop them.
+        for orphan in list(self._orphaned_tasks):
+            if not orphan.done():
+                orphan.cancel()
+        self._orphaned_tasks.clear()
+        self._clear_backfill_abort()
         self._backfill_task = None
         self._backfill_in_progress = False
         self._backfill_reserved = False
@@ -346,8 +381,10 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._import_store.account_key = self.account_key
         if self._import_store.sync_status:
             self._sync_progress = snapshot_from_store_fields(self._import_store)
-        # Never restore a live-looking backfilling status with no task behind it.
-        if self._sync_progress.status == SYNC_STATUS_BACKFILLING:
+        # Never restore a live-looking status with no task behind it. Resume re-enters
+        # `backfilling` when it actually starts a task; an interrupted manual refresh
+        # is never resumed at all, so both would otherwise show as running forever.
+        if self._sync_progress.status in (SYNC_STATUS_BACKFILLING, SYNC_STATUS_REFRESHING):
             self.fail_sync_job("Interrupted by restart")
             self._apply_sync_progress_to_store()
         await self.async_refresh_lifetime_totals()
@@ -686,13 +723,14 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_poll_usage(self) -> dict[str, Any]:
         # Recover from a backfill task that died without clearing flags.
-        if self._backfill_task is not None and self._backfill_task.done():
-            if self._backfill_in_progress or self._sync_progress.status == SYNC_STATUS_BACKFILLING:
-                _LOGGER.warning(
-                    "PGE backfill task finished outside the normal path; releasing stuck state"
-                )
-                await self.force_release_backfill("Backfill task terminated unexpectedly")
-                return self._retained_poll_payload()
+        if (
+            self._backfill_task is not None
+            and self._backfill_task.done()
+            and (self._backfill_in_progress or self._sync_progress.status == SYNC_STATUS_BACKFILLING)
+        ):
+            _LOGGER.warning("PGE backfill task finished outside the normal path; releasing stuck state")
+            await self.force_release_backfill("Backfill task terminated unexpectedly")
+            return self._retained_poll_payload()
 
         # Do not contend for import_lock while a backfill is importing the same days.
         if self._backfill_in_progress or self._backfill_reserved:
