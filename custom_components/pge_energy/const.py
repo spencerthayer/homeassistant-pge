@@ -2,11 +2,11 @@ from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
-VERSION = "0.5.45"
+VERSION = "0.5.46"
 PLATFORMS = ["sensor", "binary_sensor"]
 
 # Sidebar custom panel (registered once per HA instance, not per entry).
-# Title is "PGE"; panel.py pins it under the built-in Energy item via sidebar.panelOrder.
+# Title is "PGE"; order/visibility are owned by HA / Browser Mod (panel.py does not mutate them).
 PANEL_URL_PATH = "pge"
 PANEL_WEBCOMPONENT = "pge-energy-panel"
 PANEL_SIDEBAR_TITLE = "PGE"

@@ -15,7 +15,7 @@ Custom Home Assistant integration that imports **Portland General Electric (PGE)
 1. In HACS → **⋯** → **Custom repositories**, add  
    `https://github.com/spencerthayer/homeassistant-pge`  
    with category **Integration**.
-2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.5.45`).
+2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.5.46`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -103,7 +103,9 @@ The estimate sensors come straight from PGE (`getEnergyTrackerData`) and are its
 
 ## PGE Energy panel (`/pge`)
 
-The integration registers a sidebar item **PGE** (admin users) at [`/pge`](http://127.0.0.1:8123/pge), pinned immediately under the built-in **Energy** item. It is a single place for usage, cost, outdoor temperature, billing, programs, and live sync progress across all entities and long-term statistics for each config entry.
+The integration registers a sidebar item **PGE** (admin users) at [`/pge`](http://127.0.0.1:8123/pge). Sidebar order and visibility are controlled through Home Assistant’s sidebar editor or [Browser Mod](https://github.com/thomasloven/hass-browser_mod) — this integration does not rewrite those settings. It is a single place for usage, cost, outdoor temperature, billing, programs, and live sync progress across all entities and long-term statistics for each config entry.
+
+> **Recovery (0.5.41–0.5.45):** those versions could write synced Home Assistant sidebar user settings that override Browser Mod. After upgrading to **0.5.46+**, use Browser Mod’s **Clear** control for synced sidebar settings once (or reset order/hide in Home Assistant’s sidebar editor), reapply the desired Browser Mod preferences, then restart Home Assistant and hard-refresh if needed.
 
 - Static assets: `/pge_energy_frontend/` (panel JS + vendored [Apache ECharts](https://echarts.apache.org/examples/en/index.html)) and `/pge_energy_brand/` (bundled logo).
 - Data: `pge_energy/accounts` + `pge_energy/sync/subscribe` (admin websocket); chart series via built-in `recorder/statistics_during_period`.

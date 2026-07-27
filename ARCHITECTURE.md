@@ -125,7 +125,7 @@ Bare `homeassistant.restart` from the UI **exits** this process (no Supervisor) 
 | `config_flow.py` | Credential setup (email/password/account number), reauth, OptionsFlow |
 | `day_validation.py` | Hourly local-day clip/validate (boundary hour) |
 | `cli.py` | Offline login/renew/validate/fetch + billing-snapshot/history/programs |
-| `panel.py` | Idempotent `/pge` sidebar panel + static paths (`/pge_energy_frontend`, `/pge_energy_brand`) |
+| `panel.py` | Idempotent `/pge` sidebar panel + static paths (`/pge_energy_frontend`, `/pge_energy_brand`); registers/tears down only — does not read or write frontend user-store `sidebar` (`panelOrder` / `hiddenPanels`) |
 | `websocket.py` | Admin WS: `pge_energy/accounts`, `pge_energy/sync/subscribe` (credential-free) |
 | `frontend/pge-panel.js` + `theme.js` | Buildless ES-module custom panel (Apache ECharts); Usage hero is one combined kWh/cost/°F chart; primary range buttons `24h` / This cycle / Last cycle / 7 days / Month plus a More… dropdown (`6h`/`12h`/`3mo`/`6mo`/`12mo`/YTD); unavailable presets stay visible but disabled; bill-bound ranges use statement dates (last cycle = equal length before current start); Usage Range accounting / rollup `<details>` remember open/closed via `localStorage`; Billing is always expanded (no accordion); shift/custom range controls and a PGE publication-gaps card; ranges end at Pacific midnight (exclusive). Insight charts trim empty ranges (heatmap first→last populated day, monthly $/kWh, dual billed/payments bars, padded scatter). Colors resolve from HA theme tokens (`theme.js`) so light/dark/custom themes stay readable; charts rebuild on theme change |
 

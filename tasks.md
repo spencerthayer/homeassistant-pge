@@ -12,9 +12,12 @@
 - [x] Drop entity mirrors for four monetary mean sensors + one-time `async_clear_statistics` cleanup (`billing_mirror_cleanup_done`); downgrade "already in progress" service logs to warning
 - [x] Remove stock HA energy-date-selection + statistics-graph fallback cards from `/pge` Usage section (0.5.44)
 - [x] Weather vs usage scatter tooltip includes Pacific day date(s) (0.5.45)
+- [x] Clarified `.cursor/rules/bump-version-on-code-changes.mdc`: HACS integration upgrade cycle (bump → commit → push → GitHub Release Latest) required for shipped versions
+- [x] Stop mutating frontend user-store sidebar (`panelOrder` / `hiddenPanels`) so Browser Mod / HA own order and visibility ([issue #2](https://github.com/spencerthayer/homeassistant-pge/issues/2); 0.5.46); regression guards in `test_panel.py`
 
 ## Follow-ups
 
+- [ ] Browser Mod UAT with `@gatlinnewhouse` on [#2](https://github.com/spencerthayer/homeassistant-pge/issues/2): after 0.5.46, Clear synced sidebar once if still overridden, reapply Browser Mod hides/order, restart HA, confirm hidden items stay hidden; close issue only after confirmation
 - [ ] Browser UAT (operator): `./stop`/`./start` with this repo’s `pge_energy` linked; confirm `/pge` sync sensors leave `backfilling` on stall/complete, poll overlaps backfill without freeze, mid-backfill reload returns promptly, boot resume keeps targets after unload cancel
 - [ ] Operator: after upgrading to 0.5.43, confirm recorder health (no `Cannot operate on a closed database` / `Unexpected exception when updating statistics`); if present, `recorder.purge` with `repack: true` before trusting mismatch-free polls
 - [ ] Operator UAT 0.5.43: no `Recorder state mismatch …_cost`; `dirty_from` clears; four state-class repairs gone after cleanup and stay gone across a billing sync; `/pge` + Energy still show external billing means

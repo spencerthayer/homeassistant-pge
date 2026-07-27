@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from custom_components.pge_energy import panel as panel_module
 from custom_components.pge_energy.const import (
     BRAND_URL_PATH,
     DOMAIN,
@@ -19,62 +20,18 @@ from custom_components.pge_energy.coordinator import PGECoordinator
 from custom_components.pge_energy.panel import (
     async_setup_panel,
     async_teardown_panel,
-    ensure_pge_after_energy,
 )
 
 
-def test_ensure_pge_after_energy_seeds_default_prefix():
-    assert ensure_pge_after_energy(None) == ["lovelace", "energy", "pge"]
-    assert ensure_pge_after_energy([]) == ["lovelace", "energy", "pge"]
-
-
-def test_ensure_pge_after_energy_moves_existing_entry():
-    assert ensure_pge_after_energy(["lovelace", "energy", "history", "pge"]) == [
-        "lovelace",
-        "energy",
-        "pge",
-        "history",
-    ]
-    assert ensure_pge_after_energy(["pge", "lovelace", "energy", "logbook"]) == [
-        "lovelace",
-        "energy",
-        "pge",
-        "logbook",
-    ]
-
-
-def test_ensure_pge_after_energy_inserts_when_energy_missing():
-    assert ensure_pge_after_energy(["lovelace", "history"]) == [
-        "lovelace",
-        "pge",
-        "history",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_async_ensure_sidebar_order_pins_after_energy():
-    from custom_components.pge_energy.panel import async_ensure_sidebar_order
-
-    user = MagicMock()
-    user.id = "user-1"
-    user.system_generated = False
-    store = MagicMock()
-    store.data = {}
-    store.async_set_item = AsyncMock()
-
-    hass = MagicMock()
-    hass.auth.async_get_users = AsyncMock(return_value=[user])
-
-    with patch(
-        "custom_components.pge_energy.panel.async_user_store",
-        new=AsyncMock(return_value=store),
+def test_panel_module_does_not_touch_frontend_user_sidebar_store():
+    source = Path(panel_module.__file__).read_text(encoding="utf-8")
+    for forbidden in (
+        "async_user_store",
+        "panelOrder",
+        "hiddenPanels",
+        "async_get_users",
     ):
-        await async_ensure_sidebar_order(hass)
-
-    store.async_set_item.assert_awaited_once_with(
-        "sidebar",
-        {"panelOrder": ["lovelace", "energy", "pge"], "hiddenPanels": []},
-    )
+        assert forbidden not in source, f"panel.py must not reference {forbidden}"
 
 
 @pytest.mark.asyncio
@@ -83,17 +40,12 @@ async def test_async_setup_panel_registers_paths_and_panel():
     hass.data = {}
     hass.http = MagicMock()
     hass.http.async_register_static_paths = AsyncMock()
+    hass.auth.async_get_users = AsyncMock(return_value=[])
 
-    with (
-        patch(
-            "custom_components.pge_energy.panel.panel_custom.async_register_panel",
-            new_callable=AsyncMock,
-        ) as register_panel,
-        patch(
-            "custom_components.pge_energy.panel.async_ensure_sidebar_order",
-            new_callable=AsyncMock,
-        ) as ensure_order,
-    ):
+    with patch(
+        "custom_components.pge_energy.panel.panel_custom.async_register_panel",
+        new_callable=AsyncMock,
+    ) as register_panel:
         await async_setup_panel(hass)
         await async_setup_panel(hass)  # idempotent
 
@@ -108,7 +60,7 @@ async def test_async_setup_panel_registers_paths_and_panel():
     assert Path(configs[1].path).name == "brand"
 
     register_panel.assert_awaited_once()
-    ensure_order.assert_awaited_once_with(hass)
+    assert hass.auth.async_get_users.await_count == 0
     kwargs = register_panel.await_args.kwargs
     assert kwargs["frontend_url_path"] == PANEL_URL_PATH
     assert kwargs["webcomponent_name"] == PANEL_WEBCOMPONENT
