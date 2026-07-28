@@ -104,10 +104,7 @@ def normalize_panel_settings(
     require_admin = _coerce_bool(data.get(CONF_REQUIRE_ADMIN), DEFAULT_REQUIRE_ADMIN)
 
     title_raw = data.get(CONF_SIDEBAR_TITLE, PANEL_SIDEBAR_TITLE)
-    if title_raw is None:
-        title = ""
-    else:
-        title = str(title_raw).strip()
+    title = "" if title_raw is None else str(title_raw).strip()
     if not title:
         if strict:
             errors[CONF_SIDEBAR_TITLE] = "invalid_sidebar_title"
@@ -116,10 +113,7 @@ def normalize_panel_settings(
             title = PANEL_SIDEBAR_TITLE
 
     icon_raw = data.get(CONF_SIDEBAR_ICON, PANEL_SIDEBAR_ICON)
-    if icon_raw is None:
-        icon = ""
-    else:
-        icon = str(icon_raw).strip()
+    icon = "" if icon_raw is None else str(icon_raw).strip()
     if not icon.startswith("mdi:") or len(icon) <= 4:
         if strict:
             errors[CONF_SIDEBAR_ICON] = "invalid_sidebar_icon"

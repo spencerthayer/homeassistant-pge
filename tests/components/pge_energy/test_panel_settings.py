@@ -133,6 +133,8 @@ async def test_async_save_exception_propagates():
     store = MagicMock()
     store.async_save = AsyncMock(side_effect=OSError("disk full"))
 
-    with patch("custom_components.pge_energy.panel_settings.Store", return_value=store):
-        with pytest.raises(OSError, match="disk full"):
-            await async_save_panel_settings(hass, default_panel_settings())
+    with (
+        patch("custom_components.pge_energy.panel_settings.Store", return_value=store),
+        pytest.raises(OSError, match="disk full"),
+    ):
+        await async_save_panel_settings(hass, default_panel_settings())

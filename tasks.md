@@ -24,7 +24,9 @@
 ## Follow-ups
 
 - [x] Browser UAT 0.6.0: Configure → Panel menu; hide sidebar removes link; `/pge` still loads (billing landing + sync complete); Store persists; abort message shown
-- [ ] Commit / push / GitHub Release `v0.6.0` (Panel Configure menu)
+- [x] Commit / push / GitHub Release [v0.6.0](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.6.0) (Panel Configure menu)
+- [x] CI lint ([run 30330317615](https://github.com/spencerthayer/homeassistant-pge/actions/runs/30330317615)): ruff SIM108 ternaries in `panel_settings.py`, SIM117 combined `with` in panel tests, `ruff format` on `test_panel_landing_js.py`
+- [x] Cursor rule: HACS release requires green CI (`.cursor/rules/hacs-release-requires-green-ci.mdc`); bump-version cycle + `AGENTS.md` cross-linked
 - [ ] Browser Mod UAT with `@gatlinnewhouse` on [#2](https://github.com/spencerthayer/homeassistant-pge/issues/2): after 0.5.46, Clear synced sidebar once if still overridden, reapply Browser Mod hides/order, restart HA, confirm hidden items stay hidden; close issue only after confirmation
 - [ ] Browser UAT (operator): `./stop`/`./start` with this repo’s `pge_energy` linked; confirm `/pge` sync sensors leave `backfilling` on stall/complete, poll overlaps backfill without freeze, mid-backfill reload returns promptly, boot resume keeps targets after unload cancel
 - [ ] Operator: after upgrading to 0.5.43, confirm recorder health (no `Cannot operate on a closed database` / `Unexpected exception when updating statistics`); if present, `recorder.purge` with `repack: true` before trusting mismatch-free polls

@@ -173,9 +173,9 @@ async def test_async_apply_panel_rolls_back_on_register_failure():
             "custom_components.pge_energy.panel.async_save_panel_settings",
             new_callable=AsyncMock,
         ) as save,
+        pytest.raises(RuntimeError, match="boom"),
     ):
-        with pytest.raises(RuntimeError, match="boom"):
-            await async_apply_panel(hass, bad)
+        await async_apply_panel(hass, bad)
 
     assert register.await_count == 2
     assert register.await_args_list[1].kwargs["sidebar_title"] == previous.sidebar_title

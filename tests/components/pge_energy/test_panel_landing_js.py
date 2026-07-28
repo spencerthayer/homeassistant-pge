@@ -3,13 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-FRONTEND = (
-    Path(__file__).resolve().parents[3]
-    / "custom_components"
-    / "pge_energy"
-    / "frontend"
-    / "pge-panel.js"
-)
+FRONTEND = Path(__file__).resolve().parents[3] / "custom_components" / "pge_energy" / "frontend" / "pge-panel.js"
 
 
 def test_panel_section_anchors_and_resolver_present():
