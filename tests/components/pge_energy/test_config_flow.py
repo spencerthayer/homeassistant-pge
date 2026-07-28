@@ -254,9 +254,190 @@ class TestPGEOptionsFlow:
 
         result = await flow.async_step_init()
         assert result["type"] == "menu"
-        assert "settings" in result["menu_options"]
-        assert "credentials" in result["menu_options"]
-        assert "manual_sync" in result["menu_options"]
+        assert result["menu_options"] == ["settings", "panel", "credentials", "manual_sync"]
+
+    @pytest.mark.asyncio
+    async def test_options_panel_form_uses_domain_store(self):
+        from custom_components.pge_energy.panel_settings import (
+            CONF_DEFAULT_SECTION,
+            CONF_REQUIRE_ADMIN,
+            CONF_SHOW_SIDEBAR,
+            CONF_SIDEBAR_ICON,
+            CONF_SIDEBAR_TITLE,
+            PanelSettings,
+        )
+
+        flow = PGEOptionsFlow()
+        entry = MagicMock()
+        entry.entry_id = "entry1"
+        entry.options = {CONF_POLLING_INTERVAL: 4}
+        entry.data = {}
+        flow.hass = MagicMock()
+        flow.handler = "entry1"
+        flow.hass.config_entries.async_get_known_entry = MagicMock(return_value=entry)
+        stored = PanelSettings(
+            show_sidebar=False,
+            sidebar_title="Custom",
+            sidebar_icon="mdi:flash",
+            require_admin=False,
+            default_section="billing",
+        )
+
+        with patch(
+            "custom_components.pge_energy.config_flow.async_load_panel_settings",
+            new_callable=AsyncMock,
+            return_value=stored,
+        ):
+            result = await flow.async_step_panel()
+
+        assert result["type"] == "form"
+        assert result["step_id"] == "panel"
+        schema_keys = {getattr(field, "schema", field) for field in result["data_schema"].schema}
+        assert CONF_SHOW_SIDEBAR in schema_keys
+        assert CONF_SIDEBAR_TITLE in schema_keys
+        assert CONF_SIDEBAR_ICON in schema_keys
+        assert CONF_REQUIRE_ADMIN in schema_keys
+        assert CONF_DEFAULT_SECTION in schema_keys
+
+    @pytest.mark.asyncio
+    async def test_options_panel_save_aborts_without_touching_entry_options(self):
+        from custom_components.pge_energy.panel_settings import PanelSettings
+
+        flow = PGEOptionsFlow()
+        entry = MagicMock()
+        entry.entry_id = "entry1"
+        original_options = {
+            CONF_POLLING_INTERVAL: 4,
+            CONF_INCLUDE_BILLING: True,
+        }
+        entry.options = dict(original_options)
+        entry.data = {}
+        flow.hass = MagicMock()
+        flow.handler = "entry1"
+        flow.hass.config_entries.async_get_known_entry = MagicMock(return_value=entry)
+        previous = PanelSettings()
+        candidate_input = {
+            "show_sidebar": False,
+            "sidebar_title": "PGE",
+            "sidebar_icon": "mdi:transmission-tower",
+            "require_admin": True,
+            "default_section": "usage",
+        }
+
+        with (
+            patch(
+                "custom_components.pge_energy.config_flow.async_load_panel_settings",
+                new_callable=AsyncMock,
+                return_value=previous,
+            ),
+            patch(
+                "custom_components.pge_energy.config_flow.async_save_panel_settings",
+                new_callable=AsyncMock,
+            ) as save,
+            patch(
+                "custom_components.pge_energy.config_flow.async_apply_panel",
+                new_callable=AsyncMock,
+            ) as apply,
+        ):
+            result = await flow.async_step_panel(candidate_input)
+
+        assert result["type"] == "abort"
+        assert result["reason"] == "panel_updated"
+        save.assert_awaited_once()
+        apply.assert_awaited_once()
+        assert entry.options == original_options
+        flow.hass.config_entries.async_update_entry.assert_not_called()
+        flow.hass.config_entries.async_reload.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_options_panel_validation_error_keeps_form(self):
+        from custom_components.pge_energy.panel_settings import PanelSettings
+
+        flow = PGEOptionsFlow()
+        entry = MagicMock()
+        entry.entry_id = "entry1"
+        entry.options = {}
+        entry.data = {}
+        flow.hass = MagicMock()
+        flow.handler = "entry1"
+        flow.hass.config_entries.async_get_known_entry = MagicMock(return_value=entry)
+
+        with (
+            patch(
+                "custom_components.pge_energy.config_flow.async_load_panel_settings",
+                new_callable=AsyncMock,
+                return_value=PanelSettings(),
+            ),
+            patch(
+                "custom_components.pge_energy.config_flow.async_save_panel_settings",
+                new_callable=AsyncMock,
+            ) as save,
+            patch(
+                "custom_components.pge_energy.config_flow.async_apply_panel",
+                new_callable=AsyncMock,
+            ) as apply,
+        ):
+            result = await flow.async_step_panel(
+                {
+                    "show_sidebar": True,
+                    "sidebar_title": "",
+                    "sidebar_icon": "bad",
+                    "require_admin": True,
+                    "default_section": "glance",
+                }
+            )
+
+        assert result["type"] == "form"
+        assert result["errors"]["sidebar_title"] == "invalid_sidebar_title"
+        assert result["errors"]["sidebar_icon"] == "invalid_sidebar_icon"
+        save.assert_not_awaited()
+        apply.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_options_panel_apply_failure_restores_previous(self):
+        from custom_components.pge_energy.panel_settings import PanelSettings
+
+        flow = PGEOptionsFlow()
+        entry = MagicMock()
+        entry.entry_id = "entry1"
+        entry.options = {CONF_POLLING_INTERVAL: 4}
+        entry.data = {}
+        flow.hass = MagicMock()
+        flow.handler = "entry1"
+        flow.hass.config_entries.async_get_known_entry = MagicMock(return_value=entry)
+        previous = PanelSettings(sidebar_title="Old")
+
+        with (
+            patch(
+                "custom_components.pge_energy.config_flow.async_load_panel_settings",
+                new_callable=AsyncMock,
+                return_value=previous,
+            ),
+            patch(
+                "custom_components.pge_energy.config_flow.async_save_panel_settings",
+                new_callable=AsyncMock,
+            ) as save,
+            patch(
+                "custom_components.pge_energy.config_flow.async_apply_panel",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("apply failed"),
+            ),
+        ):
+            result = await flow.async_step_panel(
+                {
+                    "show_sidebar": True,
+                    "sidebar_title": "New",
+                    "sidebar_icon": "mdi:flash",
+                    "require_admin": True,
+                    "default_section": "glance",
+                }
+            )
+
+        assert result["type"] == "form"
+        assert result["errors"]["base"] == "panel_update_failed"
+        assert save.await_count == 2
+        assert save.await_args_list[1].args[1] == previous
+        assert entry.options == {CONF_POLLING_INTERVAL: 4}
 
     @pytest.mark.asyncio
     async def test_options_settings_creates_entry(self):

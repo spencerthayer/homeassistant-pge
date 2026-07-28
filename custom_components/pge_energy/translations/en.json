@@ -44,8 +44,27 @@
         "title": "PGE Energy options",
         "menu_options": {
           "settings": "Sync settings",
+          "panel": "Panel",
           "credentials": "Update credentials",
           "manual_sync": "Manual sync"
+        }
+      },
+      "panel": {
+        "title": "Panel",
+        "description": "These settings apply to the whole PGE Energy integration (every account). Hiding the sidebar link does **not** disable `/pge` — open that URL directly, and use **Manual sync** here for refresh/backfill. Turning off **Admin-only panel** lets non-admins open `/pge`, but account data and sync websocket APIs remain admin-only.",
+        "data": {
+          "show_sidebar": "Show PGE in sidebar",
+          "sidebar_title": "Sidebar title",
+          "sidebar_icon": "Sidebar icon",
+          "require_admin": "Admin-only panel",
+          "default_section": "Default landing section"
+        },
+        "data_description": {
+          "show_sidebar": "When off, `/pge` stays registered with no sidebar link. Sidebar order is still managed in Home Assistant’s sidebar editor or Browser Mod.",
+          "sidebar_title": "Label shown in the sidebar when the link is visible (default PGE).",
+          "sidebar_icon": "Material Design Icon, e.g. mdi:transmission-tower.",
+          "require_admin": "When on, only admins see the panel route. Does not relax admin-only sync/account websocket APIs.",
+          "default_section": "Section scrolled into view once when opening `/pge`."
         }
       },
       "manual_sync": {
@@ -112,10 +131,15 @@
       "invalid_history_start": "History start date must be YYYY-MM-DD",
       "sync_busy": "A sync job is already running",
       "sync_start_failed": "Could not start the sync job",
+      "invalid_sidebar_title": "Sidebar title cannot be empty",
+      "invalid_sidebar_icon": "Sidebar icon must be a Material Design Icon (mdi:…)",
+      "invalid_default_section": "Choose a valid landing section",
+      "panel_update_failed": "Could not update the PGE panel; previous settings were kept",
       "unknown": "Unexpected error"
     },
     "abort": {
       "credentials_updated": "Credentials updated",
+      "panel_updated": "Panel settings updated. Open `/pge` directly if the sidebar link is hidden.",
       "sync_started": "Sync started. {link}",
       "sync_busy": "A sync job is already running ({status}: {detail}). {link}"
     }

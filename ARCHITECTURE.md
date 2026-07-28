@@ -7,9 +7,9 @@ HA UI
   Config flow (email + password + account number)
        │  one HA entry per PGE account number (unique id `pge_account_<id>`)
        ▼
-  Options flow (Configure) ──► entry.options (polling, history, include_billing, …)
-       │                         entry.data   (email/password/tokens + account_id
-       │                                        + encrypted account/premise/SA)
+  Options flow (Configure)
+       │  Sync settings / credentials ──► entry.options + entry.data
+       │  Panel ──► domain Store `pge_energy.panel` (integration-wide chrome)
        ▼
   portal_auth ──► AuthSnapshot ──► Auth Manager
                                        ↓
@@ -28,8 +28,8 @@ HA UI
           ↓
    HA Recorder → Energy Dashboard / History / Statistics
                                        ↑
-                              Sidebar panel `/pge`
-                     (panel.py + frontend/pge-panel.js + websocket.py)
+                              Panel `/pge` (optional sidebar link)
+           (panel_settings.py + panel.py + frontend/pge-panel.js + websocket.py)
 
   Tiered usage history (auto_backfill / pge_energy.backfill)
        hourly (newest N days) → daily (older days) → monthly (oldest gaps)
@@ -56,11 +56,12 @@ HA UI
 
 ### Options / Configure
 
-Settings → Devices & services → PGE Energy → **Configure**:
+Settings → Devices & services → PGE Energy → **Configure** (from any account entry):
 
-1. **Sync settings** — stored in `entry.options`.
-2. **Update credentials** — updates `entry.data` and reloads the entry.
-3. **Manual sync** — starts a background refresh or history backfill (Sync settings bounds); progress on coordinator `SyncProgressSnapshot` + device diagnostic sensors; persistent notification deep-links to the device page (does not reload the entry).
+1. **Sync settings** — stored in `entry.options` (per account).
+2. **Panel** — integration-wide presentation for `/pge`, persisted in domain Store `pge_energy.panel` (not `entry.options`). Fields: `show_sidebar`, `sidebar_title`, `sidebar_icon`, `require_admin`, `default_section`. Save validates → writes Store → serialized remove/register of the panel (`async_apply_panel`); aborts the OptionsFlow without `async_create_entry` so account options, reload, and in-flight sync are untouched. Apply failure rolls back Store + registration when possible. Hiding the sidebar omits chrome (`sidebar_title=None`) but keeps the `/pge` route. Never mutates frontend user-store `sidebar` / `panelOrder` / `hiddenPanels`. Websocket `pge_energy/*` APIs stay `@require_admin` even when `require_admin` is false on the panel.
+3. **Update credentials** — updates `entry.data` and reloads the entry.
+4. **Manual sync** — starts a background refresh or history backfill (Sync settings bounds); progress on coordinator `SyncProgressSnapshot` + device diagnostic sensors; persistent notification deep-links to the device page (does not reload the entry). Remains available when the sidebar link is hidden.
 
 Polling is `polling_interval` + `polling_interval_unit` (`minutes`|`hours`|`days`) plus `sync_local_time` (`HH:MM:SS`, default **00:00:00** America/Los_Angeles). Default cadence is **every 4 hours** on that clock grid (00:00 / 04:00 / 08:00 / 12:00 / 16:00 / 20:00). Hour and day units align to `sync_local_time`; minute units use a fixed interval (min 15). Legacy options with only a numeric interval (no unit) are treated as minutes.
 
@@ -125,9 +126,10 @@ Bare `homeassistant.restart` from the UI **exits** this process (no Supervisor) 
 | `config_flow.py` | Credential setup (email/password/account number), reauth, OptionsFlow |
 | `day_validation.py` | Hourly local-day clip/validate (boundary hour) |
 | `cli.py` | Offline login/renew/validate/fetch + billing-snapshot/history/programs |
-| `panel.py` | Idempotent `/pge` sidebar panel + static paths (`/pge_energy_frontend`, `/pge_energy_brand`); registers/tears down only — does not read or write frontend user-store `sidebar` (`panelOrder` / `hiddenPanels`) |
+| `panel_settings.py` | Domain Store `pge_energy.panel` for integration-wide panel chrome (load/save/normalize/validate) |
+| `panel.py` | Static paths once + locked setup/apply/teardown for `/pge` from Store settings; optional sidebar chrome; passes `config.default_section` to the frontend; never reads/writes user-store `sidebar` (`panelOrder` / `hiddenPanels`) |
 | `websocket.py` | Admin WS: `pge_energy/accounts`, `pge_energy/sync/subscribe` (credential-free) |
-| `frontend/pge-panel.js` + `theme.js` | Buildless ES-module custom panel (Apache ECharts); Usage hero is one combined kWh/cost/°F chart; primary range buttons `24h` / This cycle / Last cycle / 7 days / Month plus a More… dropdown (`6h`/`12h`/`3mo`/`6mo`/`12mo`/YTD); unavailable presets stay visible but disabled; bill-bound ranges use statement dates (last cycle = equal length before current start); Usage Range accounting / rollup `<details>` remember open/closed via `localStorage`; Billing is always expanded (no accordion); shift/custom range controls and a PGE publication-gaps card; ranges end at Pacific midnight (exclusive). Insight charts trim empty ranges (heatmap first→last populated day, monthly $/kWh, dual billed/payments bars, padded scatter). Colors resolve from HA theme tokens (`theme.js`) so light/dark/custom themes stay readable; charts rebuild on theme change |
+| `frontend/pge-panel.js` + `theme.js` | Buildless ES-module custom panel (Apache ECharts); honors `panel.config.default_section` with a one-shot post-render scroll (`glance`/`usage`/`analytics`/`billing`); Usage hero is one combined kWh/cost/°F chart; primary range buttons `24h` / This cycle / Last cycle / 7 days / Month plus a More… dropdown (`6h`/`12h`/`3mo`/`6mo`/`12mo`/YTD); unavailable presets stay visible but disabled; bill-bound ranges use statement dates (last cycle = equal length before current start); Usage Range accounting / rollup `<details>` remember open/closed via `localStorage`; Billing is always expanded (no accordion); shift/custom range controls and a PGE publication-gaps card; ranges end at Pacific midnight (exclusive). Insight charts trim empty ranges (heatmap first→last populated day, monthly $/kWh, dual billed/payments bars, padded scatter). Colors resolve from HA theme tokens (`theme.js`) so light/dark/custom themes stay readable; charts rebuild on theme change |
 
 ## Related docs
 

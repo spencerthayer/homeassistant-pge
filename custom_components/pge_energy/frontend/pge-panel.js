@@ -27,7 +27,7 @@ import {
   stateDisplay,
   stateNumber,
   sumStatisticChange,
-} from "./data.js?v=0.5.50";
+} from "./data.js?v=0.6.0";
 import {
   createBarChart,
   createLineChart,
@@ -37,9 +37,27 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.5.50";
-import { sparklineSvg } from "./svg-helpers.js?v=0.5.50";
-import { applyPanelTheme } from "./theme.js?v=0.5.50";
+} from "./charts.js?v=0.6.0";
+import { sparklineSvg } from "./svg-helpers.js?v=0.6.0";
+import { applyPanelTheme } from "./theme.js?v=0.6.0";
+
+/** @type {Record<string, string>} */
+export const PANEL_SECTION_ANCHORS = {
+  glance: "#kpis",
+  usage: "#hero",
+  analytics: "#insights-weather",
+  billing: "#billing",
+};
+
+/**
+ * Resolve a panel.config.default_section value to a shadow-root selector.
+ * @param {unknown} section
+ * @returns {string}
+ */
+export function resolveLandingSelector(section) {
+  const key = typeof section === "string" ? section.trim() : "";
+  return PANEL_SECTION_ANCHORS[key] || PANEL_SECTION_ANCHORS.glance;
+}
 
 const STYLE = `
 :host {
@@ -654,6 +672,8 @@ class PgeEnergyPanel extends HTMLElement {
     this._loading = true;
     this._error = null;
     this._narrow = false;
+    this._defaultSection = "glance";
+    this._landingApplied = false;
   }
 
   set hass(hass) {
@@ -683,7 +703,13 @@ class PgeEnergyPanel extends HTMLElement {
     this._narrow = !!v;
   }
   set route(_r) {}
-  set panel(_p) {}
+  set panel(panel) {
+    const section = panel?.config?.default_section;
+    this._defaultSection =
+      typeof section === "string" && section.trim()
+        ? section.trim()
+        : "glance";
+  }
 
   disconnectedCallback() {
     if (this._unsubSync) {
@@ -718,11 +744,36 @@ class PgeEnergyPanel extends HTMLElement {
       this._error = null;
       this._renderShell();
       await this._renderAll();
+      this._scheduleDefaultLandingScroll();
     } catch (err) {
       this._loading = false;
       this._error = err?.message || String(err);
       this._renderShell();
     }
+  }
+
+  _scheduleDefaultLandingScroll() {
+    if (this._landingApplied || this._error || !this._accounts.length) {
+      return;
+    }
+    const root = this.shadowRoot;
+    if (!root) {
+      return;
+    }
+    const selector = resolveLandingSelector(this._defaultSection);
+    const target =
+      root.querySelector(selector) || root.querySelector(PANEL_SECTION_ANCHORS.glance);
+    if (!target) {
+      return;
+    }
+    this._landingApplied = true;
+    requestAnimationFrame(() => {
+      try {
+        target.scrollIntoView({ block: "start" });
+      } catch (_err) {
+        // Ignore scroll failures (detached node / unsupported).
+      }
+    });
   }
 
   get _account() {

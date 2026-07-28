@@ -91,6 +91,21 @@ from .options import (
     resolve_polling_interval_form_defaults,
     resolve_sync_local_time,
 )
+from .panel import async_apply_panel
+from .panel_settings import (
+    CONF_DEFAULT_SECTION,
+    CONF_REQUIRE_ADMIN,
+    CONF_SHOW_SIDEBAR,
+    CONF_SIDEBAR_ICON,
+    CONF_SIDEBAR_TITLE,
+    PANEL_DEFAULT_SECTIONS,
+    PANEL_SECTION_LABELS,
+    PanelSettings,
+    PanelSettingsValidationError,
+    async_load_panel_settings,
+    async_save_panel_settings,
+    normalize_panel_settings,
+)
 from .time_util import local_day_bounds, today_local
 
 _LOGGER = logging.getLogger(__name__)
@@ -523,13 +538,82 @@ def _options_schema(entry: config_entries.ConfigEntry) -> vol.Schema:
     )
 
 
+def _panel_options_schema(settings: PanelSettings) -> vol.Schema:
+    """Build the Panel settings form schema from current Store values."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_SHOW_SIDEBAR, default=settings.show_sidebar): BooleanSelector(),
+            vol.Required(
+                CONF_SIDEBAR_TITLE,
+                default=settings.sidebar_title,
+            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
+            vol.Required(
+                CONF_SIDEBAR_ICON,
+                default=settings.sidebar_icon,
+            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
+            vol.Required(CONF_REQUIRE_ADMIN, default=settings.require_admin): BooleanSelector(),
+            vol.Required(
+                CONF_DEFAULT_SECTION,
+                default=settings.default_section,
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value=value, label=PANEL_SECTION_LABELS[value])
+                        for value in PANEL_DEFAULT_SECTIONS
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+        }
+    )
+
+
 class PGEOptionsFlow(config_entries.OptionsFlow):
     """Configure sync settings and optionally update credentials."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=["settings", "credentials", "manual_sync"],
+            menu_options=["settings", "panel", "credentials", "manual_sync"],
+        )
+
+    async def async_step_panel(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Integration-wide panel chrome (domain Store; does not touch entry options)."""
+        errors: dict[str, str] = {}
+        previous = await async_load_panel_settings(self.hass)
+
+        if user_input is not None:
+            try:
+                candidate = normalize_panel_settings(user_input, strict=True)
+            except PanelSettingsValidationError as err:
+                errors.update(err.errors)
+            else:
+                try:
+                    await async_save_panel_settings(self.hass, candidate)
+                    await async_apply_panel(self.hass, candidate)
+                except Exception:
+                    _LOGGER.exception("Failed to update PGE panel settings")
+                    try:
+                        await async_save_panel_settings(self.hass, previous)
+                        await async_apply_panel(self.hass, previous)
+                    except Exception:
+                        _LOGGER.exception("Failed to restore previous PGE panel settings")
+                    errors["base"] = "panel_update_failed"
+                else:
+                    return self.async_abort(reason="panel_updated")
+
+        if user_input is not None and errors:
+            current = normalize_panel_settings(
+                {**previous.as_dict(), **user_input},
+                strict=False,
+            )
+        else:
+            current = previous
+
+        return self.async_show_form(
+            step_id="panel",
+            data_schema=_panel_options_schema(current),
+            errors=errors,
         )
 
     async def async_step_manual_sync(self, user_input: dict[str, Any] | None = None) -> FlowResult:

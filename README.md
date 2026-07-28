@@ -15,7 +15,7 @@ Custom Home Assistant integration that imports **Portland General Electric (PGE)
 1. In HACS → **⋯** → **Custom repositories**, add  
    `https://github.com/spencerthayer/homeassistant-pge`  
    with category **Integration**.
-2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.5.50`).
+2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.6.0`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -39,11 +39,12 @@ Custom Home Assistant integration that imports **Portland General Electric (PGE)
 
 ### Configure (options)
 
-Settings → Devices & Services → PGE Energy → **Configure**:
+Settings → Devices & Services → PGE Energy → **Configure** (opened from any account entry):
 
-- **Sync settings:** polling (value + unit `minutes` / `hours` / `days`, default **every 4 hours**), **sync clock** (Pacific, default **12:00 AM** — anchors the hour/day grid), correction window, history mode/start, hourly history days, auto backfill, cost/diagnostics, **import billing & programs** (`include_billing`, default on), concurrency.
+- **Sync settings:** polling (value + unit `minutes` / `hours` / `days`, default **every 4 hours**), **sync clock** (Pacific, default **12:00 AM** — anchors the hour/day grid), correction window, history mode/start, hourly history days, auto backfill, cost/diagnostics, **import billing & programs** (`include_billing`, default on), concurrency. Per account.
+- **Panel:** integration-wide chrome for `/pge` (stored once for the whole domain, not per account): **Show PGE in sidebar** (default on), **Sidebar title** (default `PGE`), **Sidebar icon** (default `mdi:transmission-tower`), **Admin-only panel** (default on), **Default landing section** (At a glance / Usage / Analytics / Billing). Hiding the sidebar link does **not** unregister `/pge` — open that URL directly. **Admin-only panel** off lets non-admins open the route, but account/sync websocket APIs stay admin-only. Sidebar *order* remains Home Assistant’s sidebar editor or [Browser Mod](https://github.com/thomasloven/hass-browser_mod).
 - **Update credentials:** email/password; account number is read-only; statistic IDs unchanged.
-- **Manual sync:** force **Refresh now** (correction window) or **Backfill missing history** (uses current Sync settings history bounds). A notification links to the PGE device page; live **Sync status** / **Sync progress** (%) sensors show phase, ETA, and detail.
+- **Manual sync:** force **Refresh now** (correction window) or **Backfill missing history** (uses current Sync settings history bounds). Remains available when the sidebar link is hidden. A notification links to the PGE device page; live **Sync status** / **Sync progress** (%) sensors show phase, ETA, and detail.
 - Details: [`docs/HA_SETTINGS_HISTORY.md`](docs/HA_SETTINGS_HISTORY.md).
 
 ## Sensors and statistics
@@ -103,7 +104,7 @@ The estimate sensors come straight from PGE (`getEnergyTrackerData`) and are its
 
 ## PGE Energy panel (`/pge`)
 
-The integration registers a sidebar item **PGE** (admin users) at [`/pge`](http://127.0.0.1:8123/pge). Sidebar order and visibility are controlled through Home Assistant’s sidebar editor or [Browser Mod](https://github.com/thomasloven/hass-browser_mod) — this integration does not rewrite those settings. It is a single place for usage, cost, outdoor temperature, billing, programs, and live sync progress across all entities and long-term statistics for each config entry.
+The integration registers [`/pge`](http://127.0.0.1:8123/pge) for usage, cost, outdoor temperature, billing, programs, and live sync progress across all config entries. By default it also adds a sidebar item **PGE** (admin users). Configure → **Panel** can hide that link, rename/re-icon it, change the admin gate, or pick a default landing section — `/pge` stays reachable either way. Sidebar *order* is still controlled through Home Assistant’s sidebar editor or [Browser Mod](https://github.com/thomasloven/hass-browser_mod); this integration does not rewrite those user-store settings.
 
 > **Recovery (0.5.41–0.5.45):** those versions could write synced Home Assistant sidebar user settings that override Browser Mod. After upgrading to **0.5.46+**, use Browser Mod’s **Clear** control for synced sidebar settings once (or reset order/hide in Home Assistant’s sidebar editor), reapply the desired Browser Mod preferences, then restart Home Assistant and hard-refresh if needed.
 

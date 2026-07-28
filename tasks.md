@@ -19,10 +19,12 @@
 - [x] Published GitHub Release [v0.5.47](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.5.47)
 - [x] Drop `device_class` on hourly tip sensors (`PGEHourlyEnergySensor` / `PGEHourlyCostSensor`) so `state_class=measurement` is HA-valid; units kept; lifetime sensors unchanged — 0.5.48
 - [x] Panel: shrink dual-value PGE est. next bill KPI (`kpi-dual`) to `1.15rem` — 0.5.49
+- [x] Configure → **Panel** (0.6.0): domain Store `pge_energy.panel` for show sidebar / title / icon / require_admin / default landing section; `/pge` stays registered when sidebar hidden; OptionsFlow aborts without touching entry options; never mutate HA/Browser Mod sidebar user-store
 
 ## Follow-ups
 
-- [ ] Commit / push / GitHub Release `v0.5.49` so HACS can offer the upgrade (includes 0.5.48 hourly sensor device_class fix)
+- [x] Browser UAT 0.6.0: Configure → Panel menu; hide sidebar removes link; `/pge` still loads (billing landing + sync complete); Store persists; abort message shown
+- [ ] Commit / push / GitHub Release `v0.6.0` (Panel Configure menu)
 - [ ] Browser Mod UAT with `@gatlinnewhouse` on [#2](https://github.com/spencerthayer/homeassistant-pge/issues/2): after 0.5.46, Clear synced sidebar once if still overridden, reapply Browser Mod hides/order, restart HA, confirm hidden items stay hidden; close issue only after confirmation
 - [ ] Browser UAT (operator): `./stop`/`./start` with this repo’s `pge_energy` linked; confirm `/pge` sync sensors leave `backfilling` on stall/complete, poll overlaps backfill without freeze, mid-backfill reload returns promptly, boot resume keeps targets after unload cancel
 - [ ] Operator: after upgrading to 0.5.43, confirm recorder health (no `Cannot operate on a closed database` / `Unexpected exception when updating statistics`); if present, `recorder.purge` with `repack: true` before trusting mismatch-free polls

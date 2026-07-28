@@ -11,6 +11,7 @@ from custom_components.pge_energy.const import (
     DOMAIN,
     FRONTEND_URL_PATH,
     PANEL_SETUP_KEY,
+    PANEL_SIDEBAR_ICON,
     PANEL_SIDEBAR_TITLE,
     PANEL_URL_PATH,
     PANEL_WEBCOMPONENT,
@@ -18,9 +19,13 @@ from custom_components.pge_energy.const import (
 )
 from custom_components.pge_energy.coordinator import PGECoordinator
 from custom_components.pge_energy.panel import (
+    PANEL_APPLIED_SETTINGS_KEY,
+    PANEL_STATIC_PATHS_KEY,
+    async_apply_panel,
     async_setup_panel,
     async_teardown_panel,
 )
+from custom_components.pge_energy.panel_settings import PanelSettings, default_panel_settings
 
 
 def test_panel_module_does_not_touch_frontend_user_sidebar_store():
@@ -34,22 +39,34 @@ def test_panel_module_does_not_touch_frontend_user_sidebar_store():
         assert forbidden not in source, f"panel.py must not reference {forbidden}"
 
 
-@pytest.mark.asyncio
-async def test_async_setup_panel_registers_paths_and_panel():
+def _hass_mock() -> MagicMock:
     hass = MagicMock()
     hass.data = {}
     hass.http = MagicMock()
     hass.http.async_register_static_paths = AsyncMock()
-    hass.auth.async_get_users = AsyncMock(return_value=[])
+    return hass
 
-    with patch(
-        "custom_components.pge_energy.panel.panel_custom.async_register_panel",
-        new_callable=AsyncMock,
-    ) as register_panel:
+
+@pytest.mark.asyncio
+async def test_async_setup_panel_registers_paths_and_panel():
+    hass = _hass_mock()
+
+    with (
+        patch(
+            "custom_components.pge_energy.panel.async_load_panel_settings",
+            new_callable=AsyncMock,
+            return_value=default_panel_settings(),
+        ),
+        patch(
+            "custom_components.pge_energy.panel.panel_custom.async_register_panel",
+            new_callable=AsyncMock,
+        ) as register_panel,
+    ):
         await async_setup_panel(hass)
         await async_setup_panel(hass)  # idempotent
 
     assert hass.data[PANEL_SETUP_KEY] is True
+    assert hass.data[PANEL_STATIC_PATHS_KEY] is True
     assert hass.http.async_register_static_paths.await_count == 1
     configs = hass.http.async_register_static_paths.await_args.args[0]
     assert len(configs) == 2
@@ -60,19 +77,116 @@ async def test_async_setup_panel_registers_paths_and_panel():
     assert Path(configs[1].path).name == "brand"
 
     register_panel.assert_awaited_once()
-    assert hass.auth.async_get_users.await_count == 0
     kwargs = register_panel.await_args.kwargs
     assert kwargs["frontend_url_path"] == PANEL_URL_PATH
     assert kwargs["webcomponent_name"] == PANEL_WEBCOMPONENT
     assert kwargs["sidebar_title"] == PANEL_SIDEBAR_TITLE == "PGE"
+    assert kwargs["sidebar_icon"] == PANEL_SIDEBAR_ICON
     assert kwargs["require_admin"] is True
+    assert kwargs["config"] == {"default_section": "glance"}
     assert kwargs["module_url"] == f"{FRONTEND_URL_PATH}/pge-panel.js?v={VERSION}"
+    assert hass.data[PANEL_APPLIED_SETTINGS_KEY] == default_panel_settings()
+
+
+@pytest.mark.asyncio
+async def test_async_apply_panel_hides_sidebar_chrome():
+    hass = _hass_mock()
+    hass.data[PANEL_SETUP_KEY] = True
+    hass.data[PANEL_STATIC_PATHS_KEY] = True
+    hass.data[PANEL_APPLIED_SETTINGS_KEY] = default_panel_settings()
+    hidden = PanelSettings(
+        show_sidebar=False,
+        sidebar_title="KeepMe",
+        sidebar_icon="mdi:flash",
+        require_admin=False,
+        default_section="analytics",
+    )
+
+    with (
+        patch("custom_components.pge_energy.panel.frontend.async_remove_panel") as remove,
+        patch(
+            "custom_components.pge_energy.panel.panel_custom.async_register_panel",
+            new_callable=AsyncMock,
+        ) as register_panel,
+    ):
+        await async_apply_panel(hass, hidden)
+
+    remove.assert_called_once_with(hass, PANEL_URL_PATH)
+    kwargs = register_panel.await_args.kwargs
+    assert kwargs["sidebar_title"] is None
+    assert kwargs["sidebar_icon"] is None
+    assert kwargs["require_admin"] is False
+    assert kwargs["config"] == {"default_section": "analytics"}
+    assert hass.data[PANEL_SETUP_KEY] is True
+    assert hass.data[PANEL_APPLIED_SETTINGS_KEY] == hidden
+
+
+@pytest.mark.asyncio
+async def test_async_apply_panel_visible_passes_chrome():
+    hass = _hass_mock()
+    hass.data[PANEL_STATIC_PATHS_KEY] = True
+    hass.data[PANEL_APPLIED_SETTINGS_KEY] = default_panel_settings()
+    custom = PanelSettings(
+        show_sidebar=True,
+        sidebar_title="Power",
+        sidebar_icon="mdi:lightning-bolt",
+        require_admin=True,
+        default_section="usage",
+    )
+
+    with patch(
+        "custom_components.pge_energy.panel.panel_custom.async_register_panel",
+        new_callable=AsyncMock,
+    ) as register_panel:
+        await async_apply_panel(hass, custom)
+
+    kwargs = register_panel.await_args.kwargs
+    assert kwargs["sidebar_title"] == "Power"
+    assert kwargs["sidebar_icon"] == "mdi:lightning-bolt"
+    assert kwargs["config"] == {"default_section": "usage"}
+
+
+@pytest.mark.asyncio
+async def test_async_apply_panel_rolls_back_on_register_failure():
+    hass = _hass_mock()
+    hass.data[PANEL_STATIC_PATHS_KEY] = True
+    previous = default_panel_settings()
+    hass.data[PANEL_SETUP_KEY] = True
+    hass.data[PANEL_APPLIED_SETTINGS_KEY] = previous
+    bad = PanelSettings(
+        show_sidebar=True,
+        sidebar_title="Broken",
+        sidebar_icon="mdi:alert",
+        require_admin=True,
+        default_section="billing",
+    )
+
+    register = AsyncMock(side_effect=[RuntimeError("boom"), None])
+
+    with (
+        patch("custom_components.pge_energy.panel.frontend.async_remove_panel"),
+        patch(
+            "custom_components.pge_energy.panel.panel_custom.async_register_panel",
+            new=register,
+        ),
+        patch(
+            "custom_components.pge_energy.panel.async_save_panel_settings",
+            new_callable=AsyncMock,
+        ) as save,
+    ):
+        with pytest.raises(RuntimeError, match="boom"):
+            await async_apply_panel(hass, bad)
+
+    assert register.await_count == 2
+    assert register.await_args_list[1].kwargs["sidebar_title"] == previous.sidebar_title
+    save.assert_awaited_once_with(hass, previous)
+    assert hass.data[PANEL_APPLIED_SETTINGS_KEY] == previous
 
 
 @pytest.mark.asyncio
 async def test_async_teardown_panel_removes_once():
     hass = MagicMock()
-    hass.data = {PANEL_SETUP_KEY: True}
+    hass.data = {PANEL_SETUP_KEY: True, PANEL_APPLIED_SETTINGS_KEY: default_panel_settings()}
 
     with patch("custom_components.pge_energy.panel.frontend.async_remove_panel") as remove:
         async_teardown_panel(hass)
@@ -80,6 +194,7 @@ async def test_async_teardown_panel_removes_once():
 
     remove.assert_called_once_with(hass, PANEL_URL_PATH)
     assert PANEL_SETUP_KEY not in hass.data
+    assert PANEL_APPLIED_SETTINGS_KEY not in hass.data
 
 
 @pytest.mark.asyncio
