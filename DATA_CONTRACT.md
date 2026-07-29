@@ -222,6 +222,13 @@ Backs the portal “Current Use” card (est. current charges, billing-cycle day
 - **Detail ops (best-effort):** Peak Time (`encryptedAccountNumber` + `ptrMockServerDate: ""`), Renewables (`encryptedServiceAgreementId`), TOD (`encryptedAccountNumber` + `encryptedServiceAgreementId`), Smart Thermostat (`encryptedAccountNumber`).
 - **HA import:** enrollment flags + YTD / on-bill flex earnings; dual-publish mean series for YTD savings. PDF bill download is deferred (see `docs/HA_SETTINGS_HISTORY.md`).
 
+### Bill PDF REST / parsing feasibility (probed, not shipped)
+
+- **Download:** `POST https://apix.portlandgeneral.com/pge-bill-api/pdf/bills` with the Apigee bearer, portal Origin/Referer, and `{ encryptedBillId, isSummary: false, isNonDetailed: false }` for the detailed form.
+- **Live probe (2026-07-28):** HTTP 200 `application/pdf`, valid `%PDF` bytes, 3 pages / ~126 KB. `pypdf` extracted ~13,300 characters in memory, so the sampled detailed bill is text-backed and does not require OCR. Layout extraction warned about rotated text.
+- **Normalization spike:** the public sample-bill vocabulary supports typed USD/kWh fields and statement-dated history samples, but the first strict parser recovered only part of the live layout and failed GraphQL reconciliation (missing due date/kWh and mismatched amount due). This is a useful fail-closed result: never publish PDF-derived statistics unless required fields and GraphQL identity values reconcile.
+- **Privacy:** raw PDF text contains account/address data. Tests use synthetic/public-sample text, serialization omits raw text and personal identifiers, and the live probe did not save the PDF or extracted plaintext.
+
 ### Billing statistics suffixes
 
 External `pge_energy:<account_key>_*` (+ mirrored entity stats): `_account_balance`, `_amount_due`, `_last_payment_amount`, `_bill_avg_temperature`, `_ytd_program_savings` (mean); `_bill_amount`, `_bill_kwh`, `_payment_amount` (sum from ledger).
