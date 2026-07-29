@@ -30,6 +30,93 @@ Custom Home Assistant integration that imports **Portland General Electric (PGE)
 3. The same login can be reused for additional entries with different account numbers; separate logins each need their own entry.
 4. **MFA-enabled PGE accounts are not supported.** If PGE requires MFA or CAPTCHA, setup fails closed.
 
+## Architecture
+
+### Authentication & API data model
+
+```mermaid
+sequenceDiagram
+    participant User as HA Config Flow
+    participant PA as portal_auth.py
+    participant Cognito as AWS Cognito
+    participant Apigee as Apigee Token API
+    participant GraphQL as PGE GraphQL API
+    participant Entry as Config Entry
+
+    User->>PA: email + password
+    PA->>Cognito: InitiateAuth (USER_PASSWORD_AUTH)
+    Cognito-->>PA: IdToken + RefreshToken
+    PA->>Apigee: POST /token (idp_access_token=IdToken)
+    Apigee-->>PA: bearer access_token + expires_at
+    PA->>GraphQL: getAccountInfo (bearer token)
+    GraphQL-->>PA: encryptedPersonId + account list
+    PA-->>Entry: store token, encrypted IDs, account_key
+
+    Note over PA,Entry: Runtime — PGEAuthManager.ensure_valid_token()
+    PA->>Cognito: REFRESH_TOKEN_AUTH or re-login
+    PA->>Apigee: re-exchange IdToken for bearer token
+    PA-->>Entry: persist updated token + expires_at
+```
+
+The integration authenticates through a **Cognito → Apigee → GraphQL** chain. Email/password are exchanged for a Cognito `IdToken`, which is then traded for an Apigee bearer token (short-lived). This bearer token authorizes all subsequent GraphQL calls (`getUsageCompare`, `getAccountDetailList`, `getEnergyTrackerData`, etc.). The `PGEAuthManager` wraps the token with proactive expiry checks and automatic renewal — on 401 mid-sync it calls `force_renew()` and retries once. After every renewal the fresh token is persisted back to the config entry (without triggering a reload).
+
+### Sensor data model
+
+```mermaid
+flowchart LR
+    subgraph API[PGE GraphQL API]
+        direction TB
+        GQ1[getUsageCompare<br/>HOURLY / DAILY / MONTHLY]
+        GQ2[getAccountDetailList<br/>+ paymentHistory]
+        GQ3[getEnergyTrackerData]
+        GQ4[getProgramsEnrollmentStatus]
+    end
+
+    subgraph CLIENTS[API Clients]
+        UA[PGEApiClient] -->|"UsageResponse, UsageInterval list"| Coord
+        BA[PGEBillingApiClient] -->|AccountSnapshot| Coord
+        BA -->|"LedgerEvent list"| Coord
+        BA -->|EnergyTrackerEstimates| Coord
+        BA -->|ProgramsSnapshot| Coord
+    end
+
+    subgraph COORD[PGECoordinator]
+        Coord{lifetime_energy_kwh<br/>lifetime_cost_usd<br/>recent_intervals<br/>freshness}
+    end
+
+    subgraph STATS[Statistics Module]
+        IMP[async_import_with_baseline]
+        IMP -->|consumption| EXTC[(pge_energy:&lt;key&gt;_consumption<br/>sum, kWh)]
+        IMP -->|cost| EXTCST[(pge_energy:&lt;key&gt;_cost<br/>sum, USD)]
+        IMP -->|temperature| EXTT[(pge_energy:&lt;key&gt;_temperature<br/>mean, °F)]
+        IMP -->|mirror| MIR[(sensor.pge_*<br/>entity statistics)]
+    end
+
+    subgraph SENSORS[Sensors]
+        E[Energy / Cost /<br/>Outdoor Temperature] -->|total_increasing / total / measurement| HA
+        H[Hourly Energy / Cost] -->|measurement tip| HA
+        D[Current Day / Yesterday<br/>Energy & Cost] -->|total| HA
+        B[Account Balance / Amount Due<br/>Due Date / Last Payment] --> HA
+        L[Lifetime Payments / Billed] -->|total| HA
+        T[Billing Cycle Day /<br/>Estimated Charges] --> HA
+        P[Program Binary Sensors<br/>Autopay, Paperless, PTR,<br/>Green Future, TOD, etc.] -->|is_on| HA
+        S[Sync Status / Progress<br/>Data Age / Latest Interval] -->|diagnostic| HA
+    end
+
+    GQ1 --> UA
+    GQ2 --> BA
+    GQ3 --> BA
+    GQ4 --> BA
+
+    Coord -.->|accounts / sync/subscribe WS| PANEL[PGE Panel /pge]
+    PANEL -.->|recorder/statistics_during_period| STATS
+
+    Coord -->|import via| STATS
+    Coord -->|read properties| SENSORS
+```
+
+All API clients share a single `PGEAuthManager` and `aiohttp.ClientSession`. Usage data (`PGEApiClient`) and billing/programs data (`PGEBillingApiClient`) hit the same GraphQL endpoint at `https://apix.portlandgeneral.com/pge-graphql` with different origin headers (`widget.portlandgeneral.com` vs `portlandgeneral.com`). The coordinator feeds the statistics module (dual-publish: external + entity-mirrored) and serves as the property source for all sensor entities. The `/pge` panel reads chart series directly from the HA recorder via `statistics_during_period`.
+
 ### Authentication status
 
 - Email/password login (Cognito → Apigee) with automatic token renewal; no MFA/CAPTCHA support (fail closed).
