@@ -21,9 +21,7 @@ from custom_components.pge_energy.portal_auth import (
 class TestClassifyCognitoError:
     def test_too_many_requests(self):
         with pytest.raises(PGERateLimitError) as excinfo:
-            _classify_cognito_error(
-                {"__type": "TooManyRequestsException", "message": "Too many requests"}
-            )
+            _classify_cognito_error({"__type": "TooManyRequestsException", "message": "Too many requests"})
         assert excinfo.value.retry_after == 60.0
 
     def test_password_attempts_exceeded_before_not_authorized(self):
