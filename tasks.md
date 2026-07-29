@@ -24,7 +24,7 @@
 
 ## Follow-ups
 
-- [x] Cognito rate-limit exploration + respect (0.6.1): live probe fixtures; `PGERateLimitError` for TooManyRequests / Password attempts exceeded; shared email cooldown; no refresh amplify; coordinator soft-fail without reauth; force_renew coalesce; README mermaid + AUTH_DISCOVERY
+- [x] Cognito rate-limit exploration + respect (0.6.1): live probe fixtures; `PGERateLimitError` for TooManyRequests / Password attempts exceeded; shared email cooldown; no refresh amplify; coordinator soft-fail without reauth; force_renew coalesce; README mermaid + AUTH_DISCOVERY; GitHub Release [v0.6.1](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.6.1)
 - [x] Browser UAT 0.6.0: Configure → Panel menu; hide sidebar removes link; `/pge` still loads (billing landing + sync complete); Store persists; abort message shown
 - [x] Commit / push / GitHub Release [v0.6.0](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.6.0) (Panel Configure menu)
 - [x] CI lint ([run 30330317615](https://github.com/spencerthayer/homeassistant-pge/actions/runs/30330317615)): ruff SIM108 ternaries in `panel_settings.py`, SIM117 combined `with` in panel tests, `ruff format` on `test_panel_landing_js.py`
