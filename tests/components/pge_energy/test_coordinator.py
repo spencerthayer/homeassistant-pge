@@ -58,6 +58,7 @@ def _make_coordinator(*, auth_mode: str = "credential") -> PGECoordinator:
     auth.ensure_valid_token = AsyncMock(return_value="tok")
     auth.force_renew = AsyncMock(return_value="tok2")
     auth.persistable_auth_data = MagicMock(return_value={"bearer_token": "tok"})
+    auth.cognito_rate_limit_remaining_seconds = MagicMock(return_value=0.0)
     client = MagicMock()
     coord = PGECoordinator(hass, entry, auth, client)
     coord._import_store = ImportStoreData(account_key="keykeykeykeykeyk")
@@ -211,6 +212,31 @@ async def test_auth_connection_error_keeps_retained_data():
     assert coord.recent_intervals == prior
     assert coord.lifetime_energy_kwh == 99.0
     assert "DNS timeout" in (coord._last_api_error or "")
+
+
+@pytest.mark.asyncio
+async def test_cognito_rate_limit_keeps_retained_data_without_reauth():
+    from custom_components.pge_energy.exceptions import PGERateLimitError
+
+    coord = _make_coordinator(auth_mode="credential")
+    yesterday = today_local() - timedelta(days=1)
+    prior = _full_day_intervals(yesterday)
+    coord._recent_intervals = list(prior)
+    coord._lifetime_energy_kwh = 50.0
+    coord.data = {"intervals": list(prior), "failed_days": []}
+    coord.auth_manager.ensure_valid_token = AsyncMock(
+        side_effect=PGERateLimitError("rate limited", retry_after=60)
+    )
+    # Longer than the default polling timedelta so post-poll stretch applies.
+    coord.auth_manager.cognito_rate_limit_remaining_seconds = MagicMock(return_value=10_000.0)
+    coord.hass.async_create_task = MagicMock()
+
+    data = await coord._async_update_data()
+    assert data["stale"] is True
+    assert coord.recent_intervals == prior
+    assert coord._reauth_requested is False
+    coord.hass.async_create_task.assert_not_called()
+    assert coord.update_interval == timedelta(seconds=10_000)
 
 
 @pytest.mark.asyncio

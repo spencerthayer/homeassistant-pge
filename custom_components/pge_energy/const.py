@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 PLATFORMS = ["sensor", "binary_sensor"]
 
 # Custom panel (registered once per HA instance, not per entry).
@@ -94,6 +94,15 @@ DAILY_LUMP_MIN_COST = 3.0
 # When a scheduled poll finds yesterday still incomplete, retry this often until
 # hourly validates complete (PGE often publishes after midnight).
 CATCHUP_RETRY_HOURS = 2
+
+# Cognito InitiateAuth throttle / password-attempt lockout backoff (shared per email).
+# Live probe (2026-07-29): TooManyRequestsException under ~20-way parallel USER_PASSWORD_AUTH;
+# no Retry-After header. Password lockout message is NotAuthorizedException
+# "Password attempts exceeded" after 5 wrong passwords (AWS exponential lockout, max ~15m).
+COGNITO_RATE_LIMIT_UNTIL_KEY = "cognito_rate_limit_until"
+COGNITO_RATE_LIMIT_DEFAULT_SECONDS = 60.0
+COGNITO_RATE_LIMIT_LOCKOUT_SECONDS = 900.0
+COGNITO_RATE_LIMIT_MAX_SECONDS = 900.0
 
 # Backfill hang recovery (progress watchdog + hard release + tier/save bounds).
 BACKFILL_STALL_TIMEOUT = timedelta(minutes=30)

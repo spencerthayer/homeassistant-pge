@@ -1,0 +1,38 @@
+{
+  "name": "cognito_initiate_auth_too_many_requests",
+  "source": "live_capture_cognito_rate_probe",
+  "request": {
+    "method": "POST",
+    "url": "https://cognito-idp.us-west-2.amazonaws.com/",
+    "headers": {
+      "Content-Type": "application/x-amz-json-1.1",
+      "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth"
+    },
+    "body": {
+      "AuthFlow": "USER_PASSWORD_AUTH",
+      "ClientId": "4q9nbgmi0gcks5t7d6fkhubfnm",
+      "AuthParameters": {
+        "USERNAME": "<EMAIL>",
+        "PASSWORD": "<PASSWORD>"
+      }
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "Content-Type": "application/x-amz-json-1.1",
+      "x-amzn-ErrorType": "TooManyRequestsException:"
+    },
+    "cookies": [],
+    "body": {
+      "__type": "TooManyRequestsException",
+      "message": "Too many requests"
+    }
+  },
+  "probe_summary": {
+    "mode": "password-burst",
+    "calls": 20,
+    "stop_reason": "toomanyrequests",
+    "recovery_seconds": null
+  }
+}

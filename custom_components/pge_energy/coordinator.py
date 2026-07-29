@@ -706,20 +706,35 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise ConfigEntryAuthFailed(message) from hard_exc
         raise UpdateFailed(message) from hard_exc
 
+    def _apply_post_poll_update_interval(self) -> None:
+        """Prefer configured schedule, catch-up, or Cognito cooldown — whichever is later."""
+        cognito_remaining = self.auth_manager.cognito_rate_limit_remaining_seconds()
+        if self._catchup_retry and not self._refresh_job_active:
+            base = timedelta(hours=CATCHUP_RETRY_HOURS)
+            _LOGGER.info(
+                "Yesterday hourly incomplete after scheduled poll — next catch-up in %s hour(s)",
+                CATCHUP_RETRY_HOURS,
+            )
+        else:
+            self._refresh_update_interval()
+            base = self.update_interval or timedelta(0)
+        if cognito_remaining > 0:
+            cooldown = timedelta(seconds=cognito_remaining)
+            if cooldown > base:
+                self.update_interval = cooldown
+                _LOGGER.info(
+                    "Deferring next PGE poll for Cognito cooldown (%.0fs)",
+                    cognito_remaining,
+                )
+            return
+        if self._catchup_retry and not self._refresh_job_active:
+            self.update_interval = base
+
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             return await self._async_poll_usage()
         finally:
-            # Prefer the configured schedule — unless yesterday's hourly is still
-            # incomplete; then catch up every CATCHUP_RETRY_HOURS.
-            if self._catchup_retry and not self._refresh_job_active:
-                self.update_interval = timedelta(hours=CATCHUP_RETRY_HOURS)
-                _LOGGER.info(
-                    "Yesterday hourly incomplete after scheduled poll — next catch-up in %s hour(s)",
-                    CATCHUP_RETRY_HOURS,
-                )
-            else:
-                self._refresh_update_interval()
+            self._apply_post_poll_update_interval()
 
     async def _async_poll_usage(self) -> dict[str, Any]:
         # Recover from a backfill task that died without clearing flags.
@@ -754,6 +769,14 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 str(exc),
                 tracking=tracking,
                 auth_failed=self.auth_manager.auth_mode != "credential",
+                hard_exc=exc,
+            )
+        except PGERateLimitError as exc:
+            # Cognito throttle / password-attempt lockout — retain sensors, no reauth.
+            return await self._async_soft_fail_poll(
+                f"Cognito rate limited: {exc}",
+                tracking=tracking,
+                auth_failed=False,
                 hard_exc=exc,
             )
         except PGEAuthenticationError as exc:

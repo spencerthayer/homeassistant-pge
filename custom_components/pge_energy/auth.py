@@ -6,9 +6,13 @@ import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from .const import (
     AUTH_MODE_CREDENTIAL,
+    COGNITO_RATE_LIMIT_DEFAULT_SECONDS,
+    COGNITO_RATE_LIMIT_MAX_SECONDS,
+    COGNITO_RATE_LIMIT_UNTIL_KEY,
     CONF_ACCOUNT_ID,
     CONF_BEARER_TOKEN,
     CONF_ENCRYPTED_ACCOUNT_NUMBER,
@@ -18,9 +22,10 @@ from .const import (
     CONF_PASSWORD,
     CONF_REFRESH_CREDENTIAL,
     CONF_TOKEN_EXPIRES_AT,
+    DOMAIN,
     TOKEN_EXPIRY_SKEW_SECONDS,
 )
-from .exceptions import PGEAuthenticationError
+from .exceptions import PGEAuthenticationError, PGERateLimitError
 from .models import PGEAccount, PGEIdentity, PGEToken
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,6 +44,47 @@ generate_account_key = generate_legacy_account_key
 def generate_immutable_account_key() -> str:
     """Random opaque key that never changes across credential renewal."""
     return secrets.token_hex(8)
+
+
+def normalize_auth_email(email: str | None) -> str | None:
+    if not email or not str(email).strip():
+        return None
+    return str(email).strip().lower()
+
+
+def _cap_retry_after(seconds: float | None) -> float:
+    delay = COGNITO_RATE_LIMIT_DEFAULT_SECONDS if seconds is None else float(seconds)
+    if delay < 1.0:
+        delay = 1.0
+    return min(delay, COGNITO_RATE_LIMIT_MAX_SECONDS)
+
+
+def get_shared_cognito_rate_limit_until(hass: Any, email: str | None) -> datetime | None:
+    """Return the domain-wide Cognito cooldown for a login email, if any."""
+    key = normalize_auth_email(email)
+    if hass is None or key is None:
+        return None
+    bucket = hass.data.get(DOMAIN, {}).get(COGNITO_RATE_LIMIT_UNTIL_KEY)
+    if not isinstance(bucket, dict):
+        return None
+    until = bucket.get(key)
+    return until if isinstance(until, datetime) else None
+
+
+def set_shared_cognito_rate_limit_until(hass: Any, email: str | None, until: datetime) -> None:
+    """Publish Cognito cooldown so every entry with the same email backs off."""
+    key = normalize_auth_email(email)
+    if hass is None or key is None:
+        return
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    bucket = domain_data.setdefault(COGNITO_RATE_LIMIT_UNTIL_KEY, {})
+    if not isinstance(bucket, dict):
+        bucket = {}
+        domain_data[COGNITO_RATE_LIMIT_UNTIL_KEY] = bucket
+    prev = bucket.get(key)
+    if isinstance(prev, datetime) and prev > until:
+        return
+    bucket[key] = until
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +108,8 @@ class PGEAuthManager:
     2. Proactively renews when expiry is unknown or near
     3. Supports forced renewal (401 mid-request) under a lock so concurrent
        day fetches share one login and continue the running sync
+    4. Respects Cognito InitiateAuth throttle / password-attempt lockout with a
+       shared per-email cooldown (no Cognito calls while cooling down)
     """
 
     def __init__(
@@ -78,6 +126,7 @@ class PGEAuthManager:
         encrypted_account_number: str | None = None,
         encrypted_premise_id: str | None = None,
         encrypted_sa_id: str | None = None,
+        hass: Any | None = None,
     ) -> None:
         self._token = PGEToken(access_token=token, expires_at=token_expires_at)
         self._encrypted_person_id = encrypted_person_id
@@ -89,7 +138,9 @@ class PGEAuthManager:
         self._encrypted_account_number = encrypted_account_number
         self._encrypted_premise_id = encrypted_premise_id
         self._encrypted_sa_id = encrypted_sa_id
+        self._hass = hass
         self._lock = asyncio.Lock()
+        self._cognito_rate_limit_until: datetime | None = None
         # Preserve stored key when provided; otherwise fall back to the legacy
         # derivation used by older installs that never persisted account_key.
         self._account_key = account_key or generate_legacy_account_key(
@@ -228,6 +279,50 @@ class PGEAuthManager:
             data[CONF_ENCRYPTED_SA_ID] = self._encrypted_sa_id
         return data
 
+    def cognito_rate_limit_until(self) -> datetime | None:
+        """Effective Cognito cooldown (local manager + shared email gate)."""
+        local = self._cognito_rate_limit_until
+        shared = get_shared_cognito_rate_limit_until(self._hass, self._email)
+        if local is None:
+            return shared
+        if shared is None:
+            return local
+        return max(local, shared)
+
+    def cognito_rate_limit_remaining_seconds(self) -> float:
+        until = self.cognito_rate_limit_until()
+        if until is None:
+            return 0.0
+        remaining = (until - datetime.now(UTC)).total_seconds()
+        return max(0.0, remaining)
+
+    def mark_cognito_rate_limited(self, retry_after: float | None = None) -> datetime:
+        """Record a Cognito throttle/lockout cooldown (manager + shared email)."""
+        delay = _cap_retry_after(retry_after)
+        until = datetime.now(UTC) + timedelta(seconds=delay)
+        current = self.cognito_rate_limit_until()
+        if current is not None and current > until:
+            until = current
+        self._cognito_rate_limit_until = until
+        set_shared_cognito_rate_limit_until(self._hass, self._email, until)
+        _LOGGER.warning(
+            "PGE Cognito rate-limit cooldown until %s (%.0fs) for %s",
+            until.isoformat(),
+            delay,
+            normalize_auth_email(self._email) or "unknown",
+        )
+        return until
+
+    def _raise_if_cognito_rate_limited(self) -> None:
+        remaining = self.cognito_rate_limit_remaining_seconds()
+        if remaining <= 0:
+            return
+        until = self.cognito_rate_limit_until()
+        raise PGERateLimitError(
+            f"PGE Cognito rate-limited until {until.isoformat() if until else 'unknown'}",
+            retry_after=remaining,
+        )
+
     async def ensure_valid_token(self, *, force: bool = False) -> str:
         """Return a usable access token, renewing when needed.
 
@@ -236,6 +331,7 @@ class PGEAuthManager:
         credential mode. Concurrent callers share one renewal via the lock.
         """
         async with self._lock:
+            self._raise_if_cognito_rate_limited()
             if not force and not self.is_token_expired():
                 return self._token.access_token
 
@@ -249,12 +345,26 @@ class PGEAuthManager:
             return self._token.access_token
 
     async def force_renew(self) -> str:
-        """Force one renewal attempt (e.g. after GraphQL 401 mid-sync)."""
-        return await self.ensure_valid_token(force=True)
+        """Force one renewal attempt (e.g. after GraphQL 401 mid-sync).
+
+        Coalesces concurrent waiters: if another caller already replaced the
+        token while this waiter held the lock queue, reuse that token.
+        """
+        prior = self._token.access_token
+        async with self._lock:
+            self._raise_if_cognito_rate_limited()
+            if self._token.access_token != prior and not self.is_token_expired():
+                return self._token.access_token
+            if self._auth_mode == AUTH_MODE_CREDENTIAL:
+                await self._async_renew_credential()
+                return self._token.access_token
+            raise PGEAuthenticationError("Token expired - reauthentication required")
 
     async def _async_renew_credential(self) -> None:
         """Renew access token using stored email/password (preferred) or refresh."""
         from . import portal_auth
+
+        self._raise_if_cognito_rate_limited()
 
         if not self._password and not self._refresh_credential:
             raise PGEAuthenticationError("No stored password or refresh credential — update PGE credentials")
@@ -264,11 +374,15 @@ class PGEAuthManager:
             bool(self._password),
             bool(self._refresh_credential),
         )
-        result = await portal_auth.async_login_or_refresh(
-            email=self._email or "",
-            password=self._password,
-            refresh_credential=self._refresh_credential,
-        )
+        try:
+            result = await portal_auth.async_login_or_refresh(
+                email=self._email or "",
+                password=self._password,
+                refresh_credential=self._refresh_credential,
+            )
+        except PGERateLimitError as exc:
+            self.mark_cognito_rate_limited(exc.retry_after)
+            raise
 
         self._token = PGEToken(
             access_token=result.access_token,

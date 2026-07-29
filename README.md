@@ -15,7 +15,7 @@ Custom Home Assistant integration that imports **Portland General Electric (PGE)
 1. In HACS → **⋯** → **Custom repositories**, add  
    `https://github.com/spencerthayer/homeassistant-pge`  
    with category **Integration**.
-2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.6.0`).
+2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.6.1`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -42,6 +42,7 @@ sequenceDiagram
     participant Apigee as Apigee Token API
     participant GraphQL as PGE GraphQL API
     participant Entry as Config Entry
+    participant Coord as PGECoordinator
 
     User->>PA: email + password
     PA->>Cognito: InitiateAuth (USER_PASSWORD_AUTH)
@@ -52,13 +53,21 @@ sequenceDiagram
     GraphQL-->>PA: encryptedPersonId + account list
     PA-->>Entry: store token, encrypted IDs, account_key
 
-    Note over PA,Entry: Runtime — PGEAuthManager.ensure_valid_token()
-    PA->>Cognito: REFRESH_TOKEN_AUTH or re-login
+    Note over PA,Entry: Runtime — password-first renew (short-lived bearer)
+    PA->>Cognito: USER_PASSWORD_AUTH (or REFRESH_TOKEN_AUTH fallback)
     PA->>Apigee: re-exchange IdToken for bearer token
     PA-->>Entry: persist updated token + expires_at
+
+    Note over Cognito,Coord: Cognito throttle / password-attempt lockout
+    Cognito-->>PA: TooManyRequests or Password attempts exceeded
+    PA-->>Coord: PGERateLimitError (no refresh amplify)
+    Coord->>Coord: shared email cooldown — skip InitiateAuth
+    Coord->>Coord: soft-fail retain sensors (no reauth UI)
 ```
 
-The integration authenticates through a **Cognito → Apigee → GraphQL** chain. Email/password are exchanged for a Cognito `IdToken`, which is then traded for an Apigee bearer token (short-lived). This bearer token authorizes all subsequent GraphQL calls (`getUsageCompare`, `getAccountDetailList`, `getEnergyTrackerData`, etc.). The `PGEAuthManager` wraps the token with proactive expiry checks and automatic renewal — on 401 mid-sync it calls `force_renew()` and retries once. After every renewal the fresh token is persisted back to the config entry (without triggering a reload).
+The integration authenticates through a **Cognito → Apigee → GraphQL** chain. Email/password are exchanged for a Cognito `IdToken`, which is then traded for an Apigee bearer token (short-lived). This bearer token authorizes all subsequent GraphQL calls (`getUsageCompare`, `getAccountDetailList`, `getEnergyTrackerData`, etc.). The `PGEAuthManager` wraps the token with proactive expiry checks and automatic renewal — on 401 mid-sync it calls `force_renew()` and retries once (concurrent waiters coalesce onto one login). After every renewal the fresh token is persisted back to the config entry (without triggering a reload).
+
+When Cognito returns **Too many requests** or **Password attempts exceeded**, the integration raises a rate-limit error (not a bad-password failure): it starts a **shared per-email cooldown**, does **not** fall through to a second Cognito refresh call, soft-fails the poll while keeping last-known sensors/history, and does **not** open the reauth UI. GraphQL HTTP 429 uses the same soft-fail posture with its own `Retry-After` cooldown.
 
 ### Sensor data model
 
@@ -120,6 +129,7 @@ All API clients share a single `PGEAuthManager` and `aiohttp.ClientSession`. Usa
 ### Authentication status
 
 - Email/password login (Cognito → Apigee) with automatic token renewal; no MFA/CAPTCHA support (fail closed).
+- Cognito rate limits (`Too many requests`) and temporary password-attempt lockouts soft-fail with a shared per-email cooldown — retained sensors/history, no reauth UI, no password→refresh amplify while cooling down.
 - Account number selects which PGE account the entry binds to (matched against login discovery); entry title is `PGE <accountnum>`.
 - Setup validates connectivity with a **HOURLY yesterday** request (not a short DAILY window — those hard-error on the live API).
 - Reauth and **Update credentials** use email/password only (account number stays fixed). Passwords are stored in the Home Assistant config entry when needed as a renewal fallback.
@@ -215,6 +225,7 @@ All long-running services require `entry_id`:
 ## Known limitations
 
 - MFA / CAPTCHA accounts unsupported by design.
+- Cognito login throttle / temporary password lockout is rate-limited and soft-failed (shared cooldown); the integration does not keep hammering InitiateAuth.
 - Hourly day responses include a +1 boundary hour at `day_end`; the integration clips to `[day_start, day_end)`.
 - Full history uses daily/monthly when hourly retention ends (~1 year).
 - DAILY windows under ~31 days may hard-error (`Something unexpected happened`); prefer HOURLY or ≥31d DAILY.

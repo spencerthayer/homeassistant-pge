@@ -9,11 +9,41 @@ from custom_components.pge_energy.exceptions import (
     PGEAuthenticationError,
     PGECaptchaUnsupportedError,
     PGEMfaUnsupportedError,
+    PGERateLimitError,
 )
 from custom_components.pge_energy.portal_auth import (
+    _classify_cognito_error,
     async_login_or_refresh,
     classify_challenge,
 )
+
+
+class TestClassifyCognitoError:
+    def test_too_many_requests(self):
+        with pytest.raises(PGERateLimitError) as excinfo:
+            _classify_cognito_error(
+                {"__type": "TooManyRequestsException", "message": "Too many requests"}
+            )
+        assert excinfo.value.retry_after == 60.0
+
+    def test_password_attempts_exceeded_before_not_authorized(self):
+        with pytest.raises(PGERateLimitError) as excinfo:
+            _classify_cognito_error(
+                {
+                    "__type": "NotAuthorizedException",
+                    "message": "Password attempts exceeded",
+                }
+            )
+        assert excinfo.value.retry_after == 900.0
+
+    def test_incorrect_password_still_auth_error(self):
+        with pytest.raises(PGEAuthenticationError):
+            _classify_cognito_error(
+                {
+                    "__type": "NotAuthorizedException",
+                    "message": "Incorrect username or password.",
+                }
+            )
 
 
 class TestClassifyChallenge:
@@ -165,6 +195,34 @@ class TestLoginOrRefresh:
                 password="secret",
                 refresh_credential=None,
             )
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_does_not_fall_back_to_refresh(self):
+        session = _mock_session_post(
+            [
+                (
+                    400,
+                    {
+                        "__type": "TooManyRequestsException",
+                        "message": "Too many requests",
+                    },
+                )
+            ]
+        )
+        with (
+            patch(
+                "custom_components.pge_energy.portal_auth.aiohttp.ClientSession",
+                return_value=session,
+            ),
+            pytest.raises(PGERateLimitError),
+        ):
+            await async_login_or_refresh(
+                email="user@example.com",
+                password="secret",
+                refresh_credential="must-not-be-used",
+            )
+        # Only the password InitiateAuth — no refresh InitiateAuth / Apigee / GraphQL.
+        assert session.post.call_count == 1
 
     @pytest.mark.asyncio
     async def test_refresh_credential_path(self):

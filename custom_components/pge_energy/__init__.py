@@ -108,6 +108,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
         encrypted_account_number=entry.data.get(CONF_ENCRYPTED_ACCOUNT_NUMBER),
         encrypted_premise_id=entry.data.get(CONF_ENCRYPTED_PREMISE_ID),
         encrypted_sa_id=entry.data.get(CONF_ENCRYPTED_SA_ID),
+        hass=hass,
     )
 
     # Persist immutable account_key on first run / migration.

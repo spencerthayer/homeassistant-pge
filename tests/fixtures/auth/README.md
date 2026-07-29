@@ -9,6 +9,8 @@ Sanitized PGE credential-login fixtures for `portal_auth` / CLI tests.
 | `login_chain.json` | Ordered Hybrid auth chain summary |
 | `cognito_initiate_auth_success.json` | Cognito `USER_PASSWORD_AUTH` success shape |
 | `cognito_initiate_auth_not_authorized.json` | Live-captured reject (`NotAuthorizedException`) |
+| `cognito_initiate_auth_too_many_requests.json` | Live-captured throttle (`TooManyRequestsException`) |
+| `cognito_password_attempts_exceeded.json` | Live-captured lockout (`NotAuthorizedException` + “Password attempts exceeded”) |
 | `cognito_mfa_challenge.json` | Observed MFA challenge (`SMS_MFA`) |
 | `cognito_refresh_token_auth.json` | Cognito `REFRESH_TOKEN_AUTH` renewal |
 | `apigee_token_success.json` | Apigee `pg-token-implicit-aws` exchange |

@@ -51,8 +51,9 @@ HA UI
 2. `portal_auth` login (Cognito `USER_PASSWORD_AUTH` → Apigee bearer → `getAccountInfo`); match the entered account number to discovered accounts (exact or digits-only).
 3. Validate with HOURLY yesterday `GetUsageCompare`; persist email, renewal secret (or password fallback), account id, person id, immutable `account_key`. Best-effort AccountDetail discovery also persists encrypted account / premise / SA ids for programs and ledger. Entry unique id is account-scoped (`pge_account_<id>`). Title/device name: `PGE <accountnum>`.
 4. Keep access token in memory; renew under async lock before GraphQL calls (skew before expiry; forced 401 renew+retry on credential mode). Tokens are short-lived — password/refresh re-login may run nearly every sync.
-5. MFA/CAPTCHA → fail closed. Manual bearer-token paste is removed (legacy `auth_mode=manual_token` entries may still load until reauth upgrades them).
-6. Options → **Update credentials** re-runs login; account number / `account_key` / statistic IDs stay fixed. Reauth is email/password only.
+5. Cognito `TooManyRequests` / “Password attempts exceeded” → `PGERateLimitError` with a shared per-email cooldown (no further InitiateAuth while cooling down; no password→refresh amplify; soft-fail retains sensors without reauth UI). Concurrent `force_renew` waiters coalesce onto one login. See [`AUTH_DISCOVERY.md`](AUTH_DISCOVERY.md).
+6. MFA/CAPTCHA → fail closed. Manual bearer-token paste is removed (legacy `auth_mode=manual_token` entries may still load until reauth upgrades them).
+7. Options → **Update credentials** re-runs login; account number / `account_key` / statistic IDs stay fixed. Reauth is email/password only.
 
 ### Options / Configure
 
@@ -83,7 +84,7 @@ Auth blips and partial poll failures must **not** blank the panel or erase recor
 - Token renew DNS/TLS blips (`PGEConnectionError` during Cognito/Apigee login) soft-fail the same way — they must not raise `UpdateFailed` and blank cold-start sensors.
 - Tip intervals are only replaced when the poll returns new intervals — an empty/failed correction window keeps the prior tip.
 - Entities stay `available` while retained state exists (`PGEBaseEntity.available`), so At a glance / billing keep last-known values.
-- Transient auth failure requests a single reauth flow; it does not unload the entry or clear statistics. Hard `ConfigEntryAuthFailed` only when there is nothing retained yet (first setup) or MFA is permanently unsupported.
+- Transient credential auth failure requests a single reauth flow; it does not unload the entry or clear statistics. Cognito / GraphQL **rate limits** soft-fail without reauth. Hard `ConfigEntryAuthFailed` only when there is nothing retained yet (first setup) or MFA is permanently unsupported.
 
 ### Tiered history / backfill
 

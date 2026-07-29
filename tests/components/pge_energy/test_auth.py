@@ -8,8 +8,10 @@ from custom_components.pge_energy.auth import (
     PGEAuthManager,
     generate_account_key,
     generate_immutable_account_key,
+    set_shared_cognito_rate_limit_until,
 )
-from custom_components.pge_energy.exceptions import PGEAuthenticationError
+from custom_components.pge_energy.const import COGNITO_RATE_LIMIT_UNTIL_KEY, DOMAIN
+from custom_components.pge_energy.exceptions import PGEAuthenticationError, PGERateLimitError
 
 
 class TestAccountKeyGeneration:
@@ -211,3 +213,94 @@ class TestAuthManager:
         assert token == "new-token"
         assert mgr.encrypted_person_id == "enc2"
         assert mgr.refresh_credential == "refresh-2"
+
+    @pytest.mark.asyncio
+    async def test_cognito_cooldown_blocks_renew_without_portal_call(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        hass = MagicMock()
+        hass.data = {DOMAIN: {}}
+        mgr = PGEAuthManager(
+            "tok",
+            "enc",
+            "acct",
+            email="User@Example.com",
+            password="secret",
+            auth_mode="credential",
+            hass=hass,
+        )
+        mgr.mark_cognito_rate_limited(120)
+        with patch(
+            "custom_components.pge_energy.portal_auth.async_login_or_refresh",
+            AsyncMock(),
+        ) as mock_login:
+            with pytest.raises(PGERateLimitError):
+                await mgr.ensure_valid_token(force=True)
+        mock_login.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_shared_email_cooldown_across_managers(self):
+        from unittest.mock import MagicMock
+
+        hass = MagicMock()
+        hass.data = {DOMAIN: {}}
+        until = datetime.now(UTC) + timedelta(seconds=300)
+        set_shared_cognito_rate_limit_until(hass, "a@example.com", until)
+        other = PGEAuthManager(
+            "tok",
+            "enc",
+            "acct2",
+            email="a@example.com",
+            password="secret",
+            auth_mode="credential",
+            hass=hass,
+            token_expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        assert other.cognito_rate_limit_remaining_seconds() > 0
+        assert COGNITO_RATE_LIMIT_UNTIL_KEY in hass.data[DOMAIN]
+
+    @pytest.mark.asyncio
+    async def test_force_renew_coalesces_peer_refresh(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from custom_components.pge_energy.portal_auth import PortalAuthResult
+
+        future = datetime.now(UTC) + timedelta(hours=1)
+        mgr = PGEAuthManager(
+            "old-token",
+            "enc",
+            "acct",
+            token_expires_at=future,
+            email="user@example.com",
+            password="secret",
+            auth_mode="credential",
+        )
+        result = PortalAuthResult(
+            access_token="peer-token",
+            encrypted_person_id="enc",
+            account_ids=["acct"],
+            expires_at=future,
+            refresh_credential=None,
+        )
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_login(**kwargs):  # noqa: ANN003
+            started.set()
+            await release.wait()
+            return result
+
+        with patch(
+            "custom_components.pge_energy.portal_auth.async_login_or_refresh",
+            AsyncMock(side_effect=slow_login),
+        ) as mock_login:
+            first = asyncio.create_task(mgr.force_renew())
+            await started.wait()
+            second = asyncio.create_task(mgr.force_renew())
+            # Let the second waiter queue on the lock, then finish the first renew.
+            await asyncio.sleep(0)
+            release.set()
+            tokens = await asyncio.gather(first, second)
+        assert tokens == ["peer-token", "peer-token"]
+        mock_login.assert_awaited_once()

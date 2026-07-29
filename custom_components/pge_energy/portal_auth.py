@@ -6,6 +6,7 @@ Do not invent request fields beyond that discovery.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -14,11 +15,16 @@ from urllib.parse import urlencode
 
 import aiohttp
 
+from .const import (
+    COGNITO_RATE_LIMIT_DEFAULT_SECONDS,
+    COGNITO_RATE_LIMIT_LOCKOUT_SECONDS,
+)
 from .exceptions import (
     PGEAuthenticationError,
     PGECaptchaUnsupportedError,
     PGEConnectionError,
     PGEMfaUnsupportedError,
+    PGERateLimitError,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -152,10 +158,19 @@ def _classify_cognito_error(payload: dict[str, Any]) -> None:
         raise PGEAuthenticationError("PGE password reset required")
     if "userlambda" in combined and "lock" in combined:
         raise PGEAuthenticationError("PGE account appears locked")
+    # Must run before NotAuthorizedException — lockout uses that __type with this message.
+    if "password attempts exceeded" in combined:
+        raise PGERateLimitError(
+            "PGE identity provider locked password attempts",
+            retry_after=COGNITO_RATE_LIMIT_LOCKOUT_SECONDS,
+        )
+    if "toomanyrequests" in combined or "limitexceeded" in combined:
+        raise PGERateLimitError(
+            "PGE identity provider rate-limited the login",
+            retry_after=COGNITO_RATE_LIMIT_DEFAULT_SECONDS,
+        )
     if "notauthorized" in combined or "usernotfound" in combined:
         raise PGEAuthenticationError("PGE login rejected (incorrect username or password)")
-    if "toomanyrequests" in combined or "limitexceeded" in combined:
-        raise PGEAuthenticationError("PGE identity provider rate-limited the login")
 
 
 async def _post_json(
@@ -298,8 +313,8 @@ async def _login_with_password(
                 },
             )
             break
-        except (PGEMfaUnsupportedError, PGECaptchaUnsupportedError):
-            # Stop immediately — never retry challenges.
+        except (PGEMfaUnsupportedError, PGECaptchaUnsupportedError, PGERateLimitError):
+            # Stop immediately — never retry challenges or Cognito throttle/lockout.
             raise
         except PGEAuthenticationError:
             # Credential reject / lock / reset: do not burn further attempts.
@@ -310,6 +325,7 @@ async def _login_with_password(
             _LOGGER.warning("PGE Cognito connection error on attempt %s", attempt)
             if attempt >= MAX_LOGIN_ATTEMPTS:
                 raise
+            await asyncio.sleep(1)
     if auth_result is None:
         raise last_connection_error or PGEAuthenticationError("PGE login failed")
 
@@ -376,7 +392,8 @@ async def async_login_or_refresh(
         if password:
             try:
                 return await _login_with_password(session, email=email, password=password)
-            except (PGEMfaUnsupportedError, PGECaptchaUnsupportedError):
+            except (PGEMfaUnsupportedError, PGECaptchaUnsupportedError, PGERateLimitError):
+                # Never amplify Cognito throttle/lockout with a second InitiateAuth.
                 raise
             except PGEAuthenticationError:
                 if not refresh_credential:

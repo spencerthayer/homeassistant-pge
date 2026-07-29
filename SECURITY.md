@@ -47,7 +47,8 @@
 - **Sync settings** live in `entry.options` (polling, history, backfill flags, `include_billing` — no passwords).
 - **Update credentials** writes email/password or refresh secret into `entry.data` only (plus best-effort encrypted billing ids); never changes account number, immutable `account_key`, or statistic IDs (account number shown read-only).
 - Reauth uses email/password only (no token paste). Config-entry unique id is account-scoped so the same PGE account cannot be added twice.
-- A failed renew/poll must not wipe already-downloaded usage or billing: sensors keep last-known values, recorder statistics stay, and reauth is requested without destroying history.
+- A failed renew/poll must not wipe already-downloaded usage or billing: sensors keep last-known values, recorder statistics stay, and credential reauth is requested without destroying history.
+- Cognito InitiateAuth throttle / password-attempt lockout is treated as a rate limit (shared per-email cooldown): soft-fail without treating it as bad credentials or opening reauth. See [`AUTH_DISCOVERY.md`](AUTH_DISCOVERY.md).
 
 ## Local CLI vs PGE secrets
 
