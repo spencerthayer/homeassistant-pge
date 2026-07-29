@@ -1,0 +1,35 @@
+Please do not pay. For your records only.
+Amount due: $<D3>.<D2>
+Due date: <D1>/<D2>/<D2>
+<CUSTOMER_NAME>
+Account number <ACCOUNT_ID>
+Service address <SERVICE_ADDRESS>
+Service period <D1>/<D1>/<D2> to<D1>/<D1>/<D2>
+
+Your energy use comparison
+<D1>,<D3>kWhthis month <D2>%fromthis monthlast year <D1>%fromlast month
+
+Meter numberService periodScheduleCurrent read -Previous read=Total use
+<METER_ID><D1>/<D1>/<D2> to<D1>/<D1>/<D2><D1> <D2>,<D3><D2>,<D3><D1>,<D3> kWh
+
+Account charges
+Balance forward<D1>.<D2>
+Previous amount due<D1>/<D2>/<D2><D3>.<D2>
+Payments through<D1>/<D2>/<D2><D3>.<D2> (CR)
+
+My energy use and deliverycharges <D3>.<D2>
+Basic Charge<D2>.<D2>
+Energy Use Charge (<D1>,<D3>.<D3>kWh x $<D1>.<D4>)<D2>.<D2>
+Transmission Charge (<D1>,<D3>.<D3>kWh x $<D1>.<D5>)<D2>.<D2>
+Distribution Charge (<D1>,<D3>.<D3>kWh x $<D1>.<D5>)<D2>.<D2>
+Power Cost Adjustment(<D1>,<D3>.<D3> kWh x $<D1>.<D5>)<D2>.<D2>
+
+Regulatory and utility operationsadjustments<D2>.<D2>
+State required pass-throughsand adjustments<D2>.<D2>
+My selected program chargesand discounts<D1>.<D2>
+Green Future Choice(<D3>.<D6> kWh x $<D1>.<D4>)<D1>.<D2>
+
+City, county and state taxes andinvestments<D1>.<D2>
+City of Portland Tax (<D1>.<D1>%)<D1>.<D2>
+Public Purpose Charge (<D1>.<D1>%)<D1>.<D2>
+Amount due <D1>/<D2>/<D2>$<D3>.<D2>
