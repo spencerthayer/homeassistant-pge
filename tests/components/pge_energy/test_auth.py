@@ -230,12 +230,14 @@ class TestAuthManager:
             hass=hass,
         )
         mgr.mark_cognito_rate_limited(120)
-        with patch(
-            "custom_components.pge_energy.portal_auth.async_login_or_refresh",
-            AsyncMock(),
-        ) as mock_login:
-            with pytest.raises(PGERateLimitError):
-                await mgr.ensure_valid_token(force=True)
+        with (
+            patch(
+                "custom_components.pge_energy.portal_auth.async_login_or_refresh",
+                AsyncMock(),
+            ) as mock_login,
+            pytest.raises(PGERateLimitError),
+        ):
+            await mgr.ensure_valid_token(force=True)
         mock_login.assert_not_awaited()
 
     @pytest.mark.asyncio

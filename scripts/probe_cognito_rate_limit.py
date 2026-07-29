@@ -106,7 +106,8 @@ async def _initiate_auth(
             payload = {"_non_json": text[:200]}
         if not isinstance(payload, dict):
             payload = {"_unexpected": str(type(payload))}
-        hdrs = {k: v for k, v in resp.headers.items() if k.lower() in ("retry-after", "content-type", "x-amzn-errortype")}
+        keep = ("retry-after", "content-type", "x-amzn-errortype")
+        hdrs = {k: v for k, v in resp.headers.items() if k.lower() in keep}
         latency_ms = (time.perf_counter() - started) * 1000.0
         return resp.status, payload, hdrs, latency_ms
 
