@@ -20,6 +20,7 @@
 - [x] Drop `device_class` on hourly tip sensors (`PGEHourlyEnergySensor` / `PGEHourlyCostSensor`) so `state_class=measurement` is HA-valid; units kept; lifetime sensors unchanged — 0.5.48
 - [x] Panel: shrink dual-value PGE est. next bill KPI (`kpi-dual`) to `1.15rem` — 0.5.49
 - [x] Configure → **Panel** (0.6.0): domain Store `pge_energy.panel` for show sidebar / title / icon / require_admin / default landing section; `/pge` stays registered when sidebar hidden; OptionsFlow aborts without touching entry options; never mutate HA/Browser Mod sidebar user-store
+- [x] Bill PDF data feasibility spike: offline `pypdf` text extraction + PII-free normalization/reconciliation prototype, public PGE sample-layout fixture, and 9 focused tests; no runtime/sync/Store changes
 
 ## Follow-ups
 
@@ -33,6 +34,8 @@
 - [ ] Operator UAT 0.5.43: no `Recorder state mismatch …_cost`; `dirty_from` clears; four state-class repairs gone after cleanup and stay gone across a billing sync; `/pge` + Energy still show external billing means
 - [ ] Optional: per-call timeout inside `async_import_with_baseline` / recorder executor jobs if stalls persist under Pi load
 - [ ] Optional: auth-lock wall-clock timeout beyond existing aiohttp bounds (30s GraphQL, 45s portal login)
+- [ ] Bill PDF data: validate the prototype against sanitized real `detailed` and `simplified` downloads; confirm text backing/layout variants and add golden extracted-text fixtures before choosing a runtime parser dependency
+- [ ] Bill PDF data: after the download plan ships, design versioned Store/statistics mappings only for reconciled fields; retain PDFs and last-known metrics when parsing fails, and keep OCR out unless real bills prove image-only
 
 ## Active agents
 

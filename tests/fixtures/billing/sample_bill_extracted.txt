@@ -1,0 +1,41 @@
+Portland General Electric
+Sample Customer
+Account number 0000000000
+Service address 100 Test Street
+Sample City, OR 97000
+Service period 1/11/25 to 2/11/25
+
+Thank you!
+We received your payments totaling $167.89.
+
+Amount due
+$169.50
+Due date
+3/5/25
+
+Your energy use comparison
+790 kWh this month
+
+Account charges
+Balance forward 0.00
+Previous amount due 2/5/25 167.89
+Payments through 2/5/25 167.89 (CR)
+
+My energy use and delivery charges 148.92
+Basic Charge 13.00
+Energy Use Charge (790.000 kWh x $0.0354) 27.97
+Transmission Charge (790.000 kWh x $0.00862) 6.81
+Distribution Charge (790.000 kWh x $0.07014) 55.41
+Power Cost Adjustment (790.000 kWh x $0.05788) 45.73
+
+Regulatory and utility operations adjustments 2.56
+State required pass-throughs and adjustments 11.36
+
+My selected program charges and discounts 1.88
+Green Future Block 1.88
+
+City, county and state taxes and investments 4.78
+City of Sample City Tax (1.5%) 2.39
+Public Purpose Charge (1.5%) 2.39
+
+Amount due 3/5/25 $169.50
