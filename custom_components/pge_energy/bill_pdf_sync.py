@@ -302,15 +302,17 @@ async def async_sync_bill_pdfs(
     _set_phase(coordinator, SYNC_PHASE_IMPORTING_PDF_STATISTICS, "PDFs — importing statement metrics")
     safe_records = canonical_safe_records(store)
     pending = any(
-        entry.canonical_form and normalized_from_entry(entry) is not None and entry.statistics_imported_at is None
-        for entry in store.bill_pdf_index.values()
+        bill_row.canonical_form
+        and normalized_from_entry(bill_row) is not None
+        and bill_row.statistics_imported_at is None
+        for bill_row in store.bill_pdf_index.values()
     )
     if safe_records and pending:
         try:
             await async_import_bill_pdf_statistics(hass, account_key, account_id, safe_records)
-            for entry in store.bill_pdf_index.values():
-                if entry.canonical_form and normalized_from_entry(entry) is not None:
-                    mark_bill_pdf_statistics_imported(entry, when=now)
+            for bill_row in store.bill_pdf_index.values():
+                if bill_row.canonical_form and normalized_from_entry(bill_row) is not None:
+                    mark_bill_pdf_statistics_imported(bill_row, when=now)
             stats["statistics_imported"] = len(safe_records)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("Bill PDF statistics import soft-failed: %s", exc.__class__.__name__)

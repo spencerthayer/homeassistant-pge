@@ -18,7 +18,26 @@ STORAGE_VERSION = 2
 STORAGE_KEY = f"{DOMAIN}.import_state"
 
 # One Store per entry so Store._write_lock serializes concurrent saves.
-_STORES: dict[str, Store] = {}
+_STORES: dict[str, ImportStateStore] = {}
+
+
+class ImportStateStore(Store):
+    """HA Store with v1 → v2 migration for bill PDF index fields."""
+
+    async def _async_migrate_func(
+        self,
+        old_major_version: int,
+        old_minor_version: int,
+        old_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        if old_major_version < STORAGE_VERSION:
+            migrated = dict(old_data)
+            migrated.setdefault("bill_pdf_index", {})
+            migrated.setdefault("bill_pdf_last_success", None)
+            migrated.setdefault("bill_pdf_last_error", None)
+            migrated["schema_version"] = STORAGE_VERSION
+            return migrated
+        return old_data
 
 
 @dataclass
@@ -113,10 +132,10 @@ def _load_bill_pdf_index(data: dict[str, Any]) -> dict[str, BillPdfIndexEntry]:
     return {str(k): BillPdfIndexEntry.from_dict(v) for k, v in raw.items()}
 
 
-def _store_for_entry(hass: HomeAssistant, entry_id: str) -> Store:
+def _store_for_entry(hass: HomeAssistant, entry_id: str) -> ImportStateStore:
     store = _STORES.get(entry_id)
     if store is None or store.hass is not hass:
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry_id}")
+        store = ImportStateStore(hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry_id}")
         _STORES[entry_id] = store
     return store
 
