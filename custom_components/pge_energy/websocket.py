@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
+from .bill_pdf_statistics import BILL_PDF_METRIC_SUFFIXES
 from .const import (
     BINARY_UNIQUE_AUTOPAY,
     BINARY_UNIQUE_PAPERLESS_BILL,
@@ -22,6 +23,10 @@ from .const import (
     CONF_ACCOUNT_ID,
     CONF_ACCOUNT_KEY,
     CONF_AUTO_BACKFILL,
+    CONF_BILL_PDF_FORM,
+    CONF_BILL_PDF_RETENTION,
+    CONF_BILL_PDF_ROLLING_COUNT,
+    CONF_DOWNLOAD_BILL_PDFS,
     CONF_HISTORY_MODE,
     CONF_HISTORY_START_DATE,
     CONF_HOURLY_BACKFILL_DAYS,
@@ -32,6 +37,10 @@ from .const import (
     CONF_POLLING_INTERVAL_UNIT,
     CONF_SYNC_LOCAL_TIME,
     DEFAULT_AUTO_BACKFILL,
+    DEFAULT_BILL_PDF_FORM,
+    DEFAULT_BILL_PDF_RETENTION,
+    DEFAULT_BILL_PDF_ROLLING_COUNT,
+    DEFAULT_DOWNLOAD_BILL_PDFS,
     DEFAULT_HISTORY_MODE,
     DEFAULT_HOURLY_BACKFILL_DAYS,
     DEFAULT_INCLUDE_BILLING,
@@ -197,6 +206,10 @@ def _entity_ids(hass: HomeAssistant, account_key: str) -> dict[str, str | None]:
     return entities
 
 
+def _bill_pdf_statistic_ids(account_key: str) -> dict[str, str]:
+    return {key: f"{DOMAIN}:{account_key}{suffix}" for key, suffix in BILL_PDF_METRIC_SUFFIXES.items()}
+
+
 @callback
 def _account_payload(hass: HomeAssistant, entry_id: str, coordinator: PGECoordinator) -> dict[str, Any]:
     entry = coordinator.entry
@@ -222,8 +235,16 @@ def _account_payload(hass: HomeAssistant, entry_id: str, coordinator: PGECoordin
             "history_mode": str(get_entry_option(entry, CONF_HISTORY_MODE, DEFAULT_HISTORY_MODE)),
             "history_start_date": get_entry_option(entry, CONF_HISTORY_START_DATE, None),
             "hourly_backfill_days": get_entry_option(entry, CONF_HOURLY_BACKFILL_DAYS, DEFAULT_HOURLY_BACKFILL_DAYS),
+            "download_bill_pdfs": bool(get_entry_option(entry, CONF_DOWNLOAD_BILL_PDFS, DEFAULT_DOWNLOAD_BILL_PDFS)),
+            "bill_pdf_form": str(get_entry_option(entry, CONF_BILL_PDF_FORM, DEFAULT_BILL_PDF_FORM)),
+            "bill_pdf_retention": str(get_entry_option(entry, CONF_BILL_PDF_RETENTION, DEFAULT_BILL_PDF_RETENTION)),
+            "bill_pdf_rolling_count": int(
+                get_entry_option(entry, CONF_BILL_PDF_ROLLING_COUNT, DEFAULT_BILL_PDF_ROLLING_COUNT)
+            ),
         },
         "statistic_ids": _statistic_ids(account_key),
+        "bill_pdf_statistic_ids": _bill_pdf_statistic_ids(account_key),
+        "bill_pdf": dict(coordinator.bill_pdf_summary or {}),
         "entity_ids": _entity_ids(hass, account_key),
     }
 

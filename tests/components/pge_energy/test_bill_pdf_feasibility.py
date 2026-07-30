@@ -14,10 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts.bill_pdf_extract import (
-    BillParseHints,
-    PDFTextExtractionError,
-    as_history_samples,
+from custom_components.pge_energy.bill_pdf_models import BillPdfParseHints
+from custom_components.pge_energy.bill_pdf_parser import (
+    BillPdfTextExtractionError,
+    as_statement_samples,
     extract_pdf_text,
     normalize_bill_text,
 )
@@ -86,8 +86,8 @@ def _hints(
     *,
     amount_due: str = "169.50",
     total_kwh: str = "790",
-) -> BillParseHints:
-    return BillParseHints(
+) -> BillPdfParseHints:
+    return BillPdfParseHints(
         statement_date=date(2025, 2, 13),
         expected_amount_due=Decimal(amount_due),
         expected_total_kwh=Decimal(total_kwh),
@@ -129,11 +129,11 @@ class TestPDFTextExtraction:
         assert "Amount due $169.50" in extracted.text
 
     def test_rejects_non_pdf_bytes(self):
-        with pytest.raises(PDFTextExtractionError, match="not a PDF"):
+        with pytest.raises(BillPdfTextExtractionError, match="not a PDF"):
             extract_pdf_text(b"<html>portal error</html>")
 
     def test_marks_image_only_or_blank_pdf_as_not_extractable(self):
-        with pytest.raises(PDFTextExtractionError, match="no extractable text"):
+        with pytest.raises(BillPdfTextExtractionError, match="no extractable text"):
             extract_pdf_text(_build_text_pdf([]))
 
     def test_keeps_rotated_text_that_layout_mode_omits(self):
@@ -152,7 +152,7 @@ class TestBillNormalization:
     def test_real_single_service_golden_layout_reconciles(self):
         bill = normalize_bill_text(
             _hydrate_masked_fixture("real_single_service_layout_masked.txt"),
-            hints=BillParseHints(
+            hints=BillPdfParseHints(
                 statement_date=date(2011, 1, 15),
                 expected_amount_due=Decimal("111.11"),
                 expected_total_kwh=Decimal("1111"),
@@ -180,7 +180,7 @@ class TestBillNormalization:
     def test_real_multi_service_golden_layout_reconciles(self):
         bill = normalize_bill_text(
             _hydrate_masked_fixture("real_multi_service_layout_masked.txt"),
-            hints=BillParseHints(
+            hints=BillPdfParseHints(
                 statement_date=date(2011, 1, 15),
                 expected_amount_due=Decimal("111.11"),
                 expected_total_kwh=Decimal("122"),
@@ -387,7 +387,7 @@ class TestBillNormalization:
             "Service period 1/11/25 to 2/11/25",
             "Service period 1/12/25 to2/11/25",
         )
-        hints = BillParseHints(
+        hints = BillPdfParseHints(
             statement_date=date(2025, 2, 13),
             expected_amount_due=Decimal("169.50"),
             expected_total_kwh=Decimal("790"),
@@ -423,7 +423,7 @@ class TestBillNormalization:
         assert bill.warnings == ()
         assert "energy_charge_sum_mismatch" in bill.advisories
         assert bill.safe_to_publish is True
-        assert as_history_samples(bill)
+        assert as_statement_samples(bill)
 
     def test_multi_service_overall_period_can_contain_graphql_segment(self):
         text = (
@@ -471,10 +471,10 @@ class TestBillNormalization:
     def test_history_samples_are_statement_dated_and_unit_normalized(self):
         bill = normalize_bill_text(_sample_text(), hints=_hints())
 
-        samples = {sample.key: sample for sample in as_history_samples(bill)}
+        samples = {sample.metric_key: sample for sample in as_statement_samples(bill)}
 
-        assert samples["pdf_amount_due"].start == date(2025, 2, 13)
-        assert samples["pdf_amount_due"].value == Decimal("169.50")
-        assert samples["pdf_amount_due"].unit == "USD"
-        assert samples["pdf_total_kwh"].unit == "kWh"
-        assert samples["pdf_basic_charge"].value == Decimal("13.00")
+        assert samples["amount_due"].start == date(2025, 2, 13)
+        assert samples["amount_due"].value == Decimal("169.50")
+        assert samples["amount_due"].unit == "USD"
+        assert samples["total_kwh"].unit == "kWh"
+        assert samples["basic_charge"].value == Decimal("13.00")

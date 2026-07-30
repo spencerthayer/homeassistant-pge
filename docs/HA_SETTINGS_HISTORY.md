@@ -16,6 +16,10 @@ Settings → Devices & Services → **Portland General Electric Energy Usage** �
 | Include cost | on | Import interval cost into statistics / sensors. |
 | Include diagnostics | on | Expose diagnostic sensors (auth expiry, last API error, sync progress, etc.). |
 | Import billing & programs (`include_billing`) | on | Soft-fail billing/programs sync after usage poll. |
+| Download bill PDFs (`download_bill_pdfs`) | off | Opt-in portal PDF fetch to `www/pge_energy/…` (`/local/…`). Requires `include_billing`. Parsing and 18 `_bill_pdf_*` statistics import run automatically when enabled. |
+| Bill PDF form (`bill_pdf_form`) | `detailed` | `detailed` or `simplified` (maps to portal REST flags). |
+| Bill PDF retention (`bill_pdf_retention`) | `latest` | Binary file retention: `latest`, `all_imported`, or `rolling_n`. Normalized Store records and recorder history are kept independently. |
+| Bill PDF rolling count (`bill_pdf_rolling_count`) | `12` | When retention is `rolling_n`, keep this many newest statement PDF files. |
 | Backfill concurrency | `2` | Parallel day fetches during backfill. |
 
 PGE publishes usage **overnight**, not continuously. A daytime-stuck **Latest available interval** near ~01:00 Pacific is expected.
@@ -44,7 +48,7 @@ After start, a persistent notification links to the device (`PGE <accountnum>`).
 | Sensor | Role |
 |--------|------|
 | Sync status | `idle` / `refreshing` / `backfilling` / `complete` / `failed` |
-| Sync phase | `idle` / `correction` / `hourly` / `daily` / `monthly` / billing phases |
+| Sync phase | `idle` / `correction` / `hourly` / `daily` / `monthly` / billing phases / `downloading_pdfs` / `parsing_pdfs` / `importing_pdf_statistics` |
 | Sync progress | `0`–`100` % |
 | Sync ETA | Remaining seconds (unknown until enough samples) |
 | Sync detail | Short line (e.g. `Hourly 42/120`) |
@@ -58,6 +62,17 @@ ETA is a linear extrapolation from completed work units; tier transitions make e
 
 Email / password only. Account number is read-only after setup. Statistic IDs and immutable `account_key` do not change.
 
-## Bill PDFs (deferred)
+## Bill PDFs (v0.7.0)
 
-v0.5 ships **structured** billing fields only (amounts, kWh, dates, enrollment). Portal bill PDF download via Apigee REST (`POST …/pge-bill-api/pdf/bills`) is a future option — not exposed in Configure today. When added, it will be an opt-in switch with retention controls so full-history PDF backfill does not spike disk use.
+Opt-in download + local parsing of portal statement PDFs. **Default off.**
+
+| Surface | Notes |
+|---------|--------|
+| Configure → Sync settings | Master toggle, form, retention, rolling count. |
+| Services | `pge_energy.download_bill_pdf` (by known `bill_date` from Store index); `pge_energy.reparse_bill_pdfs` (retained files only, no network). |
+| Sensors | `bill_pdf_parse_status` (diagnostic); 14 disabled-by-default line-item sensors; current bill amount/kWh attributes include PDF link/status when available. |
+| Statistics | 18 external sum series `pge_energy:<account_key>_bill_pdf_*` (statement-dated). GraphQL `_bill_amount` / `_bill_kwh` remain canonical. |
+| Panel `/pge` | **View bill PDF** link, parse badge, **Statement details (PDF)** table when a safe normalized record exists. |
+| Security | PDFs under `www/pge_energy/` are served at `/local/…` without HA login if the instance is exposed. See `SECURITY.md`. |
+
+Sync phases when enabled: `downloading_pdfs` → `parsing_pdfs` → `importing_pdf_statistics` (after structured billing). Failures are soft: retained PDFs, last-known normalized data, and GraphQL billing sensors stay available.

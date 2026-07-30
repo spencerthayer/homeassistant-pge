@@ -37,7 +37,11 @@ from .const import (
     CONF_AUTO_BACKFILL,
     CONF_BACKFILL_CONCURRENCY,
     CONF_BEARER_TOKEN,
+    CONF_BILL_PDF_FORM,
+    CONF_BILL_PDF_RETENTION,
+    CONF_BILL_PDF_ROLLING_COUNT,
     CONF_CORRECTION_WINDOW,
+    CONF_DOWNLOAD_BILL_PDFS,
     CONF_EMAIL,
     CONF_ENCRYPTED_ACCOUNT_NUMBER,
     CONF_ENCRYPTED_PERSON_ID,
@@ -58,7 +62,11 @@ from .const import (
     CONF_TOKEN_EXPIRES_AT,
     DEFAULT_AUTO_BACKFILL,
     DEFAULT_BACKFILL_CONCURRENCY,
+    DEFAULT_BILL_PDF_FORM,
+    DEFAULT_BILL_PDF_RETENTION,
+    DEFAULT_BILL_PDF_ROLLING_COUNT,
     DEFAULT_CORRECTION_WINDOW,
+    DEFAULT_DOWNLOAD_BILL_PDFS,
     DEFAULT_HISTORY_FLOOR_ISO,
     DEFAULT_HISTORY_MODE,
     DEFAULT_HOURLY_BACKFILL_DAYS,
@@ -525,6 +533,45 @@ def _options_schema(entry: config_entries.ConfigEntry) -> vol.Schema:
                 default=bool(get_entry_option(entry, CONF_INCLUDE_BILLING, DEFAULT_INCLUDE_BILLING)),
             ): BooleanSelector(),
             vol.Required(
+                CONF_DOWNLOAD_BILL_PDFS,
+                default=bool(get_entry_option(entry, CONF_DOWNLOAD_BILL_PDFS, DEFAULT_DOWNLOAD_BILL_PDFS)),
+            ): BooleanSelector(),
+            vol.Required(
+                CONF_BILL_PDF_FORM,
+                default=str(get_entry_option(entry, CONF_BILL_PDF_FORM, DEFAULT_BILL_PDF_FORM)),
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value="detailed", label="Detailed"),
+                        SelectOptionDict(value="simplified", label="Simplified"),
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_BILL_PDF_RETENTION,
+                default=str(get_entry_option(entry, CONF_BILL_PDF_RETENTION, DEFAULT_BILL_PDF_RETENTION)),
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value="latest", label="Latest statement only"),
+                        SelectOptionDict(value="all_imported", label="All imported bills"),
+                        SelectOptionDict(value="rolling_n", label="Rolling count"),
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_BILL_PDF_ROLLING_COUNT,
+                default=int(get_entry_option(entry, CONF_BILL_PDF_ROLLING_COUNT, DEFAULT_BILL_PDF_ROLLING_COUNT)),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=1,
+                    max=120,
+                    mode=NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Required(
                 CONF_BACKFILL_CONCURRENCY,
                 default=int(get_entry_option(entry, CONF_BACKFILL_CONCURRENCY, DEFAULT_BACKFILL_CONCURRENCY)),
             ): NumberSelector(
@@ -718,6 +765,12 @@ class PGEOptionsFlow(config_entries.OptionsFlow):
                     CONF_INCLUDE_COST: bool(user_input[CONF_INCLUDE_COST]),
                     CONF_INCLUDE_DIAGNOSTICS: bool(user_input[CONF_INCLUDE_DIAGNOSTICS]),
                     CONF_INCLUDE_BILLING: bool(user_input.get(CONF_INCLUDE_BILLING, DEFAULT_INCLUDE_BILLING)),
+                    CONF_DOWNLOAD_BILL_PDFS: bool(user_input.get(CONF_DOWNLOAD_BILL_PDFS, DEFAULT_DOWNLOAD_BILL_PDFS)),
+                    CONF_BILL_PDF_FORM: str(user_input.get(CONF_BILL_PDF_FORM, DEFAULT_BILL_PDF_FORM)),
+                    CONF_BILL_PDF_RETENTION: str(user_input.get(CONF_BILL_PDF_RETENTION, DEFAULT_BILL_PDF_RETENTION)),
+                    CONF_BILL_PDF_ROLLING_COUNT: int(
+                        user_input.get(CONF_BILL_PDF_ROLLING_COUNT, DEFAULT_BILL_PDF_ROLLING_COUNT)
+                    ),
                     CONF_BACKFILL_CONCURRENCY: int(user_input[CONF_BACKFILL_CONCURRENCY]),
                 }
                 return self.async_create_entry(title="", data=options)

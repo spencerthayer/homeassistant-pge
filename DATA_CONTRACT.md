@@ -220,15 +220,19 @@ Backs the portal “Current Use” card (est. current charges, billing-cycle day
 
 - **Status:** `getProgramsEnrollmentStatusDetails` with `{ encryptedAccountNumber, encryptedPremiseId, encryptedSaId }`.
 - **Detail ops (best-effort):** Peak Time (`encryptedAccountNumber` + `ptrMockServerDate: ""`), Renewables (`encryptedServiceAgreementId`), TOD (`encryptedAccountNumber` + `encryptedServiceAgreementId`), Smart Thermostat (`encryptedAccountNumber`).
-- **HA import:** enrollment flags + YTD / on-bill flex earnings; dual-publish mean series for YTD savings. PDF bill download is deferred (see `docs/HA_SETTINGS_HISTORY.md`).
+- **HA import:** enrollment flags + YTD / on-bill flex earnings; dual-publish mean series for YTD savings. Bill PDF download is opt-in (`download_bill_pdfs`, v0.7+).
 
-### Bill PDF REST / parsing feasibility (probed, not shipped)
+### Bill PDF REST / normalized parsing (shipped v0.7.0)
 
 - **Download:** `POST https://apix.portlandgeneral.com/pge-bill-api/pdf/bills` with the Apigee bearer, portal Origin/Referer, and `{ encryptedBillId, isSummary: false, isNonDetailed: false }` for the detailed form.
 - **Live matrix (2026-07-28):** three recent bills in both `detailed` and `simplified` form (six PDFs total), including a move/multi-meter statement. All were valid, unencrypted, text-backed letter PDFs (2-4 pages / ~121-145 KB); OCR was not required. `pypdf` layout mode omits rotated text, so extraction keeps layout and plain variants separate, reconciles core fields across both, and merges complementary metric keys without double-counting values across variants.
 - **Normalized contract:** statement/due/service dates, amount due, total kWh, multi-service provenance, and 16 USD metric families (balance/payment; energy/delivery totals and primary components; regulatory/pass-through/program/Green Future/tax totals). All six live PDFs reconciled their core amount/kWh/period identity against GraphQL. Missing/mismatched core fields block publication; incomplete known-line-item arithmetic and a GraphQL segment period contained by a multi-service PDF period are explicit non-blocking advisories.
 - **Golden fixtures:** public-sample arithmetic plus digit-tokenized single-service and multi-service layouts cover rotated fallback text, glued labels/values, `for N days`, detailed/simplified variants, multiple meter totals, and complementary extraction modes.
-- **Privacy:** raw PDF text contains account/address data. Serialization omits raw text and personal identifiers; committed golden fixtures replace all names, addresses, account/meter IDs, dates, usage, rates, and dollar values. Raw live PDFs/renders remain temporary and are deleted after verification.
+- **Privacy:** raw PDF text contains account/address data. Runtime Store/WS/diagnostics never persist raw text or PII; committed golden fixtures are digit-tokenized. Files live under `www/pge_energy/…` (`/local/…`, unauthenticated if HA is exposed).
+
+### Bill PDF statistic suffixes (external sum series, statement-dated)
+
+When parsing reconciles: `_bill_pdf_amount_due`, `_bill_pdf_total_kwh`, plus 16 USD line-item `_bill_pdf_*` ids (see `bill_pdf_statistics.py`). Distinct from GraphQL `_bill_amount` / `_bill_kwh`.
 
 ### Billing statistics suffixes
 

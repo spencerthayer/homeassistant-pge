@@ -12,6 +12,7 @@ from .const import (
     CONF_ACCOUNT_ID,
     CONF_AUTH_MODE,
     CONF_BEARER_TOKEN,
+    CONF_DOWNLOAD_BILL_PDFS,
     CONF_EMAIL,
     CONF_ENCRYPTED_PERSON_ID,
     CONF_PASSWORD,
@@ -50,6 +51,7 @@ TO_REDACT = {
     "email",
     "password",
     "refresh_credential",
+    "encrypted_bill_id",
 }
 
 
@@ -94,6 +96,14 @@ async def async_get_config_entry_diagnostics(
             "cost": async_resolve_sensor_entity_id(hass, coordinator.account_key, ENTITY_UNIQUE_COST),
             "temperature": async_resolve_sensor_entity_id(hass, coordinator.account_key, ENTITY_UNIQUE_TEMPERATURE),
         },
+        "bill_pdf": {
+            "download_enabled": bool(get_entry_option(entry, CONF_DOWNLOAD_BILL_PDFS, False)),
+            "indexed_bills": len(coordinator.import_store.bill_pdf_index),
+            "last_success": coordinator.import_store.bill_pdf_last_success,
+            "last_error": coordinator.import_store.bill_pdf_last_error,
+            "parse_status": (coordinator.bill_pdf_summary or {}).get("parse_status"),
+        },
     }
 
-    return {"config_entry_data": async_redact_data(dict(entry.data), TO_REDACT), "diagnostics": data}
+    redacted = async_redact_data(dict(entry.data), TO_REDACT | {"encrypted_bill_id"})
+    return {"config_entry_data": redacted, "diagnostics": data}

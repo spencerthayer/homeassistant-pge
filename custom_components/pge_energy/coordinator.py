@@ -155,6 +155,7 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.billing_freshness: BillingFreshness = BillingFreshness()
         self.lifetime_payments_usd: float | None = None
         self.lifetime_billed_usd: float | None = None
+        self.bill_pdf_summary: dict[str, Any] = {}
         # async_update_entry for token persistence must not trigger options reload.
         self._skip_reload_on_next_update = False
         # Debounce reauth flows so a flapping Cognito blip does not spam the UI.

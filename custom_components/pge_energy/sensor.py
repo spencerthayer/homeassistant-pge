@@ -23,6 +23,8 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .bill_pdf_statistics import BILL_PDF_METRIC_SUFFIXES, get_bill_pdf_statistic_suffix
+from .bill_pdf_store import normalized_from_entry
 from .billing_models import BillDetails, EnergyTrackerEstimates
 from .const import (
     CONF_INCLUDE_BILLING,
@@ -34,6 +36,7 @@ from .const import (
     ENTITY_UNIQUE_AMOUNT_DUE,
     ENTITY_UNIQUE_BILL_AVG_TEMPERATURE,
     ENTITY_UNIQUE_BILL_CURRENT_CHARGES,
+    ENTITY_UNIQUE_BILL_PDF_PARSE_STATUS,
     ENTITY_UNIQUE_BILL_PREVIOUS_BALANCE,
     ENTITY_UNIQUE_BILLING_CYCLE_DAY,
     ENTITY_UNIQUE_BILLING_CYCLE_TOTAL_DAYS,
@@ -175,10 +178,39 @@ async def async_setup_entry(
                 PGEBillingCycleDaySensor(coordinator, account_key),
                 PGEBillingCycleTotalDaysSensor(coordinator, account_key),
                 PGEBillingLastSyncSensor(coordinator, account_key),
+                PGEBillPdfParseStatusSensor(coordinator, account_key),
             ]
         )
+        entities.extend(PGEBillPdfLineItemSensor.build_all(coordinator, account_key))
 
     async_add_entities(entities)
+
+
+def _bill_pdf_attrs(coordinator: PGECoordinator) -> dict[str, Any]:
+    summary = coordinator.bill_pdf_summary or {}
+    attrs: dict[str, Any] = {}
+    if not summary:
+        return attrs
+    if summary.get("url"):
+        attrs["pdf_url"] = summary["url"]
+    if summary.get("path"):
+        attrs["pdf_path"] = summary["path"]
+    if summary.get("form"):
+        attrs["bill_pdf_form"] = summary["form"]
+    if summary.get("parse_status"):
+        attrs["pdf_parse_status"] = summary["parse_status"]
+    if summary.get("parser_version") is not None:
+        attrs["pdf_parser_version"] = summary["parser_version"]
+    if summary.get("source_sha256_prefix"):
+        attrs["pdf_source_sha256"] = summary["source_sha256_prefix"]
+    if summary.get("warnings"):
+        attrs["pdf_warnings"] = summary["warnings"]
+    if summary.get("advisories"):
+        attrs["pdf_advisories"] = summary["advisories"]
+    suffix = get_bill_pdf_statistic_suffix("amount_due")
+    if suffix:
+        attrs["pdf_amount_due_statistic_id"] = _get_statistic_id(coordinator.account_key, suffix)
+    return attrs
 
 
 class _StatisticLinkedSensor(PGEBaseEntity, SensorEntity):
@@ -707,10 +739,12 @@ class PGECurrentBillAmountSensor(PGEBaseEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        return {
+        attrs = {
             "account_key": self._account_key,
             "external_statistic_id": _get_statistic_id(self._account_key, STATISTIC_ID_SUFFIX_BILL_AMOUNT),
         }
+        attrs.update(_bill_pdf_attrs(self.coordinator))
+        return attrs
 
     @property
     def native_value(self) -> float | None:
@@ -732,7 +766,16 @@ class PGECurrentBillKwhSensor(PGEBaseEntity, SensorEntity):
 
     def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
         super().__init__(coordinator)
+        self._account_key = account_key
         self._attr_unique_id = f"{account_key}_{ENTITY_UNIQUE_CURRENT_BILL_KWH}"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        suffix = get_bill_pdf_statistic_suffix("total_kwh")
+        attrs = _bill_pdf_attrs(self.coordinator)
+        if suffix:
+            attrs["pdf_total_kwh_statistic_id"] = _get_statistic_id(self._account_key, suffix)
+        return attrs
 
     @property
     def native_value(self) -> float | None:
@@ -984,3 +1027,93 @@ class PGEBillingLastSyncSensor(PGEBaseEntity, SensorEntity):
     @property
     def native_value(self) -> datetime | None:
         return self.coordinator.billing_freshness.last_success
+
+
+class PGEBillPdfParseStatusSensor(PGEBaseEntity, SensorEntity):
+    _attr_translation_key = "bill_pdf_parse_status"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_unique_id: str
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator)
+        self._account_key = account_key
+        self._attr_unique_id = f"{account_key}_{ENTITY_UNIQUE_BILL_PDF_PARSE_STATUS}"
+
+    @property
+    def native_value(self) -> str | None:
+        summary = self.coordinator.bill_pdf_summary or {}
+        return summary.get("parse_status")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        store = self.coordinator.import_store
+        return {
+            "bill_pdf_last_success": store.bill_pdf_last_success,
+            "bill_pdf_last_error": store.bill_pdf_last_error,
+            "indexed_bills": len(store.bill_pdf_index),
+        }
+
+
+class PGEBillPdfLineItemSensor(PGEBaseEntity, SensorEntity):
+    """Latest safe PDF line-item value; disabled by default to reduce clutter."""
+
+    _attr_state_class = None
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(
+        self,
+        coordinator: PGECoordinator,
+        account_key: str,
+        metric_key: str,
+        *,
+        label: str,
+        unit: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._account_key = account_key
+        self._metric_key = metric_key
+        self._label = label
+        self._attr_native_unit_of_measurement = unit if unit != "kWh" else UnitOfEnergy.KILO_WATT_HOUR
+        if unit == "USD":
+            self._attr_device_class = SensorDeviceClass.MONETARY
+        elif unit == "kWh":
+            self._attr_device_class = SensorDeviceClass.ENERGY
+        self._attr_unique_id = f"{account_key}_bill_pdf_{metric_key}"
+        self._attr_translation_key = f"bill_pdf_{metric_key}"
+
+    @classmethod
+    def build_all(cls, coordinator: PGECoordinator, account_key: str) -> list[PGEBillPdfLineItemSensor]:
+        from .bill_pdf_statistics import _BILL_PDF_METRIC_LABELS
+
+        sensors: list[PGEBillPdfLineItemSensor] = []
+        for metric_key in BILL_PDF_METRIC_SUFFIXES:
+            if metric_key in {"amount_due", "total_kwh"}:
+                continue
+            label = _BILL_PDF_METRIC_LABELS.get(metric_key, metric_key)
+            unit = "kWh" if metric_key == "total_kwh" else "USD"
+            sensors.append(cls(coordinator, account_key, metric_key, label=label, unit=unit))
+        return sensors
+
+    @property
+    def native_value(self) -> float | None:
+        store = self.coordinator.import_store
+        if not store.bill_pdf_index:
+            return None
+        latest = max(store.bill_pdf_index.values(), key=lambda e: e.bill_date)
+        record = normalized_from_entry(latest)
+        if record is None or not record.safe_to_publish:
+            return None
+        if self._metric_key == "amount_due":
+            return float(record.amount_due) if record.amount_due is not None else None
+        if self._metric_key == "total_kwh":
+            return float(record.total_kwh) if record.total_kwh is not None else None
+        metric = record.metrics.get(self._metric_key)
+        return float(metric.value) if metric is not None else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        suffix = get_bill_pdf_statistic_suffix(self._metric_key)
+        attrs: dict[str, Any] = {"label": self._label}
+        if suffix:
+            attrs["external_statistic_id"] = _get_statistic_id(self._account_key, suffix)
+        return attrs

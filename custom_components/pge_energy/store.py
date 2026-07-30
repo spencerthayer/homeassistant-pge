@@ -9,11 +9,12 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
+from .bill_pdf_models import BillPdfIndexEntry
 from .const import DOMAIN, IMPORT_STATE_SAVE_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
 
-STORAGE_VERSION = 1
+STORAGE_VERSION = 2
 STORAGE_KEY = f"{DOMAIN}.import_state"
 
 # One Store per entry so Store._write_lock serializes concurrent saves.
@@ -55,9 +56,15 @@ class ImportStoreData:
     # One-time clear of entity statistics for monetary mean sensors that no
     # longer carry a state_class (stops STATE_CLASS_REMOVED_ISSUE repairs).
     billing_mirror_cleanup_done: bool = False
+    # Bill PDF index and phase summaries (binary retention independent of normalized data).
+    bill_pdf_index: dict[str, BillPdfIndexEntry] = field(default_factory=dict)
+    bill_pdf_last_success: str | None = None
+    bill_pdf_last_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["bill_pdf_index"] = {k: v.to_dict() for k, v in self.bill_pdf_index.items()}
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> ImportStoreData:
@@ -93,7 +100,17 @@ class ImportStoreData:
             billing_failed_pages=list(data.get("billing_failed_pages") or []),
             billing_last_error=data.get("billing_last_error"),
             billing_mirror_cleanup_done=bool(data.get("billing_mirror_cleanup_done", False)),
+            bill_pdf_index=_load_bill_pdf_index(data),
+            bill_pdf_last_success=data.get("bill_pdf_last_success"),
+            bill_pdf_last_error=data.get("bill_pdf_last_error"),
         )
+
+
+def _load_bill_pdf_index(data: dict[str, Any]) -> dict[str, BillPdfIndexEntry]:
+    raw = data.get("bill_pdf_index") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): BillPdfIndexEntry.from_dict(v) for k, v in raw.items()}
 
 
 def _store_for_entry(hass: HomeAssistant, entry_id: str) -> Store:

@@ -78,6 +78,22 @@ ENTRY_SCHEMA = vol.Schema(
     }
 )
 
+DOWNLOAD_BILL_PDF_SCHEMA = vol.Schema(
+    {
+        vol.Required("entry_id"): cv.string,
+        vol.Required("bill_date"): cv.string,
+        vol.Optional("form"): vol.In({"detailed", "simplified"}),
+        vol.Optional("force", default=False): cv.boolean,
+    }
+)
+
+REPARSE_BILL_PDFS_SCHEMA = vol.Schema(
+    {
+        vol.Required("entry_id"): cv.string,
+        vol.Optional("bill_date"): cv.string,
+    }
+)
+
 
 def _parse_expires_at(raw: str | None) -> datetime | None:
     if not raw:
@@ -410,10 +426,56 @@ def _async_setup_services(hass: HomeAssistant) -> None:
             return
         _LOGGER.info("Import checkpoint reset for %s", coordinator.account_key)
 
+    async def async_download_bill_pdf(call: ServiceCall) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        from .bill_pdf_sync import async_sync_bill_pdfs
+
+        entry_id = call.data["entry_id"]
+        bill_date = str(call.data["bill_date"])
+        force = bool(call.data.get("force", False))
+        coordinator = _coordinator_for_entry(hass, entry_id)
+        if coordinator is None:
+            raise HomeAssistantError("Config entry not found")
+        if bill_date not in coordinator.import_store.bill_pdf_index:
+            raise HomeAssistantError(f"Unknown bill date: {bill_date}")
+        try:
+            await async_sync_bill_pdfs(
+                hass,
+                coordinator,
+                extra_bill_dates={bill_date},
+                force_bill_dates={bill_date} if force else None,
+            )
+        except Exception as exc:
+            raise HomeAssistantError(f"Bill PDF download failed: {exc.__class__.__name__}") from exc
+
+    async def async_reparse_bill_pdfs(call: ServiceCall) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        from .bill_pdf_sync import async_reparse_bill_pdfs
+
+        entry_id = call.data["entry_id"]
+        bill_date = call.data.get("bill_date")
+        coordinator = _coordinator_for_entry(hass, entry_id)
+        if coordinator is None:
+            raise HomeAssistantError("Config entry not found")
+        try:
+            await async_reparse_bill_pdfs(
+                hass,
+                coordinator,
+                bill_date=str(bill_date) if bill_date else None,
+            )
+        except ValueError as exc:
+            raise HomeAssistantError(str(exc)) from exc
+        except Exception as exc:
+            raise HomeAssistantError(f"Bill PDF reparse failed: {exc.__class__.__name__}") from exc
+
     hass.services.async_register(DOMAIN, "refresh", async_refresh)
     hass.services.async_register(DOMAIN, "backfill", async_backfill, BACKFILL_SCHEMA)
     hass.services.async_register(DOMAIN, "retry_failed_ranges", async_retry_failed, ENTRY_SCHEMA)
     hass.services.async_register(DOMAIN, "reset_import_checkpoint", async_reset_checkpoint, ENTRY_SCHEMA)
+    hass.services.async_register(DOMAIN, "download_bill_pdf", async_download_bill_pdf, DOWNLOAD_BILL_PDF_SCHEMA)
+    hass.services.async_register(DOMAIN, "reparse_bill_pdfs", async_reparse_bill_pdfs, REPARSE_BILL_PDFS_SCHEMA)
 
 
 async def _async_resume_backfill(

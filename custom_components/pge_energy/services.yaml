@@ -57,3 +57,55 @@ reset_import_checkpoint:
       required: true
       selector:
         text:
+
+download_bill_pdf:
+  name: Download bill PDF
+  description: >
+    Download, parse, and import one known statement PDF by bill date from the
+    Store index. Does not accept encrypted bill ids in the service call.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: true
+      selector:
+        text:
+    bill_date:
+      name: Bill date
+      description: Statement date (YYYY-MM-DD) from billing history.
+      required: true
+      selector:
+        text:
+    form:
+      name: PDF form
+      description: Optional detailed or simplified override.
+      required: false
+      selector:
+        select:
+          options:
+            - detailed
+            - simplified
+    force:
+      name: Force redownload
+      description: Redownload even when the retained file hash is valid.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+reparse_bill_pdfs:
+  name: Reparse bill PDFs
+  description: >
+    Reparse retained bill PDF files locally without network calls. Useful after
+    parser upgrades or to retry reconciliation on a kept file.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: true
+      selector:
+        text:
+    bill_date:
+      name: Bill date
+      description: Optional single statement (YYYY-MM-DD). Omit to reparse all retained files.
+      required: false
+      selector:
+        text:

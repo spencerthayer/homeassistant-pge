@@ -73,7 +73,7 @@ Polling is `polling_interval` + `polling_interval_unit` (`minutes`|`hours`|`days
 3. Fetch **correction window** as one PGE-local day per hourly request (re-fetch closed days for estimated→actual / cost corrections). Imports are merge/upsert only — never purge already-downloaded history.
 4. Clip hourly rows to `[day_start, day_end)`; validate closed days; suffix-rebuild import under per-entry lock; persist `dirty_from` around writes.
 5. After each external write, `async_ack_external_statistics` drains the recorder queue and verifies exact `state` values. On mismatch it **re-issues** `async_add_external_statistics` (bounded write attempts) before failing — re-reading alone cannot converge when HA's `import_statistics` dropped the job (SQLAlchemy errors inside `_update_statistics` are swallowed). Persistent mismatch means a dropped write / unhealthy recorder DB, not a benign overwrite (`_update_statistics` always writes `state`/`sum`). Consumption ack failure soft-fails the poll and leaves `dirty_from` for boot repair; cost/temperature ack failures mark the affected Pacific days failed, keep external + entity mirrors in step, and still clear `dirty_from`.
-6. When `include_billing` (default on): `billing_sync` runs AccountDetail snapshot → paged payment history → open-cycle estimates (`getEnergyTrackerData`, keeps last good value on failure) → programs; dual-publishes billing statistics; soft-fails into `billing_last_error` without failing the usage poll. Monetary mean sensors (`account_balance`, `amount_due`, `last_payment_amount`, `ytd_program_savings`) are external-only (no entity mirror) because they use `state_class=None`; a one-time `async_clear_statistics` cleanup removes orphaned entity metadata so HA's `STATE_CLASS_REMOVED_ISSUE` repairs resolve. Manual sync phases include `billing_snapshot` / `billing_history` / `programs`.
+6. When `include_billing` (default on): `billing_sync` runs AccountDetail snapshot → paged payment history → open-cycle estimates → programs → optional bill PDF phase when `download_bill_pdfs` is also on (`bill_pdf_sync`: REST download, local parse, 18 `_bill_pdf_*` statistics, binary retention GC). Dual-publishes billing statistics; soft-fails into `billing_last_error` without failing the usage poll. PDF failures use separate `bill_pdf_last_*` summaries. Manual sync phases include `billing_snapshot` / `billing_history` / `programs` / `downloading_pdfs` / `parsing_pdfs` / `importing_pdf_statistics`.
 7. Recompute the next poll delay after each cycle so day-unit schedules stay on the configured Pacific clock.
 
 ### Auth / sync failure retention
@@ -117,6 +117,7 @@ Bare `homeassistant.restart` from the UI **exits** this process (no Supervisor) 
 | `api.py` | GraphQL client + monthly paging + error classification |
 | `billing_api.py` / `billing_models.py` | AccountDetail, nested paymentHistory, energy-tracker estimates, programs GraphQL |
 | `billing_sync.py` / `billing_statistics.py` | Soft-fail billing orchestration + dual-publish stats |
+| `bill_pdf*.py` | Opt-in PDF REST download, parser, Store index, statistics, sync phase |
 | `coordinator.py` | Polling from options, correction window, import lock, billing hook |
 | `options.py` | Option helpers, history bounds, tier date ranges, polling conversion |
 | `backfill.py` | Tiered hourly→daily→monthly history import |

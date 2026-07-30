@@ -92,6 +92,10 @@
           "include_cost": "Import cost statistics",
           "include_diagnostics": "Include diagnostic sensors",
           "include_billing": "Import billing & programs",
+          "download_bill_pdfs": "Download bill PDFs",
+          "bill_pdf_form": "Bill PDF form",
+          "bill_pdf_retention": "Bill PDF file retention",
+          "bill_pdf_rolling_count": "Bill PDF rolling count",
           "backfill_concurrency": "Backfill concurrency"
         },
         "data_description": {
@@ -106,6 +110,10 @@
           "include_cost": "Import USD cost alongside kWh into Energy statistics.",
           "include_diagnostics": "Expose auth expiration and last API error sensors.",
           "include_billing": "Import account balance, bill/payment history, and program enrollment as sensors, binary sensors, and long-term statistics.",
+          "download_bill_pdfs": "After billing sync, download statement PDFs to www/pge_energy (reachable at /local/… without HA login). Parsing and normalized statistics import run automatically when enabled.",
+          "bill_pdf_form": "Portal PDF layout: detailed (itemized) or simplified.",
+          "bill_pdf_retention": "Which downloaded PDF files to keep on disk. Normalized records and recorder history are kept independently.",
+          "bill_pdf_rolling_count": "When retention is Rolling count, keep this many newest statement PDF files.",
           "backfill_concurrency": "Parallel day fetches for the hourly tier (1–4)."
         }
       },
@@ -166,7 +174,24 @@
       "est_next_bill_min": { "name": "Estimated next bill (low)" },
       "est_next_bill_max": { "name": "Estimated next bill (high)" },
       "billing_cycle_day": { "name": "Billing cycle day" },
-      "billing_cycle_total_days": { "name": "Billing cycle length" }
+      "billing_cycle_total_days": { "name": "Billing cycle length" },
+      "bill_pdf_parse_status": { "name": "Bill PDF parse status" },
+      "bill_pdf_payment_received": { "name": "Bill PDF payment received" },
+      "bill_pdf_balance_forward": { "name": "Bill PDF balance forward" },
+      "bill_pdf_previous_amount_due": { "name": "Bill PDF previous amount due" },
+      "bill_pdf_energy_delivery_charges": { "name": "Bill PDF energy delivery charges" },
+      "bill_pdf_basic_charge": { "name": "Bill PDF basic charge" },
+      "bill_pdf_energy_use_charge": { "name": "Bill PDF energy use charge" },
+      "bill_pdf_transmission_charge": { "name": "Bill PDF transmission charge" },
+      "bill_pdf_distribution_charge": { "name": "Bill PDF distribution charge" },
+      "bill_pdf_power_cost_adjustment": { "name": "Bill PDF power cost adjustment" },
+      "bill_pdf_regulatory_adjustments": { "name": "Bill PDF regulatory adjustments" },
+      "bill_pdf_state_pass_throughs": { "name": "Bill PDF state pass-throughs" },
+      "bill_pdf_program_charges": { "name": "Bill PDF program charges" },
+      "bill_pdf_green_future_charge": { "name": "Bill PDF Green Future charge" },
+      "bill_pdf_taxes_and_investments": { "name": "Bill PDF taxes and investments" },
+      "bill_pdf_local_tax": { "name": "Bill PDF local tax" },
+      "bill_pdf_public_purpose_charge": { "name": "Bill PDF public purpose charge" }
     },
     "binary_sensor": {
       "autopay": { "name": "Auto Pay" },

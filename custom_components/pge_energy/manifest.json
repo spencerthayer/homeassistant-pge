@@ -9,6 +9,6 @@
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/spencerthayer/homeassistant-pge/issues",
-  "requirements": [],
-  "version": "0.6.1"
+  "requirements": ["pypdf==6.14.2"],
+  "version": "0.7.0"
 }

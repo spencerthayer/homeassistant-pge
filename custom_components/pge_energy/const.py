@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
-VERSION = "0.6.1"
+VERSION = "0.7.0"
 PLATFORMS = ["sensor", "binary_sensor"]
 
 # Custom panel (registered once per HA instance, not per entry).
@@ -190,6 +190,46 @@ SYNC_PHASE_MONTHLY = "monthly"
 SYNC_PHASE_BILLING_SNAPSHOT = "billing_snapshot"
 SYNC_PHASE_BILLING_HISTORY = "billing_history"
 SYNC_PHASE_PROGRAMS = "programs"
+SYNC_PHASE_DOWNLOADING_PDFS = "downloading_pdfs"
+SYNC_PHASE_PARSING_PDFS = "parsing_pdfs"
+SYNC_PHASE_IMPORTING_PDF_STATISTICS = "importing_pdf_statistics"
+
+# Bill PDF download / normalization (opt-in; default off).
+CONF_DOWNLOAD_BILL_PDFS = "download_bill_pdfs"
+DEFAULT_DOWNLOAD_BILL_PDFS = False
+CONF_BILL_PDF_FORM = "bill_pdf_form"
+DEFAULT_BILL_PDF_FORM = "detailed"
+CONF_BILL_PDF_RETENTION = "bill_pdf_retention"
+DEFAULT_BILL_PDF_RETENTION = "latest"
+CONF_BILL_PDF_ROLLING_COUNT = "bill_pdf_rolling_count"
+DEFAULT_BILL_PDF_ROLLING_COUNT = 12
+BILL_PDF_API_URL = "https://apix.portlandgeneral.com/pge-bill-api/pdf/bills"
+BILL_PDF_PARSER_VERSION = 1
+BILL_PDF_MAX_BYTES = 10 * 1024 * 1024
+BILL_PDF_MAX_PAGES = 24
+
+# PDF-derived external statistic id suffixes (distinct from GraphQL billing series).
+STATISTIC_ID_SUFFIX_BILL_PDF_AMOUNT_DUE = "_bill_pdf_amount_due"
+STATISTIC_ID_SUFFIX_BILL_PDF_TOTAL_KWH = "_bill_pdf_total_kwh"
+STATISTIC_ID_SUFFIX_BILL_PDF_PAYMENT_RECEIVED = "_bill_pdf_payment_received"
+STATISTIC_ID_SUFFIX_BILL_PDF_BALANCE_FORWARD = "_bill_pdf_balance_forward"
+STATISTIC_ID_SUFFIX_BILL_PDF_PREVIOUS_AMOUNT_DUE = "_bill_pdf_previous_amount_due"
+STATISTIC_ID_SUFFIX_BILL_PDF_ENERGY_DELIVERY_CHARGES = "_bill_pdf_energy_delivery_charges"
+STATISTIC_ID_SUFFIX_BILL_PDF_BASIC_CHARGE = "_bill_pdf_basic_charge"
+STATISTIC_ID_SUFFIX_BILL_PDF_ENERGY_USE_CHARGE = "_bill_pdf_energy_use_charge"
+STATISTIC_ID_SUFFIX_BILL_PDF_TRANSMISSION_CHARGE = "_bill_pdf_transmission_charge"
+STATISTIC_ID_SUFFIX_BILL_PDF_DISTRIBUTION_CHARGE = "_bill_pdf_distribution_charge"
+STATISTIC_ID_SUFFIX_BILL_PDF_POWER_COST_ADJUSTMENT = "_bill_pdf_power_cost_adjustment"
+STATISTIC_ID_SUFFIX_BILL_PDF_REGULATORY_ADJUSTMENTS = "_bill_pdf_regulatory_adjustments"
+STATISTIC_ID_SUFFIX_BILL_PDF_STATE_PASS_THROUGHS = "_bill_pdf_state_pass_throughs"
+STATISTIC_ID_SUFFIX_BILL_PDF_PROGRAM_CHARGES = "_bill_pdf_program_charges"
+STATISTIC_ID_SUFFIX_BILL_PDF_GREEN_FUTURE_CHARGE = "_bill_pdf_green_future_charge"
+STATISTIC_ID_SUFFIX_BILL_PDF_TAXES_AND_INVESTMENTS = "_bill_pdf_taxes_and_investments"
+STATISTIC_ID_SUFFIX_BILL_PDF_LOCAL_TAX = "_bill_pdf_local_tax"
+STATISTIC_ID_SUFFIX_BILL_PDF_PUBLIC_PURPOSE_CHARGE = "_bill_pdf_public_purpose_charge"
+
+ENTITY_UNIQUE_BILL_PDF_PARSE_STATUS = "bill_pdf_parse_status"
+ENTITY_UNIQUE_BILL_PDF_PREFIX = "bill_pdf_"
 
 CONF_MANUAL_SYNC_ACTION = "manual_sync_action"
 MANUAL_SYNC_ACTION_REFRESH = "refresh"

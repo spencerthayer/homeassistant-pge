@@ -29,7 +29,11 @@
 
 ## Diagnostics redaction
 
-`diagnostics.py` redacts tokens, person IDs, account IDs, email, password, refresh credentials, and encrypted billing identifiers via `async_redact_data`. Bill PDF binaries are not fetched in v1.
+`diagnostics.py` redacts tokens, person IDs, account IDs, email, password, refresh credentials, encrypted billing identifiers, and full `encrypted_bill_id` values via `async_redact_data`. Bill PDF diagnostics expose only counts, parse status codes, and truncated hashes — never raw extracted text.
+
+## Bill PDF files (`www/` / `/local/`)
+
+When **Download bill PDFs** is enabled, statement PDFs are written under `www/pge_energy/<account_key>/bills/`. Home Assistant serves these at `/local/pge_energy/...` **without authentication** if the instance is reachable. Users who expose HA to the internet should keep the toggle off or protect the instance (reverse proxy auth, VPN, etc.). Removing the integration does **not** auto-delete retained PDFs or normalized Store/recorder history. Normalized parse data in Store contains no customer name, service address, meter numbers, or raw PDF text.
 
 ## Custom panel static paths and websocket
 

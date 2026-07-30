@@ -27,7 +27,7 @@ import {
   stateDisplay,
   stateNumber,
   sumStatisticChange,
-} from "./data.js?v=0.6.1";
+} from "./data.js?v=0.7.0";
 import {
   createBarChart,
   createLineChart,
@@ -37,9 +37,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.6.1";
-import { sparklineSvg } from "./svg-helpers.js?v=0.6.1";
-import { applyPanelTheme } from "./theme.js?v=0.6.1";
+} from "./charts.js?v=0.7.0";
+import { sparklineSvg } from "./svg-helpers.js?v=0.7.0";
+import { applyPanelTheme } from "./theme.js?v=0.7.0";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -2253,6 +2253,99 @@ class PgeEnergyPanel extends HTMLElement {
     if (hmTemp) this._charts.push(hmTemp);
   }
 
+  _renderBillPdfHeader() {
+    const pdf = this._account?.bill_pdf;
+    if (!pdf?.url) return "";
+    const status = pdf.parse_status || "not_downloaded";
+    const badge = this._billPdfStatusLabel(status);
+    const advisories = (pdf.advisories || []).map((a) => this._escape(String(a))).join(", ");
+    const warnings = (pdf.warnings || []).map((w) => this._escape(String(w))).join(", ");
+    return `
+      <div class="bill-pdf-header" style="margin:0 0 12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <a class="button" href="${this._escape(pdf.url)}" target="_blank" rel="noopener">View bill PDF</a>
+        <span class="badge">${this._escape(badge)}</span>
+        ${advisories ? `<span class="muted stats-meta">Advisories: ${advisories}</span>` : ""}
+        ${warnings ? `<span class="muted stats-meta">Warnings: ${warnings}</span>` : ""}
+      </div>
+    `;
+  }
+
+  _billPdfStatusLabel(status) {
+    const labels = {
+      parsed: "Parsed",
+      reconciliation_failed: "Reconciliation failed",
+      parse_failed: "Not parsed",
+      text_unavailable: "Not parsed",
+      download_failed: "Download failed",
+      not_found: "Not found",
+      downloaded: "Downloaded",
+      parser_stale: "Parser update pending",
+      statistics_pending: "Statistics pending",
+      not_downloaded: "PDF not downloaded",
+    };
+    return labels[status] || status;
+  }
+
+  _renderBillPdfStatementDetails() {
+    const pdf = this._account?.bill_pdf;
+    const metrics = pdf?.metrics;
+    if (!metrics || !Object.keys(metrics).length) return "";
+    const groups = [
+      {
+        title: "Account & payment",
+        keys: ["amount_due", "payment_received", "balance_forward", "previous_amount_due"],
+      },
+      {
+        title: "Energy & delivery",
+        keys: [
+          "total_kwh",
+          "energy_delivery_charges",
+          "basic_charge",
+          "energy_use_charge",
+          "transmission_charge",
+          "distribution_charge",
+          "power_cost_adjustment",
+        ],
+      },
+      {
+        title: "Programs & adjustments",
+        keys: [
+          "regulatory_adjustments",
+          "state_pass_throughs",
+          "program_charges",
+          "green_future_charge",
+        ],
+      },
+      {
+        title: "Taxes",
+        keys: ["taxes_and_investments", "local_tax", "public_purpose_charge"],
+      },
+    ];
+    const rows = [];
+    for (const group of groups) {
+      const items = [];
+      for (const key of group.keys) {
+        const metric = metrics[key];
+        if (!metric?.value) continue;
+        const unit = metric.unit === "kWh" ? " kWh" : "";
+        const money = metric.unit === "USD";
+        const num = Number(metric.value);
+        const value = money ? this._fmt(num, "", true) : this._fmt(num, unit);
+        items.push({ label: metric.label || key, value });
+      }
+      if (!items.length) continue;
+      rows.push({ section: group.title });
+      for (const item of items) rows.push(item);
+    }
+    if (!rows.length) return "";
+    return `
+      <details class="usage-accounting" open>
+        <summary>Statement details (PDF)</summary>
+        <div class="usage-accounting-body">${this._renderSummaryPairs(rows)}</div>
+      </details>
+    `;
+  }
+
   _renderBillingPrograms() {
     const billing = this.shadowRoot.getElementById("billing");
     const programs = this.shadowRoot.getElementById("programs");
@@ -2338,11 +2431,13 @@ class PgeEnergyPanel extends HTMLElement {
     billing.innerHTML = `
       <h2>Billing</h2>
       <p class="muted" style="margin:0 0 12px">Account balance, statement, and lifetime totals from PGE billing sync.</p>
+      ${this._renderBillPdfHeader()}
       <div class="usage-accounting-body">
         ${
           summaryHtml ||
           `<p class="muted stats-meta">No billing values yet — wait for a sync or check Configure → Sync settings.</p>`
         }
+        ${this._renderBillPdfStatementDetails()}
         <p class="muted stats-meta" style="margin-top:12px">Ledger charts use external statistic ids (including bill_kwh, which has no mirrored entity).</p>
         <div class="chart-host" id="ledger-bill"></div>
         <div class="chart-host" id="ledger-kwh" style="margin-top:8px"></div>

@@ -35,8 +35,9 @@
 - [ ] Operator UAT 0.5.43: no `Recorder state mismatch …_cost`; `dirty_from` clears; four state-class repairs gone after cleanup and stay gone across a billing sync; `/pge` + Energy still show external billing means
 - [ ] Optional: per-call timeout inside `async_import_with_baseline` / recorder executor jobs if stalls persist under Pi load
 - [ ] Optional: auth-lock wall-clock timeout beyond existing aiohttp bounds (30s GraphQL, 45s portal login)
-- [x] Bill PDF data: sanitized golden layouts for real detailed/simplified single- and multi-service bills; cover rotated fallback, glued text, `for N days`, complementary extraction modes, and multi-meter total reconciliation
-- [ ] Bill PDF data: after the download plan ships, design versioned Store/statistics mappings only for reconciled fields; retain PDFs and last-known metrics when parsing fails, and keep OCR out unless real bills prove image-only
+- [x] Bill PDF download + normalized data (0.7.0): opt-in `download_bill_pdfs`; REST fetch; `www/pge_energy/…` retention; production parser (`pypdf`); Store v2 index; 18 `_bill_pdf_*` statistics; panel link + Statement details; services `download_bill_pdf` / `reparse_bill_pdfs`; GraphQL remains canonical for overlapping bill fields
+- [ ] Bill PDF operator UAT: enable download on live entry; manual sync through PDF phases; open `/local/…` PDF; confirm Statement details match PDF; rolling retention + reparse idempotence
+- [ ] Bill PDF follow-ups: authenticated Media Source; cleanup `www/pge_energy/` on entry remove; OCR only if a real image-only bill appears
 
 ## Active agents
 

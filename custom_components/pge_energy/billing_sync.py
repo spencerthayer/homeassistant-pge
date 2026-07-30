@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import aiohttp_client
 
+from .bill_pdf_sync import async_sync_bill_pdfs, index_bill_from_ledger_event, index_bill_from_snapshot
 from .billing_api import PGEBillingApiClient
 from .billing_models import BillingFreshness, EnergyTrackerEstimates, LedgerEvent
 from .billing_statistics import (
@@ -85,6 +86,7 @@ async def async_run_billing_sync(
         )
         coordinator.persist_auth_to_entry()
         coordinator.account_snapshot = snapshot
+        index_bill_from_snapshot(store, snapshot)
 
         now = datetime.now(UTC)
         await async_import_billing_snapshot(hass, account_key, account_id, snapshot, now)
@@ -136,6 +138,9 @@ async def async_run_billing_sync(
         payments, billed = await async_refresh_billing_lifetime_totals(hass, account_key)
         coordinator.lifetime_payments_usd = payments
         coordinator.lifetime_billed_usd = billed
+
+        # 6) Optional bill PDF download / parse / statistics ---------------
+        await async_sync_bill_pdfs(hass, coordinator)
 
         success = datetime.now(UTC)
         coordinator.billing_freshness = BillingFreshness(last_success=success, last_error=None)
@@ -229,6 +234,8 @@ async def _async_page_ledger(
         )
         if events:
             collected.extend(events)
+            for event in events:
+                index_bill_from_ledger_event(store, event)
 
         pages_walked += 1
         offset += page_limit

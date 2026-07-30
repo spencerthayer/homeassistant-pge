@@ -15,7 +15,7 @@ Custom Home Assistant integration that imports **Portland General Electric (PGE)
 1. In HACS → **⋯** → **Custom repositories**, add  
    `https://github.com/spencerthayer/homeassistant-pge`  
    with category **Integration**.
-2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.6.1`).
+2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.7.0`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -138,7 +138,7 @@ All API clients share a single `PGEAuthManager` and `aiohttp.ClientSession`. Usa
 
 Settings → Devices & Services → PGE Energy → **Configure** (opened from any account entry):
 
-- **Sync settings:** polling (value + unit `minutes` / `hours` / `days`, default **every 4 hours**), **sync clock** (Pacific, default **12:00 AM** — anchors the hour/day grid), correction window, history mode/start, hourly history days, auto backfill, cost/diagnostics, **import billing & programs** (`include_billing`, default on), concurrency. Per account.
+- **Sync settings:** polling (value + unit `minutes` / `hours` / `days`, default **every 4 hours**), **sync clock** (Pacific, default **12:00 AM** — anchors the hour/day grid), correction window, history mode/start, hourly history days, auto backfill, cost/diagnostics, **import billing & programs** (`include_billing`, default on), **download bill PDFs** (opt-in, default off — fetches portal PDFs to `www/pge_energy/…`, parses locally, imports 18 `_bill_pdf_*` statement statistics; `/local` exposure warning in SECURITY.md), concurrency. Per account.
 - **Panel:** integration-wide chrome for `/pge` (stored once for the whole domain, not per account): **Show PGE in sidebar** (default on), **Sidebar title** (default `PGE`), **Sidebar icon** (default `mdi:transmission-tower`), **Admin-only panel** (default on), **Default landing section** (At a glance / Usage / Analytics / Billing). Hiding the sidebar link does **not** unregister `/pge` — open that URL directly. **Admin-only panel** off lets non-admins open the route, but account/sync websocket APIs stay admin-only. Sidebar *order* remains Home Assistant’s sidebar editor or [Browser Mod](https://github.com/thomasloven/hass-browser_mod).
 - **Update credentials:** email/password; account number is read-only; statistic IDs unchanged.
 - **Manual sync:** force **Refresh now** (correction window) or **Backfill missing history** (uses current Sync settings history bounds). Remains available when the sidebar link is hidden. A notification links to the PGE device page; live **Sync status** / **Sync progress** (%) sensors show phase, ETA, and detail.
