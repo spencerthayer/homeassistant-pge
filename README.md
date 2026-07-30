@@ -171,7 +171,7 @@ Long-term hourly history is written to external statistics **and** mirrored onto
 
 ### Billing & programs (when `include_billing` is on)
 
-Same device (`PGE <accountnum>`). Structured fields only — bill PDF download is deferred (see [`docs/HA_SETTINGS_HISTORY.md`](docs/HA_SETTINGS_HISTORY.md)).
+Same device (`PGE <accountnum>`). GraphQL account/ledger/programs sensors are **canonical** for balance, amount due, and statement totals.
 
 | Sensor / binary | Description | Dual stats |
 |-----------------|-------------|------------|
@@ -193,6 +193,18 @@ Energy / Cost / Outdoor temperature (and dual-publish billing sensors) expose `e
 
 The estimate sensors come straight from PGE (`getEnergyTrackerData`) and are its own projection for the open cycle — they will not tie out against sums of the imported hourly intervals, and they stay unavailable until PGE reports `detailsAvailable`.
 
+### Bill PDFs (opt-in, v0.7+)
+
+**Default off.** Enable **Download bill PDFs** in Configure → Sync settings (requires `include_billing`). After each structured billing sync the integration:
+
+1. **Downloads** the portal statement PDF (REST) for eligible bills — form `detailed` or `simplified`, retention `latest` / `all_imported` / `rolling_n`.
+2. **Writes** files under `www/pge_energy/<account>/bills/` (reachable at `/local/…` **without** HA login if the instance is exposed — see [`SECURITY.md`](SECURITY.md)).
+3. **Parses locally** with `pypdf` (layout + plain text), then **reconciles** amount due, total kWh, and period dates against GraphQL bill identity. Mismatches are **fail-closed**: the PDF file may be kept, but normalized Store/statistics are not published until reconciliation succeeds. Advisories (non-blocking layout notes) do not block publication.
+4. **Imports** 18 statement-dated external statistics (`pge_energy:<account_key>_bill_pdf_*`) — distinct from GraphQL `_bill_amount` / `_bill_kwh`. Binary GC never deletes normalized records or recorder history.
+5. Surfaces **View bill PDF**, a parse badge, and **Statement details (PDF)** on `/pge` Billing when a safe normalized record exists; `sensor.pge_*_bill_pdf_parse_status` reports parse outcome. Fourteen line-item sensors are disabled by default.
+
+Sync phases when enabled: `downloading_pdfs` → `parsing_pdfs` → `importing_pdf_statistics`. Soft-fail only — GraphQL billing sensors and last-known PDF data stay available. Details: [`docs/HA_SETTINGS_HISTORY.md`](docs/HA_SETTINGS_HISTORY.md), [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
+
 ## Energy Dashboard
 
 1. Settings → Dashboards → Energy.
@@ -211,6 +223,7 @@ The integration registers [`/pge`](http://127.0.0.1:8123/pge) for usage, cost, o
 - Usage chart includes **Range accounting** for the selected window: totals, per-hour/day/month/year averages, $/kWh, median/min/max/stdev, and adaptive Pacific hour/day/month/year breakdown tables (scales from short windows through multi-decade history). Range accounting and breakdown accordions remember open/closed in the browser; **Billing** is always expanded (not an accordion).
 - Usage ranges end at Pacific midnight of the current day (exclusive): only complete published data through **yesterday**. Primary fast-select: **24h**, **This cycle**, **Last cycle**, **7 days**, **Month**; **More…** covers `6h` / `12h` / `3mo` / `6mo` / `12mo` / YTD (unavailable options stay visible but disabled). Default `24h`; ◀/▶ and datetime inputs scroll or pick a window. A collapsible **Sync status** section under At a glance (default collapsed; open/closed remembered in the browser) holds live import progress above **PGE publication gaps**.
 - Layout adapts for phone and tablet: summary metrics stack to one column under 640px, cost/heatmap grids stack under 900px, filter controls and charts scale for narrow viewports, and breakdown tables scroll horizontally.
+- Billing: when bill PDFs are enabled and a statement parsed safely, **View bill PDF** + **Statement details (PDF)** appear under Billing.
 - Note: `/energy/pge` cannot be a distinct page — HA routes panels by the first URL segment, and `energy` is the built-in Energy panel.
 
 ## Services
@@ -221,6 +234,8 @@ All long-running services require `entry_id`:
 - `pge_energy.backfill` — `entry_id`, `start_date`, `end_date` (tiered hourly → daily → monthly)
 - `pge_energy.retry_failed_ranges` — `entry_id`
 - `pge_energy.reset_import_checkpoint` — `entry_id` (does not delete recorder history)
+- `pge_energy.download_bill_pdf` — `entry_id`, `bill_date` (known statement from Store index); optional `form` / `force`
+- `pge_energy.reparse_bill_pdfs` — `entry_id`; optional `bill_date` — reparse retained files only (no network)
 
 ## Known limitations
 

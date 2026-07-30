@@ -17,9 +17,7 @@ REPO = Path(__file__).resolve().parents[1]
 STORE = Path(
     "/Users/spencerthayer/Work/_Personal/PGE_Data_Scrape/outputs/ha_live/20260723T200252Z/config/.storage/pge_energy.import_state.01KY89CYSD3G0B24HNNH9R60PS"
 )
-WWW = Path(
-    "/Users/spencerthayer/Work/_Personal/PGE_Data_Scrape/outputs/ha_live/20260723T200252Z/config/www/pge_energy"
-)
+WWW = Path("/Users/spencerthayer/Work/_Personal/PGE_Data_Scrape/outputs/ha_live/20260723T200252Z/config/www/pge_energy")
 LOG = REPO / "outputs/ha_live/hass.log"
 
 
