@@ -15,7 +15,7 @@ Custom Home Assistant integration that imports **Portland General Electric (PGE)
 1. In HACS → **⋯** → **Custom repositories**, add  
    `https://github.com/spencerthayer/homeassistant-pge`  
    with category **Integration**.
-2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.7.1`).
+2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.7.2`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -248,6 +248,32 @@ All long-running services require `entry_id`:
 - Response `totalKwhUsage` / `totalKwhCost` are reliable mainly for DAILY.
 - **PGE publishes usage once overnight, not continuously.** Hourly intervals for a Pacific calendar day typically appear after midnight (often with the tip stuck near `01:00` local until the next publication). A “stuck” Latest available interval during the day is expected — not a sync failure. Default polling is **every 4 hours** on a Pacific clock grid (**Sync clock**, default **12:00 AM** → 12am/4am/8am/noon/4pm/8pm); Configure → Sync settings can tighten or loosen that.
 - PGE may return transient 502s (retried). See [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
+
+## Troubleshooting
+
+### Quiet expected log warnings
+
+`pypdf` emits layout-extraction warnings (`Limiting excessive whitespace…`, `Rotated text discovered…`) from `pypdf._text_extraction._layout_mode._fixed_width_page` on every bill-PDF parse. The integration already handles those conditions (it merges a plain-text extraction variant), so they are informational, not actionable. The integration also logs some caught-and-retried soft-failures at warning level that resolve on the next poll.
+
+To keep Settings → System → Logs focused on actionable entries, filter these with HA's native `logger` integration in `configuration.yaml` (config-only — survives HACS updates and is easily reversible):
+
+```yaml
+logger:
+  filters:
+    pypdf._text_extraction._layout_mode._fixed_width_page:
+      - "Limiting excessive whitespace.*"
+      - "Rotated text discovered.*"
+    custom_components.pge_energy.billing_sync:
+      - "soft-failed.*"
+    custom_components.pge_energy.bill_pdf_sync:
+      - "soft-failed.*"
+    custom_components.pge_energy.coordinator:
+      - "finished outside the normal path.*"
+    custom_components.pge_energy.__init__:
+      - "already in progress"
+```
+
+Restart Home Assistant for the filters to apply. Auth failures, reauth prompts, backfill/statistics errors, and other actionable messages are intentionally **not** filtered. If a future `pypdf` version renames its logger so the filter stops matching, the blunt fallback is `logger: logs: pypdf: critical` (safe here — `pypdf` is only used by this integration).
 
 ## Local CLI testing
 

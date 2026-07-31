@@ -27,7 +27,7 @@ import {
   stateDisplay,
   stateNumber,
   sumStatisticChange,
-} from "./data.js?v=0.7.1";
+} from "./data.js?v=0.7.2";
 import {
   createBarChart,
   createLineChart,
@@ -37,9 +37,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.7.1";
-import { sparklineSvg } from "./svg-helpers.js?v=0.7.1";
-import { applyPanelTheme } from "./theme.js?v=0.7.1";
+} from "./charts.js?v=0.7.2";
+import { sparklineSvg } from "./svg-helpers.js?v=0.7.2";
+import { applyPanelTheme } from "./theme.js?v=0.7.2";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
