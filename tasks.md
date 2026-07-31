@@ -40,7 +40,7 @@
 - [x] Bill PDF patch 0.7.1: Store v1→v2 migration + `bill_pdf_sync` entry shadowing fix — HACS release [v0.7.1](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.7.1)
 - [ ] Bill PDF UAT remainder: toggle-off (no PDF phases); simplified form switch; `rolling_n=2` GC; failure-harness path; enable one line-item sensor; diagnostics REST endpoint
 - [ ] Bill PDF follow-ups: authenticated Media Source; cleanup `www/pge_energy/` on entry remove; OCR only if a real image-only bill appears
-- [ ] Log-noise reduction (0.7.2): quiet `pypdf` layout warnings (`Limiting excessive whitespace…`, `Rotated text discovered…`) plus caught-and-retried `pge_energy` soft-fails via HA `logger: filters:` in `configuration.yaml` — README Troubleshooting section + live dev config; filters require exact submodule logger names (HA logger filters do not cascade to child loggers); keep-list (auth/reauth, backfill errors, statistics errors, retry-day-invalid) untouched; publish GitHub Release v0.7.2
+- [x] Log-noise reduction (0.7.2): quiet `pypdf` layout warnings (`Limiting excessive whitespace…`, `Rotated text discovered…`) plus caught-and-retried `pge_energy` soft-fails via HA `logger: filters:` in `configuration.yaml` — README Troubleshooting section + live dev config; filters require exact submodule logger names (HA logger filters do not cascade to child loggers); keep-list (auth/reauth, backfill errors, statistics errors, retry-day-invalid) untouched; verified live reparse emits no pypdf warnings; HACS release [v0.7.2](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.7.2) (all 4 CI jobs green on the release SHA)
 
 ## Active agents
 
