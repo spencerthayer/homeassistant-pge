@@ -27,8 +27,10 @@ from .bill_pdf_statistics import BILL_PDF_METRIC_SUFFIXES, get_bill_pdf_statisti
 from .bill_pdf_store import normalized_from_entry
 from .billing_models import BillDetails, EnergyTrackerEstimates
 from .const import (
+    CONF_DOWNLOAD_BILL_PDFS,
     CONF_INCLUDE_BILLING,
     CONF_INCLUDE_DIAGNOSTICS,
+    DEFAULT_DOWNLOAD_BILL_PDFS,
     DEFAULT_INCLUDE_BILLING,
     DEFAULT_INCLUDE_DIAGNOSTICS,
     DOMAIN,
@@ -1055,10 +1057,14 @@ class PGEBillPdfParseStatusSensor(PGEBaseEntity, SensorEntity):
 
 
 class PGEBillPdfLineItemSensor(PGEBaseEntity, SensorEntity):
-    """Latest safe PDF line-item value; disabled by default to reduce clutter."""
+    """Latest safe PDF line-item value for Lovelace/entity cards.
+
+    Enabled by default when ``download_bill_pdfs`` is on so DIY dashboards can
+    pick entities without digging through disabled diagnostics. Still disabled
+    when PDF download is off so unused installs stay uncluttered.
+    """
 
     _attr_state_class = None
-    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self,
@@ -1068,11 +1074,13 @@ class PGEBillPdfLineItemSensor(PGEBaseEntity, SensorEntity):
         *,
         label: str,
         unit: str,
+        enabled_default: bool,
     ) -> None:
         super().__init__(coordinator)
         self._account_key = account_key
         self._metric_key = metric_key
         self._label = label
+        self._attr_entity_registry_enabled_default = enabled_default
         self._attr_native_unit_of_measurement = unit if unit != "kWh" else UnitOfEnergy.KILO_WATT_HOUR
         if unit == "USD":
             self._attr_device_class = SensorDeviceClass.MONETARY
@@ -1085,13 +1093,23 @@ class PGEBillPdfLineItemSensor(PGEBaseEntity, SensorEntity):
     def build_all(cls, coordinator: PGECoordinator, account_key: str) -> list[PGEBillPdfLineItemSensor]:
         from .bill_pdf_statistics import _BILL_PDF_METRIC_LABELS
 
+        enabled_default = bool(get_entry_option(coordinator.entry, CONF_DOWNLOAD_BILL_PDFS, DEFAULT_DOWNLOAD_BILL_PDFS))
         sensors: list[PGEBillPdfLineItemSensor] = []
         for metric_key in BILL_PDF_METRIC_SUFFIXES:
             if metric_key in {"amount_due", "total_kwh"}:
                 continue
             label = _BILL_PDF_METRIC_LABELS.get(metric_key, metric_key)
             unit = "kWh" if metric_key == "total_kwh" else "USD"
-            sensors.append(cls(coordinator, account_key, metric_key, label=label, unit=unit))
+            sensors.append(
+                cls(
+                    coordinator,
+                    account_key,
+                    metric_key,
+                    label=label,
+                    unit=unit,
+                    enabled_default=enabled_default,
+                )
+            )
         return sensors
 
     @property
