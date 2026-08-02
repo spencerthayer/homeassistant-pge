@@ -53,7 +53,6 @@ class TestImportMeanPoint:
                 "key",
                 "123",
                 suffix=STATISTIC_ID_SUFFIX_ACCOUNT_BALANCE,
-                entity_suffix=None,
                 value=None,
                 when=datetime(2026, 7, 13, tzinfo=UTC),
                 unit="USD",
@@ -62,18 +61,17 @@ class TestImportMeanPoint:
             )
             add.assert_not_called()
 
-    def test_writes_external_mean(self):
+    def test_writes_external_mean_never_mirrors(self):
         hass = MagicMock()
         with (
             patch("custom_components.pge_energy.billing_statistics.async_add_external_statistics") as add,
-            patch("custom_components.pge_energy.billing_statistics._async_mirror_entity_statistics"),
+            patch("custom_components.pge_energy.billing_statistics._async_mirror_entity_statistics") as mirror,
         ):
             _import_mean_point(
                 hass,
                 "key",
                 "123",
                 suffix=STATISTIC_ID_SUFFIX_ACCOUNT_BALANCE,
-                entity_suffix=None,
                 value=300.13,
                 when=datetime(2026, 7, 13, 7, 30, tzinfo=UTC),
                 unit="USD",
@@ -84,6 +82,7 @@ class TestImportMeanPoint:
             _hass, meta, rows = add.call_args.args
             assert STATISTIC_ID_SUFFIX_ACCOUNT_BALANCE in meta["statistic_id"]
             assert rows[0]["mean"] == 300.13
+            mirror.assert_not_called()
 
 
 class TestAsyncImport:
@@ -101,7 +100,13 @@ class TestAsyncImport:
             assert mean.call_count >= 3
 
     @pytest.mark.asyncio
-    async def test_monetary_mean_imports_drop_entity_suffix(self):
+    async def test_mean_imports_never_mirror(self):
+        """Mean billing series are external-only (no entity-statistics mirror).
+
+        Mirroring a snapshot-stamped row onto a recorder-tracked sensor
+        pre-seeds the current-hour slot and HA Core's compile_statistics plain
+        INSERT then logs "Blocked attempt to insert duplicated statistic rows".
+        """
         hass = MagicMock()
         snapshot = AccountSnapshot(
             account_number="123",
@@ -109,19 +114,11 @@ class TestAsyncImport:
             last_payment_amount=5.0,
             bill=BillDetails(avg_temperature_f=70.0),
         )
-        with patch("custom_components.pge_energy.billing_statistics._import_mean_point") as mean:
+        with (
+            patch("custom_components.pge_energy.billing_statistics.async_add_external_statistics") as add,
+            patch("custom_components.pge_energy.billing_statistics._async_mirror_entity_statistics") as mirror,
+        ):
             await async_import_billing_snapshot(hass, "key", "123", snapshot, datetime(2026, 7, 13, tzinfo=UTC))
-            by_suffix = {c.kwargs["suffix"]: c.kwargs["entity_suffix"] for c in mean.call_args_list}
-            assert by_suffix[STATISTIC_ID_SUFFIX_ACCOUNT_BALANCE] is None
-            assert by_suffix[STATISTIC_ID_SUFFIX_AMOUNT_DUE] is None
-            assert by_suffix[STATISTIC_ID_SUFFIX_LAST_PAYMENT_AMOUNT] is None
-            # Bill avg temperature is external-only: mirroring a snapshot-stamped
-            # row onto the recorder-tracked entity collides with HA Core's
-            # compile_statistics plain INSERT ("Blocked attempt to insert
-            # duplicated statistic rows").
-            assert by_suffix[STATISTIC_ID_SUFFIX_BILL_AVG_TEMPERATURE] is None
-
-        with patch("custom_components.pge_energy.billing_statistics._import_mean_point") as mean:
             await async_import_programs_metrics(
                 hass,
                 "key",
@@ -129,8 +126,13 @@ class TestAsyncImport:
                 ProgramsSnapshot(ytd_flex_load_earnings=12.0),
                 datetime(2026, 7, 13, tzinfo=UTC),
             )
-            assert mean.call_args.kwargs["suffix"] == STATISTIC_ID_SUFFIX_YTD_PROGRAM_SAVINGS
-            assert mean.call_args.kwargs["entity_suffix"] is None
+            written = {c.args[1]["statistic_id"] for c in add.call_args_list}
+            assert any(STATISTIC_ID_SUFFIX_ACCOUNT_BALANCE in s for s in written)
+            assert any(STATISTIC_ID_SUFFIX_AMOUNT_DUE in s for s in written)
+            assert any(STATISTIC_ID_SUFFIX_LAST_PAYMENT_AMOUNT in s for s in written)
+            assert any(STATISTIC_ID_SUFFIX_BILL_AVG_TEMPERATURE in s for s in written)
+            assert any(STATISTIC_ID_SUFFIX_YTD_PROGRAM_SAVINGS in s for s in written)
+            mirror.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_import_ledger_events_splits_bill_and_payment(self):
