@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
-VERSION = "0.7.2"
+VERSION = "0.7.3"
 PLATFORMS = ["sensor", "binary_sensor"]
 
 # Custom panel (registered once per HA instance, not per entry).
@@ -43,6 +43,7 @@ CONF_CORRECTION_WINDOW = "correction_window"
 CONF_HOURLY_BACKFILL_DAYS = "hourly_backfill_days"
 CONF_INCLUDE_COST = "include_cost"
 CONF_INCLUDE_DIAGNOSTICS = "include_diagnostics"
+CONF_CAPTURE_GRAPHQL_DIAGNOSTICS = "capture_graphql_diagnostics"
 CONF_BACKFILL_CONCURRENCY = "backfill_concurrency"
 CONF_AUTO_BACKFILL = "auto_backfill"
 CONF_HISTORY_MODE = "history_mode"
@@ -77,6 +78,7 @@ DEFAULT_HOURLY_BACKFILL_DAYS = 365
 DEFAULT_AUTO_BACKFILL = True
 DEFAULT_INCLUDE_COST = True
 DEFAULT_INCLUDE_DIAGNOSTICS = True
+DEFAULT_CAPTURE_GRAPHQL_DIAGNOSTICS = False
 DEFAULT_HISTORY_MODE = HistoryMode.FULL
 # Matches statistics lookback floor in statistics.py (_async_anchor_sum).
 DEFAULT_HISTORY_FLOOR = date(2019, 1, 1)

@@ -40,6 +40,7 @@ from .const import (
     CONF_BILL_PDF_FORM,
     CONF_BILL_PDF_RETENTION,
     CONF_BILL_PDF_ROLLING_COUNT,
+    CONF_CAPTURE_GRAPHQL_DIAGNOSTICS,
     CONF_CORRECTION_WINDOW,
     CONF_DOWNLOAD_BILL_PDFS,
     CONF_EMAIL,
@@ -65,6 +66,7 @@ from .const import (
     DEFAULT_BILL_PDF_FORM,
     DEFAULT_BILL_PDF_RETENTION,
     DEFAULT_BILL_PDF_ROLLING_COUNT,
+    DEFAULT_CAPTURE_GRAPHQL_DIAGNOSTICS,
     DEFAULT_CORRECTION_WINDOW,
     DEFAULT_DOWNLOAD_BILL_PDFS,
     DEFAULT_HISTORY_FLOOR_ISO,
@@ -529,6 +531,16 @@ def _options_schema(entry: config_entries.ConfigEntry) -> vol.Schema:
                 default=bool(get_entry_option(entry, CONF_INCLUDE_DIAGNOSTICS, DEFAULT_INCLUDE_DIAGNOSTICS)),
             ): BooleanSelector(),
             vol.Required(
+                CONF_CAPTURE_GRAPHQL_DIAGNOSTICS,
+                default=bool(
+                    get_entry_option(
+                        entry,
+                        CONF_CAPTURE_GRAPHQL_DIAGNOSTICS,
+                        DEFAULT_CAPTURE_GRAPHQL_DIAGNOSTICS,
+                    )
+                ),
+            ): BooleanSelector(),
+            vol.Required(
                 CONF_INCLUDE_BILLING,
                 default=bool(get_entry_option(entry, CONF_INCLUDE_BILLING, DEFAULT_INCLUDE_BILLING)),
             ): BooleanSelector(),
@@ -764,6 +776,12 @@ class PGEOptionsFlow(config_entries.OptionsFlow):
                     CONF_AUTO_BACKFILL: bool(user_input[CONF_AUTO_BACKFILL]),
                     CONF_INCLUDE_COST: bool(user_input[CONF_INCLUDE_COST]),
                     CONF_INCLUDE_DIAGNOSTICS: bool(user_input[CONF_INCLUDE_DIAGNOSTICS]),
+                    CONF_CAPTURE_GRAPHQL_DIAGNOSTICS: bool(
+                        user_input.get(
+                            CONF_CAPTURE_GRAPHQL_DIAGNOSTICS,
+                            DEFAULT_CAPTURE_GRAPHQL_DIAGNOSTICS,
+                        )
+                    ),
                     CONF_INCLUDE_BILLING: bool(user_input.get(CONF_INCLUDE_BILLING, DEFAULT_INCLUDE_BILLING)),
                     CONF_DOWNLOAD_BILL_PDFS: bool(user_input.get(CONF_DOWNLOAD_BILL_PDFS, DEFAULT_DOWNLOAD_BILL_PDFS)),
                     CONF_BILL_PDF_FORM: str(user_input.get(CONF_BILL_PDF_FORM, DEFAULT_BILL_PDF_FORM)),

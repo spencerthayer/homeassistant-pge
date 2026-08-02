@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import re
 import zoneinfo
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
@@ -32,6 +35,49 @@ GRAPHQL_URL = "https://apix.portlandgeneral.com/pge-graphql"
 OPERATION_NAME = "GetUsageCompare"
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30)
 MAX_RETRIES = 3
+ALPHA_CAPTURE_PREFIX = "PGE_ALPHA_GRID_CAPTURE"
+_CAPTURE_MAX_RESPONSES = 20
+_CAPTURE_MAX_ROWS = 40
+_CAPTURE_SCALAR_LIMIT = 120
+_CAPTURE_MAX_INTROSPECTION_TYPES = 30
+_CAPTURE_MAX_INTROSPECTION_FIELDS = 40
+_CAPTURE_ROW_FIELDS = (
+    "intervalTime",
+    "startDate",
+    "endDate",
+    "kwh",
+    "amount",
+    "usageStatus",
+    "intervalSize",
+    "temperature",
+)
+_DIRECTION_FIELD_RE = re.compile(
+    r"(?:receiv|return|export|generat|produc|deliver|import|solar|bidirect|netmeter|netenergy|netusage|netkwh|^net$)",
+    re.IGNORECASE,
+)
+_EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+_JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+_LONG_ID_RE = re.compile(r"\b\d{8,12}\b")
+_INTROSPECTION_TIMEOUT = aiohttp.ClientTimeout(total=10)
+_INTROSPECTION_QUERY = """
+query PGEAlphaGridIntrospection {
+  __schema {
+    queryType {
+      fields {
+        name
+        args { name type { kind name ofType { kind name ofType { kind name ofType { kind name } } } } }
+        type { kind name ofType { kind name ofType { kind name ofType { kind name } } } }
+      }
+    }
+    types {
+      kind
+      name
+      fields { name }
+      inputFields { name }
+    }
+  }
+}
+"""
 
 _LIST_FIELD_BY_MODE = {
     UsageResolution.HOURLY: "hourlyUsageList",
@@ -104,9 +150,119 @@ def _parse_retry_after(value: str | None, *, default: float = 60.0, cap: float =
 
 def _sanitize_error_text(text: str, *, limit: int = 200) -> str:
     """Strip likely account/person identifiers before logging."""
-    cleaned = re.sub(r"\b\d{8,12}\b", "[id]", text)
-    cleaned = re.sub(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[jwt]", cleaned)
+    cleaned = _LONG_ID_RE.sub("[id]", text)
+    cleaned = _JWT_RE.sub("[jwt]", cleaned)
+    cleaned = _EMAIL_RE.sub("[email]", cleaned)
     return cleaned[:limit]
+
+
+def _sanitize_capture_scalar(value: Any) -> str | int | float | bool | None:
+    """Return one bounded scalar suitable for the opt-in usage capture log."""
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        text = str(value)
+        return value if len(text) <= _CAPTURE_SCALAR_LIMIT else text[:_CAPTURE_SCALAR_LIMIT]
+    if not isinstance(value, str):
+        return "[unsupported]"
+    cleaned = _JWT_RE.sub("[jwt]", value)
+    cleaned = _EMAIL_RE.sub("[email]", cleaned)
+    cleaned = _LONG_ID_RE.sub("[id]", cleaned)
+    return cleaned[:_CAPTURE_SCALAR_LIMIT]
+
+
+def _capture_rows(data: dict[str, Any], list_field: str) -> list[dict[str, Any]]:
+    """Project the response to the allowlisted usage fields only."""
+    get_usage = (data.get("data") or {}).get("getUsageCompare") or {}
+    raw_rows = get_usage.get(list_field) or []
+    if not isinstance(raw_rows, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for raw in raw_rows[:_CAPTURE_MAX_ROWS]:
+        if not isinstance(raw, dict):
+            continue
+        rows.append({field: _sanitize_capture_scalar(raw.get(field)) for field in _CAPTURE_ROW_FIELDS})
+    return rows
+
+
+def _type_ref_name(type_ref: Any) -> str | None:
+    """Return the innermost named GraphQL type from an introspection type ref."""
+    current = type_ref
+    while isinstance(current, dict):
+        name = current.get("name")
+        if isinstance(name, str) and name:
+            return name
+        current = current.get("ofType")
+    return None
+
+
+def _introspection_summary(data: dict[str, Any]) -> dict[str, Any]:
+    """Reduce an introspection response to bounded field-name evidence."""
+    schema = (data.get("data") or {}).get("__schema") or {}
+    root_fields = ((schema.get("queryType") or {}).get("fields")) or []
+    root_matches: list[dict[str, Any]] = []
+    usage_contract_types: set[str] = set()
+    for field in root_fields:
+        if not isinstance(field, dict):
+            continue
+        name = str(field.get("name") or "")
+        if name == "getUsageCompare" or _DIRECTION_FIELD_RE.search(name):
+            return_type = _type_ref_name(field.get("type"))
+            if return_type:
+                usage_contract_types.add(return_type)
+            for arg in field.get("args") or []:
+                if isinstance(arg, dict) and (arg_type := _type_ref_name(arg.get("type"))):
+                    usage_contract_types.add(arg_type)
+            root_matches.append(
+                {
+                    "name": name[:100],
+                    "args": [
+                        {
+                            "name": str(arg.get("name") or "")[:100],
+                            "type": _type_ref_name(arg.get("type")),
+                        }
+                        for arg in (field.get("args") or [])[:_CAPTURE_MAX_INTROSPECTION_FIELDS]
+                        if isinstance(arg, dict)
+                    ],
+                    "return_type": return_type,
+                }
+            )
+
+    type_matches: list[dict[str, Any]] = []
+    for graph_type in schema.get("types") or []:
+        if not isinstance(graph_type, dict):
+            continue
+        type_name = str(graph_type.get("name") or "")
+        field_names = [
+            str(field.get("name") or "")[:100] for field in (graph_type.get("fields") or []) if isinstance(field, dict)
+        ]
+        input_names = [
+            str(field.get("name") or "")[:100]
+            for field in (graph_type.get("inputFields") or [])
+            if isinstance(field, dict)
+        ]
+        matching_fields = [name for name in field_names if _DIRECTION_FIELD_RE.search(name)]
+        matching_inputs = [name for name in input_names if _DIRECTION_FIELD_RE.search(name)]
+        include_all = (
+            type_name == "GetUsageCompareParams" or type_name in usage_contract_types or "UsageCompare" in type_name
+        )
+        if include_all or matching_fields or matching_inputs:
+            type_matches.append(
+                {
+                    "name": type_name[:100],
+                    "kind": str(graph_type.get("kind") or "")[:30],
+                    "fields": (field_names if include_all else matching_fields)[:_CAPTURE_MAX_INTROSPECTION_FIELDS],
+                    "input_fields": (input_names if include_all else matching_inputs)[
+                        :_CAPTURE_MAX_INTROSPECTION_FIELDS
+                    ],
+                }
+            )
+        if len(type_matches) >= _CAPTURE_MAX_INTROSPECTION_TYPES:
+            break
+    return {
+        "query_fields": root_matches[:_CAPTURE_MAX_INTROSPECTION_FIELDS],
+        "types": type_matches,
+    }
 
 
 def _parse_interval(
@@ -220,6 +376,7 @@ class PGEApiClient:
         account_id: str | None = None,
         *,
         auth_manager: PGEAuthManager | None = None,
+        capture_graphql_diagnostics: bool = False,
     ) -> None:
         self._session = session
         # Prefer explicit auth_manager; allow passing manager as second positional.
@@ -239,6 +396,150 @@ class PGEApiClient:
             self._legacy_person_id = None
             self._legacy_account_id = None
         self._rate_limit_until: datetime | None = None
+        self._capture_graphql_diagnostics = capture_graphql_diagnostics
+        self._captured_requests: set[tuple[UsageResolution, str, str]] = set()
+        self._captured_response_count = 0
+        self._capture_limit_logged = False
+        self._introspection_attempted = False
+        self._capture_source = "unknown"
+
+    @property
+    def introspection_attempted(self) -> bool:
+        """Whether this client attempted the opt-in schema discovery request."""
+        return self._introspection_attempted
+
+    @property
+    def captured_response_count(self) -> int:
+        """Number of bounded usage responses emitted to the opt-in log."""
+        return self._captured_response_count
+
+    def _log_usage_capture(
+        self,
+        data: dict[str, Any],
+        resolution: UsageResolution,
+        list_field: str,
+        start: datetime,
+        end: datetime,
+        account_key: str,
+    ) -> None:
+        """Log bounded, allowlisted rows and direction clues for one unique request."""
+        self._capture_source = hashlib.sha256(account_key.encode()).hexdigest()[:8]
+        request_key = (resolution, start.isoformat(), end.isoformat())
+        if request_key in self._captured_requests:
+            return
+        if self._captured_response_count >= _CAPTURE_MAX_RESPONSES:
+            if not self._capture_limit_logged:
+                _LOGGER.info(
+                    "%s source=%s response_limit_reached limit=%s",
+                    ALPHA_CAPTURE_PREFIX,
+                    self._capture_source,
+                    _CAPTURE_MAX_RESPONSES,
+                )
+                self._capture_limit_logged = True
+            return
+        self._captured_requests.add(request_key)
+        self._captured_response_count += 1
+
+        get_usage = (data.get("data") or {}).get("getUsageCompare") or {}
+        raw_rows = get_usage.get(list_field) or []
+        raw_row_count = len(raw_rows) if isinstance(raw_rows, list) else 0
+        rows = _capture_rows(data, list_field)
+        statuses = sorted({str(row["usageStatus"]) for row in rows if row.get("usageStatus") is not None})
+        starts = [row.get("intervalTime") or row.get("startDate") for row in rows]
+        start_counts = Counter(str(value) for value in starts if value)
+        duplicate_starts = sorted(start for start, count in start_counts.items() if count > 1)[:20]
+        negative_kwh = sum(1 for row in rows if (_safe_decimal(row.get("kwh")) or Decimal(0)) < 0)
+        negative_amount = sum(1 for row in rows if (_safe_decimal(row.get("amount")) or Decimal(0)) < 0)
+        summary = {
+            "resolution": resolution.value,
+            "start": start.astimezone(UTC).isoformat(),
+            "end": end.astimezone(UTC).isoformat(),
+            "row_count": raw_row_count,
+            "logged_row_count": len(rows),
+            "truncated": raw_row_count > len(rows),
+            "usage_statuses": statuses[:30],
+            "negative_kwh_count": negative_kwh,
+            "negative_amount_count": negative_amount,
+            "max_rows_per_start": max(start_counts.values(), default=0),
+            "duplicate_starts": duplicate_starts,
+        }
+        _LOGGER.info(
+            "%s source=%s capture=%s summary=%s",
+            ALPHA_CAPTURE_PREFIX,
+            self._capture_source,
+            self._captured_response_count,
+            json.dumps(summary, sort_keys=True, separators=(",", ":")),
+        )
+        for index, row in enumerate(rows):
+            _LOGGER.info(
+                "%s source=%s capture=%s row=%s data=%s",
+                ALPHA_CAPTURE_PREFIX,
+                self._capture_source,
+                self._captured_response_count,
+                index,
+                json.dumps(row, sort_keys=True, separators=(",", ":")),
+            )
+
+    async def _async_capture_introspection(self, headers: dict[str, str]) -> None:
+        """Attempt one PGE-only schema discovery request without affecting sync."""
+        if self._introspection_attempted:
+            return
+        # Set before awaiting so concurrent backfill calls cannot duplicate the probe.
+        self._introspection_attempted = True
+        payload = {
+            "query": _INTROSPECTION_QUERY,
+            "operationName": "PGEAlphaGridIntrospection",
+            "variables": {},
+        }
+        try:
+            async with self._session.post(
+                GRAPHQL_URL,
+                json=payload,
+                headers=headers,
+                timeout=_INTROSPECTION_TIMEOUT,
+                allow_redirects=False,
+            ) as resp:
+                if resp.status != 200:
+                    _LOGGER.info(
+                        "%s source=%s introspection=failed status=%s",
+                        ALPHA_CAPTURE_PREFIX,
+                        self._capture_source,
+                        resp.status,
+                    )
+                    return
+                data = await resp.json()
+        except (TimeoutError, aiohttp.ClientError, ValueError) as exc:
+            _LOGGER.info(
+                "%s source=%s introspection=failed error_type=%s",
+                ALPHA_CAPTURE_PREFIX,
+                self._capture_source,
+                type(exc).__name__,
+            )
+            return
+        if not isinstance(data, dict):
+            _LOGGER.info(
+                "%s source=%s introspection=failed detail=non-object response",
+                ALPHA_CAPTURE_PREFIX,
+                self._capture_source,
+            )
+            return
+        if data.get("errors"):
+            errors = data["errors"]
+            error_count = len(errors) if isinstance(errors, list) else 1
+            _LOGGER.info(
+                "%s source=%s introspection=failed graphql_error_count=%s",
+                ALPHA_CAPTURE_PREFIX,
+                self._capture_source,
+                error_count,
+            )
+            return
+        summary = _introspection_summary(data)
+        _LOGGER.info(
+            "%s source=%s introspection=success summary=%s",
+            ALPHA_CAPTURE_PREFIX,
+            self._capture_source,
+            json.dumps(summary, sort_keys=True, separators=(",", ":")),
+        )
 
     def _credentials(self) -> tuple[str, str, str]:
         if self._auth_manager is not None:
@@ -346,6 +647,25 @@ class PGEApiClient:
                     continue
                 raise PGEConnectionError(f"Connection failed: {exc}") from exc
             else:
+                if self._capture_graphql_diagnostics and not data.get("errors"):
+                    try:
+                        self._log_usage_capture(data, resolution, list_field, start, end, account_key)
+                    except Exception as exc:  # noqa: BLE001 - diagnostics must never fail usage sync
+                        _LOGGER.info(
+                            "%s source=%s processing=failed error_type=%s",
+                            ALPHA_CAPTURE_PREFIX,
+                            self._capture_source,
+                            type(exc).__name__,
+                        )
+                    try:
+                        await self._async_capture_introspection(headers)
+                    except Exception as exc:  # noqa: BLE001 - diagnostics must never fail usage sync
+                        _LOGGER.info(
+                            "%s source=%s introspection=failed error_type=%s",
+                            ALPHA_CAPTURE_PREFIX,
+                            self._capture_source,
+                            type(exc).__name__,
+                        )
                 return _parse_usage_response(data, resolution, account_key)
 
         raise PGEConnectionError(f"Request failed after {MAX_RETRIES} attempts: {last_exc}")

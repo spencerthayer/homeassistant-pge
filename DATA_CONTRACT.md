@@ -95,6 +95,31 @@ The returned usage list field depends on the `displayMode` parameter:
 | `efficientSimilarHomesKwh` | string or null          |
 | `rank`                     | null                    |
 
+### Grid return discovery (v0.7.3 alpha)
+
+The confirmed contract above is from a non-generating account and only demonstrates `usageStatus = "kWh-Delivered"`. It does **not** establish whether a generating/net-metered account returns signed `kwh`, duplicate delivered/received rows, a separate field, or a separate PGE GraphQL operation. The integration therefore does not publish grid-return or compensation statistics yet.
+
+The default-off `capture_graphql_diagnostics` option records bounded, allowlisted HOURLY/DAILY/MONTHLY rows and derived direction clues (`usageStatus` values, negative kWh/amount counts, and duplicate interval starts). It also attempts one best-effort GraphQL schema discovery request per client load. Capture and introspection use only `https://apix.portlandgeneral.com/pge-graphql`, never change normal parsing/import output, and soft-fail independently of sync. Logs omit headers, credentials, identity variables, and complete response envelopes; interval timestamps and values remain private.
+
+Production direction handling is blocked until a sanitized generating-account capture establishes one of these PGE GraphQL-only contracts:
+
+1. signed usage/cost values;
+2. separate directional rows;
+3. a separate field or operation;
+4. net-only data, in which case gross return cannot be reconstructed reliably.
+
+Live schema discovery on 2026-08-02 confirmed a separate PGE GraphQL root operation:
+
+```graphql
+getNetMeteringDetails(params: NetMeteringDetailsParams): NetMeteringDetails
+```
+
+- `NetMeteringDetailsParams`: `encryptedAccountId`, `encryptedPremiseId`
+- `NetMeteringDetails`: `isFirstBillGenerated`, `application`, `monthlyBill`
+- `MonthlyBill`: includes `excessGeneration`
+
+This was introspected with a non-generating account, so field availability and the units/time grain of `excessGeneration` remain unverified. It may be monthly billing information rather than the interval return series required by Home Assistant. Do not publish it as grid return until NinjaNife's generating-account capture establishes the response semantics and reconciliation against `getUsageCompare`.
+
 ---
 
 ## Display Mode Details

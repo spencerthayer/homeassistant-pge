@@ -15,7 +15,7 @@ Custom Home Assistant integration that imports **Portland General Electric (PGE)
 1. In HACS → **⋯** → **Custom repositories**, add  
    `https://github.com/spencerthayer/homeassistant-pge`  
    with category **Integration**.
-2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.7.2`).
+2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.7.3`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -138,11 +138,19 @@ All API clients share a single `PGEAuthManager` and `aiohttp.ClientSession`. Usa
 
 Settings → Devices & Services → PGE Energy → **Configure** (opened from any account entry):
 
-- **Sync settings:** polling (value + unit `minutes` / `hours` / `days`, default **every 4 hours**), **sync clock** (Pacific, default **12:00 AM** — anchors the hour/day grid), correction window, history mode/start, hourly history days, auto backfill, cost/diagnostics, **import billing & programs** (`include_billing`, default on), **download bill PDFs** (opt-in, default off — fetches portal PDFs to `www/pge_energy/…`, parses locally, imports 18 `_bill_pdf_*` statement statistics; `/local` exposure warning in SECURITY.md), concurrency. Per account.
+- **Sync settings:** polling (value + unit `minutes` / `hours` / `days`, default **every 4 hours**), **sync clock** (Pacific, default **12:00 AM** — anchors the hour/day grid), correction window, history mode/start, hourly history days, auto backfill, cost/diagnostics, **import billing & programs** (`include_billing`, default on), **download bill PDFs** (opt-in, default off — fetches portal PDFs to `www/pge_energy/…`, parses locally, imports 18 `_bill_pdf_*` statement statistics; `/local` exposure warning in SECURITY.md), concurrency, and the default-off **diagnostic capture (alpha)** described below. Per account.
 - **Panel:** integration-wide chrome for `/pge` (stored once for the whole domain, not per account): **Show PGE in sidebar** (default on), **Sidebar title** (default `PGE`), **Sidebar icon** (default `mdi:transmission-tower`), **Admin-only panel** (default on), **Default landing section** (At a glance / Usage / Analytics / Billing). Hiding the sidebar link does **not** unregister `/pge` — open that URL directly. **Admin-only panel** off lets non-admins open the route, but account/sync websocket APIs stay admin-only. Sidebar *order* remains Home Assistant’s sidebar editor or [Browser Mod](https://github.com/thomasloven/hass-browser_mod).
 - **Update credentials:** email/password; account number is read-only; statistic IDs unchanged.
 - **Manual sync:** force **Refresh now** (correction window) or **Backfill missing history** (uses current Sync settings history bounds). Remains available when the sidebar link is hidden. A notification links to the PGE device page; live **Sync status** / **Sync progress** (%) sensors show phase, ETA, and detail.
 - Details: [`docs/HA_SETTINGS_HISTORY.md`](docs/HA_SETTINGS_HISTORY.md).
+
+### Grid import/export diagnostic capture (v0.7.3 alpha)
+
+Issue [#5](https://github.com/spencerthayer/homeassistant-pge/issues/5) is investigating separate grid import/return data for generating customers. PGE's GraphQL direction contract is not yet known, so v0.7.3 does **not** add or change Energy statistics. It adds a per-account **Enable diagnostic capture (alpha)** switch under Configure → Sync settings; it is **off by default**.
+
+When explicitly enabled, successful HOURLY/DAILY/MONTHLY usage calls log a bounded allowlist of interval time, kWh, amount, usage status, interval size, and temperature under the prefix `PGE_ALPHA_GRID_CAPTURE`. The client also makes one best-effort schema discovery request to the same PGE GraphQL endpoint per integration load. It never logs request headers, credentials, tokens, account/person identifiers, or complete response envelopes; introspection failure does not fail sync. Usage timestamps and values are still privacy-sensitive. Enable only for a requested capture, review logs before sharing, and turn it off afterward.
+
+Tester workflow: upgrade/restart, enable the switch, let normal sync run for 1–2 days (PGE publishes closed intervals overnight), then download Settings → System → Logs. The visible log filter helps inspection but may not limit the downloaded file, so share only the `PGE_ALPHA_GRID_CAPTURE` lines or review the full file first.
 
 ## Sensors and statistics
 
@@ -246,6 +254,7 @@ All long-running services require `entry_id`:
 - DAILY windows under ~31 days may hard-error (`Something unexpected happened`); prefer HOURLY or ≥31d DAILY.
 - MONTHLY returns the latest ~12 billing periods per call; older history requires paging backwards.
 - Response `totalKwhUsage` / `totalKwhCost` are reliable mainly for DAILY.
+- Separate grid-return energy is under PGE GraphQL discovery in v0.7.3; the integration does not infer or publish return values yet.
 - **PGE publishes usage once overnight, not continuously.** Hourly intervals for a Pacific calendar day typically appear after midnight (often with the tip stuck near `01:00` local until the next publication). A “stuck” Latest available interval during the day is expected — not a sync failure. Default polling is **every 4 hours** on a Pacific clock grid (**Sync clock**, default **12:00 AM** → 12am/4am/8am/noon/4pm/8pm); Configure → Sync settings can tighten or loosen that.
 - PGE may return transient 502s (retried). See [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
 

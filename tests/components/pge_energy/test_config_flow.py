@@ -22,6 +22,7 @@ from custom_components.pge_energy.const import (
     CONF_AUTO_BACKFILL,
     CONF_BACKFILL_CONCURRENCY,
     CONF_BEARER_TOKEN,
+    CONF_CAPTURE_GRAPHQL_DIAGNOSTICS,
     CONF_CORRECTION_WINDOW,
     CONF_EMAIL,
     CONF_HISTORY_MODE,
@@ -237,8 +238,13 @@ class TestPGEOptionsFlow:
         assert CONF_AUTO_BACKFILL in flat_keys
         assert CONF_INCLUDE_COST in flat_keys
         assert CONF_INCLUDE_DIAGNOSTICS in flat_keys
+        assert CONF_CAPTURE_GRAPHQL_DIAGNOSTICS in flat_keys
         assert CONF_INCLUDE_BILLING in flat_keys
         assert CONF_BACKFILL_CONCURRENCY in flat_keys
+        capture_field = next(
+            field for field in schema.schema if getattr(field, "schema", field) == CONF_CAPTURE_GRAPHQL_DIAGNOSTICS
+        )
+        assert capture_field.default() is False
 
     @pytest.mark.asyncio
     async def test_options_init_shows_menu(self):
@@ -462,6 +468,7 @@ class TestPGEOptionsFlow:
                 CONF_AUTO_BACKFILL: True,
                 CONF_INCLUDE_COST: True,
                 CONF_INCLUDE_DIAGNOSTICS: False,
+                CONF_CAPTURE_GRAPHQL_DIAGNOSTICS: True,
                 CONF_INCLUDE_BILLING: True,
                 CONF_BACKFILL_CONCURRENCY: 2,
             }
@@ -473,6 +480,7 @@ class TestPGEOptionsFlow:
         assert result["data"][CONF_HISTORY_MODE] == HistoryMode.FULL.value
         assert result["data"][CONF_HOURLY_BACKFILL_DAYS] == 90
         assert result["data"][CONF_INCLUDE_DIAGNOSTICS] is False
+        assert result["data"][CONF_CAPTURE_GRAPHQL_DIAGNOSTICS] is True
         assert result["data"][CONF_INCLUDE_BILLING] is True
 
     @pytest.mark.asyncio
