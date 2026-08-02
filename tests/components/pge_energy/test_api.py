@@ -7,8 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.pge_energy.api import (
+    ALPHA_CAPTURE_PREFIX,
     PGEApiClient,
     _build_query,
+    _capture_rows,
+    _introspection_summary,
     _parse_hourly_timestamp,
     _parse_interval,
     _parse_iso_timestamp,
@@ -48,6 +51,16 @@ MOCK_DAILY_INTERVAL = {
     "endDate": "2026-06-08T07:00:00.000Z",
     "temperature": "56.96",
 }
+
+
+def _mock_http_response(status: int, *, json_data=None, text: str = "") -> AsyncMock:
+    response = AsyncMock()
+    response.status = status
+    response.json = AsyncMock(return_value=json_data)
+    response.text = AsyncMock(return_value=text)
+    response.__aenter__ = AsyncMock(return_value=response)
+    response.__aexit__ = AsyncMock(return_value=False)
+    return response
 
 
 class TestTimestampParsing:
@@ -187,6 +200,111 @@ class TestResponseParsing:
         assert len(resp.intervals) == 0
 
 
+class TestAlphaCaptureHelpers:
+    def test_capture_rows_allowlists_and_sanitizes(self):
+        raw = {
+            "data": {
+                "getUsageCompare": {
+                    "hourlyUsageList": [
+                        {
+                            **MOCK_HOURLY_INTERVAL,
+                            "temperature": "user@example.com eyJabc.def.ghi 1234567890",
+                            "unexpectedSecret": "must-not-appear",
+                        }
+                    ],
+                    "accountId": "1234567890",
+                }
+            }
+        }
+        rows = _capture_rows(raw, "hourlyUsageList")
+        assert len(rows) == 1
+        assert set(rows[0]) == {
+            "intervalTime",
+            "startDate",
+            "endDate",
+            "kwh",
+            "amount",
+            "usageStatus",
+            "intervalSize",
+            "temperature",
+        }
+        assert rows[0]["temperature"] == "[email] [jwt] [id]"
+        assert "unexpectedSecret" not in rows[0]
+
+    def test_capture_rows_are_bounded(self):
+        raw = {
+            "data": {
+                "getUsageCompare": {
+                    "hourlyUsageList": [{**MOCK_HOURLY_INTERVAL, "temperature": "x" * 500} for _ in range(50)]
+                }
+            }
+        }
+        rows = _capture_rows(raw, "hourlyUsageList")
+        assert len(rows) == 40
+        assert rows[0]["temperature"] == "x" * 120
+
+    def test_introspection_summary_keeps_usage_contract_and_direction_fields(self):
+        raw = {
+            "data": {
+                "__schema": {
+                    "queryType": {
+                        "fields": [
+                            {
+                                "name": "getUsageCompare",
+                                "args": [{"name": "params", "type": {"name": "GetUsageCompareParams"}}],
+                                "type": {
+                                    "kind": "NON_NULL",
+                                    "ofType": {
+                                        "kind": "LIST",
+                                        "ofType": {
+                                            "kind": "NON_NULL",
+                                            "ofType": {"name": "UsageCompareResponse"},
+                                        },
+                                    },
+                                },
+                            },
+                            {
+                                "name": "getSolarExport",
+                                "args": [{"name": "params", "type": {"name": "SolarExportParams"}}],
+                                "type": {"name": "SolarExport"},
+                            },
+                            {"name": "unrelated", "args": [], "type": {"name": "Other"}},
+                        ]
+                    },
+                    "types": [
+                        {
+                            "kind": "INPUT_OBJECT",
+                            "name": "GetUsageCompareParams",
+                            "inputFields": [{"name": "displayMode"}, {"name": "accountId"}],
+                        },
+                        {
+                            "kind": "OBJECT",
+                            "name": "UsageCompareResponse",
+                            "fields": [{"name": "hourlyUsageList"}, {"name": "receivedKwh"}],
+                        },
+                        {
+                            "kind": "OBJECT",
+                            "name": "Other",
+                            "fields": [{"name": "ignored"}, {"name": "oneTimePayment"}],
+                        },
+                        {
+                            "kind": "INPUT_OBJECT",
+                            "name": "SolarExportParams",
+                            "inputFields": [{"name": "encryptedAccountNumber"}],
+                        },
+                    ],
+                }
+            }
+        }
+        summary = _introspection_summary(raw)
+        assert [field["name"] for field in summary["query_fields"]] == ["getUsageCompare", "getSolarExport"]
+        types = {item["name"]: item for item in summary["types"]}
+        assert types["GetUsageCompareParams"]["input_fields"] == ["displayMode", "accountId"]
+        assert types["UsageCompareResponse"]["fields"] == ["hourlyUsageList", "receivedKwh"]
+        assert types["SolarExportParams"]["input_fields"] == ["encryptedAccountNumber"]
+        assert "Other" not in types
+
+
 class TestApiClient:
     @pytest.mark.asyncio
     async def test_get_usage_success(self):
@@ -214,6 +332,173 @@ class TestApiClient:
         now = datetime.now(UTC)
         resp = await client.get_usage(UsageResolution.HOURLY, now - timedelta(days=1), now, "key1")
         assert len(resp.intervals) == 1
+        assert mock_session.post.call_count == 1
+        assert client.introspection_attempted is False
+        assert client.captured_response_count == 0
+
+    @pytest.mark.asyncio
+    async def test_opt_in_capture_logs_rows_and_introspects_once(self, caplog):
+        usage_data = {
+            "data": {
+                "getUsageCompare": {
+                    "isCustomerEnrolledInTOD": False,
+                    "hourlyUsageList": [
+                        {**MOCK_HOURLY_INTERVAL, "kwh": "-1.5", "amount": -0.2},
+                        {**MOCK_HOURLY_INTERVAL, "kwh": "0.5", "amount": 0.1},
+                    ],
+                    "accountId": "1234567890",
+                }
+            },
+            "token": "eyJabc.def.ghi",
+        }
+        introspection_data = {
+            "data": {
+                "__schema": {
+                    "queryType": {
+                        "fields": [
+                            {
+                                "name": "getUsageCompare",
+                                "args": [{"name": "params", "type": {"name": "GetUsageCompareParams"}}],
+                                "type": {"name": "UsageCompareResponse"},
+                            }
+                        ]
+                    },
+                    "types": [
+                        {
+                            "kind": "OBJECT",
+                            "name": "UsageCompareResponse",
+                            "fields": [{"name": "receivedKwh"}],
+                        }
+                    ],
+                }
+            }
+        }
+        session = MagicMock()
+        session.post = MagicMock(
+            side_effect=[
+                _mock_http_response(200, json_data=usage_data),
+                _mock_http_response(200, json_data=introspection_data),
+                _mock_http_response(200, json_data=usage_data),
+            ]
+        )
+        client = PGEApiClient(
+            session,
+            "secret-token",
+            "secret-person",
+            "1234567890",
+            capture_graphql_diagnostics=True,
+        )
+        start = datetime(2026, 7, 1, tzinfo=UTC)
+        end = start + timedelta(days=1)
+        with caplog.at_level("INFO", logger="custom_components.pge_energy.api"):
+            first = await client.get_usage(UsageResolution.HOURLY, start, end, "secret-key")
+            second = await client.get_usage(UsageResolution.HOURLY, start, end, "secret-key")
+
+        assert len(first.intervals) == len(second.intervals) == 2
+        assert session.post.call_count == 3
+        assert client.introspection_attempted is True
+        assert client.captured_response_count == 1
+        introspection_call = session.post.call_args_list[1]
+        assert introspection_call.args[0] == "https://apix.portlandgeneral.com/pge-graphql"
+        assert introspection_call.kwargs["allow_redirects"] is False
+        text = caplog.text
+        assert ALPHA_CAPTURE_PREFIX in text
+        assert '"negative_kwh_count":1' in text
+        assert '"negative_amount_count":1' in text
+        assert '"max_rows_per_start":2' in text
+        assert "receivedKwh" in text
+        assert "secret-token" not in text
+        assert "secret-person" not in text
+        assert "secret-key" not in text
+        assert "1234567890" not in text
+        assert "eyJabc.def.ghi" not in text
+
+    @pytest.mark.asyncio
+    async def test_introspection_failure_does_not_fail_usage(self, caplog):
+        usage_data = {
+            "data": {
+                "getUsageCompare": {
+                    "isCustomerEnrolledInTOD": False,
+                    "hourlyUsageList": [MOCK_HOURLY_INTERVAL],
+                }
+            }
+        }
+        session = MagicMock()
+        session.post = MagicMock(
+            side_effect=[
+                _mock_http_response(200, json_data=usage_data),
+                _mock_http_response(403, text="account 1234567890 rejected"),
+            ]
+        )
+        client = PGEApiClient(session, "token", "person", "account", capture_graphql_diagnostics=True)
+        now = datetime.now(UTC)
+        with caplog.at_level("INFO", logger="custom_components.pge_energy.api"):
+            response = await client.get_usage(UsageResolution.HOURLY, now - timedelta(days=1), now, "key")
+        assert len(response.intervals) == 1
+        assert client.introspection_attempted is True
+        assert "introspection=failed status=403" in caplog.text
+        assert "1234567890" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_capture_processing_exception_does_not_fail_usage(self, caplog):
+        usage_data = {
+            "data": {
+                "getUsageCompare": {
+                    "isCustomerEnrolledInTOD": False,
+                    "hourlyUsageList": [MOCK_HOURLY_INTERVAL],
+                }
+            }
+        }
+        introspection_data = {"data": {"__schema": {"queryType": {"fields": []}, "types": []}}}
+        session = MagicMock()
+        session.post = MagicMock(
+            side_effect=[
+                _mock_http_response(200, json_data=usage_data),
+                _mock_http_response(200, json_data=introspection_data),
+            ]
+        )
+        client = PGEApiClient(session, "token", "person", "account", capture_graphql_diagnostics=True)
+        now = datetime.now(UTC)
+        with (
+            caplog.at_level("INFO", logger="custom_components.pge_energy.api"),
+            patch.object(client, "_log_usage_capture", side_effect=ValueError("bad private@example.com")),
+        ):
+            response = await client.get_usage(UsageResolution.HOURLY, now - timedelta(days=1), now, "key")
+
+        assert len(response.intervals) == 1
+        assert session.post.call_count == 2
+        assert "processing=failed error_type=ValueError" in caplog.text
+        assert "private@example.com" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_unknown_usage_shape_is_captured_before_parse_failure(self, caplog):
+        usage_data = {
+            "data": {
+                "getUsageCompare": {
+                    "isCustomerEnrolledInTOD": False,
+                    "hourlyUsageList": [{**MOCK_HOURLY_INTERVAL, "kwh": None, "usageStatus": "kWh-Received"}],
+                }
+            }
+        }
+        introspection_data = {"data": {"__schema": {"queryType": {"fields": []}, "types": []}}}
+        session = MagicMock()
+        session.post = MagicMock(
+            side_effect=[
+                _mock_http_response(200, json_data=usage_data),
+                _mock_http_response(200, json_data=introspection_data),
+            ]
+        )
+        client = PGEApiClient(session, "token", "person", "account", capture_graphql_diagnostics=True)
+        now = datetime.now(UTC)
+        with (
+            caplog.at_level("INFO", logger="custom_components.pge_energy.api"),
+            pytest.raises(PGESchemaError),
+        ):
+            await client.get_usage(UsageResolution.HOURLY, now - timedelta(days=1), now, "key")
+
+        assert session.post.call_count == 2
+        assert client.introspection_attempted is True
+        assert '"usageStatus":"kWh-Received"' in caplog.text
 
     @pytest.mark.asyncio
     async def test_get_usage_401(self):

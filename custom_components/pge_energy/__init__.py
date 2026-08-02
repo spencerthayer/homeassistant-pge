@@ -29,6 +29,7 @@ from .const import (
     CONF_AUTH_MODE,
     CONF_AUTO_BACKFILL,
     CONF_BEARER_TOKEN,
+    CONF_CAPTURE_GRAPHQL_DIAGNOSTICS,
     CONF_EMAIL,
     CONF_ENCRYPTED_ACCOUNT_NUMBER,
     CONF_ENCRYPTED_PERSON_ID,
@@ -39,6 +40,7 @@ from .const import (
     CONF_REFRESH_CREDENTIAL,
     CONF_TOKEN_EXPIRES_AT,
     DEFAULT_AUTO_BACKFILL,
+    DEFAULT_CAPTURE_GRAPHQL_DIAGNOSTICS,
     DEFAULT_INCLUDE_COST,
     DOMAIN,
     PLATFORMS,
@@ -139,7 +141,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
         hass.config_entries.async_update_entry(entry, title=desired_title)
 
     session = aiohttp_client.async_get_clientsession(hass)
-    client = PGEApiClient(session, auth_manager=auth_manager)
+    client = PGEApiClient(
+        session,
+        auth_manager=auth_manager,
+        capture_graphql_diagnostics=bool(
+            get_entry_option(
+                entry,
+                CONF_CAPTURE_GRAPHQL_DIAGNOSTICS,
+                DEFAULT_CAPTURE_GRAPHQL_DIAGNOSTICS,
+            )
+        ),
+    )
 
     coordinator = PGECoordinator(hass, entry, auth_manager, client)
     await coordinator.async_load_store()

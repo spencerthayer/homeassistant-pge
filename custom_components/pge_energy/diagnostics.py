@@ -12,12 +12,14 @@ from .const import (
     CONF_ACCOUNT_ID,
     CONF_AUTH_MODE,
     CONF_BEARER_TOKEN,
+    CONF_CAPTURE_GRAPHQL_DIAGNOSTICS,
     CONF_DOWNLOAD_BILL_PDFS,
     CONF_EMAIL,
     CONF_ENCRYPTED_PERSON_ID,
     CONF_PASSWORD,
     CONF_REFRESH_CREDENTIAL,
     CONF_SYNC_LOCAL_TIME,
+    DEFAULT_CAPTURE_GRAPHQL_DIAGNOSTICS,
     DEFAULT_SYNC_LOCAL_TIME,
     DOMAIN,
     ENTITY_UNIQUE_COST,
@@ -26,6 +28,7 @@ from .const import (
     STATISTIC_ID_SUFFIX_CONSUMPTION,
     STATISTIC_ID_SUFFIX_COST,
     STATISTIC_ID_SUFFIX_TEMPERATURE,
+    VERSION,
 )
 from .options import get_entry_option
 from .statistics import _get_statistic_id, async_resolve_sensor_entity_id
@@ -63,7 +66,7 @@ async def async_get_config_entry_diagnostics(
     freshness = coordinator.freshness
 
     data = {
-        "integration_version": "0.2.0",
+        "integration_version": VERSION,
         "ha_version": hass.version,
         "auth_mode": entry.data.get(CONF_AUTH_MODE),
         "token_expires_at": str(coordinator.auth_manager.token_expires_at)
@@ -80,6 +83,17 @@ async def async_get_config_entry_diagnostics(
         else None,
         "sync_local_time": get_entry_option(entry, CONF_SYNC_LOCAL_TIME, DEFAULT_SYNC_LOCAL_TIME),
         "correction_window_days": coordinator.correction_window_days,
+        "graphql_diagnostic_capture": {
+            "enabled": bool(
+                get_entry_option(
+                    entry,
+                    CONF_CAPTURE_GRAPHQL_DIAGNOSTICS,
+                    DEFAULT_CAPTURE_GRAPHQL_DIAGNOSTICS,
+                )
+            ),
+            "introspection_attempted": coordinator.client.introspection_attempted,
+            "captured_responses": coordinator.client.captured_response_count,
+        },
         "recent_intervals_count": len(coordinator.recent_intervals),
         "failed_ranges_count": len(coordinator.failed_ranges),
         "last_api_error": freshness.last_api_error,
