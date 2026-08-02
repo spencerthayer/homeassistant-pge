@@ -18,12 +18,12 @@ from custom_components.pge_energy.billing_statistics import (
     _floor_hour,
     _import_mean_point,
     async_cleanup_orphaned_billing_entity_mirrors,
+    async_clear_bill_avg_temp_entity_statistics,
     async_import_billing_snapshot,
     async_import_ledger_events,
     async_import_programs_metrics,
 )
 from custom_components.pge_energy.const import (
-    ENTITY_UNIQUE_BILL_AVG_TEMPERATURE,
     ENTITY_UNIQUE_LIFETIME_BILLED,
     ENTITY_UNIQUE_LIFETIME_PAYMENTS,
     STATISTIC_ID_SUFFIX_ACCOUNT_BALANCE,
@@ -115,7 +115,11 @@ class TestAsyncImport:
             assert by_suffix[STATISTIC_ID_SUFFIX_ACCOUNT_BALANCE] is None
             assert by_suffix[STATISTIC_ID_SUFFIX_AMOUNT_DUE] is None
             assert by_suffix[STATISTIC_ID_SUFFIX_LAST_PAYMENT_AMOUNT] is None
-            assert by_suffix[STATISTIC_ID_SUFFIX_BILL_AVG_TEMPERATURE] == ENTITY_UNIQUE_BILL_AVG_TEMPERATURE
+            # Bill avg temperature is external-only: mirroring a snapshot-stamped
+            # row onto the recorder-tracked entity collides with HA Core's
+            # compile_statistics plain INSERT ("Blocked attempt to insert
+            # duplicated statistic rows").
+            assert by_suffix[STATISTIC_ID_SUFFIX_BILL_AVG_TEMPERATURE] is None
 
         with patch("custom_components.pge_energy.billing_statistics._import_mean_point") as mean:
             await async_import_programs_metrics(
@@ -222,3 +226,60 @@ async def test_billing_mirror_cleanup_runs_once():
         assert ok2 is True
         assert clear.call_count == 1
         assert save.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_bill_avg_temp_mirror_cleanup_runs_once():
+    hass = MagicMock()
+    store = ImportStoreData(account_key="key", bill_avg_temp_mirror_cleanup_done=False)
+    clear = MagicMock(side_effect=lambda ids, *, on_done=None: on_done() if on_done else None)
+    instance = MagicMock()
+    instance.async_clear_statistics = clear
+
+    with (
+        patch(
+            "custom_components.pge_energy.billing_statistics.async_resolve_sensor_entity_id",
+            return_value="sensor.pge_key_bill_period_avg_temperature",
+        ),
+        patch(
+            "custom_components.pge_energy.billing_statistics.get_instance",
+            return_value=instance,
+        ),
+        patch(
+            "custom_components.pge_energy.billing_statistics.async_save_import_state",
+            new=AsyncMock(),
+        ) as save,
+    ):
+        ok = await async_clear_bill_avg_temp_entity_statistics(hass, entry_id="entry1", account_key="key", store=store)
+        assert ok is True
+        assert store.bill_avg_temp_mirror_cleanup_done is True
+        clear.assert_called_once()
+        assert clear.call_args.args[0] == ["sensor.pge_key_bill_period_avg_temperature"]
+        save.assert_awaited_once()
+
+        # Second call is a no-op once the flag is set.
+        ok2 = await async_clear_bill_avg_temp_entity_statistics(hass, entry_id="entry1", account_key="key", store=store)
+        assert ok2 is True
+        assert clear.call_count == 1
+        assert save.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_bill_avg_temp_mirror_cleanup_marks_done_when_entity_missing():
+    hass = MagicMock()
+    store = ImportStoreData(account_key="key", bill_avg_temp_mirror_cleanup_done=False)
+
+    with (
+        patch(
+            "custom_components.pge_energy.billing_statistics.async_resolve_sensor_entity_id",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.pge_energy.billing_statistics.async_save_import_state",
+            new=AsyncMock(),
+        ) as save,
+    ):
+        ok = await async_clear_bill_avg_temp_entity_statistics(hass, entry_id="entry1", account_key="key", store=store)
+        assert ok is True
+        assert store.bill_avg_temp_mirror_cleanup_done is True
+        save.assert_awaited_once()

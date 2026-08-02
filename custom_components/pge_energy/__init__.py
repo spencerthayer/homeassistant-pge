@@ -17,7 +17,10 @@ from homeassistant.helpers import device_registry as dr
 from .api import PGEApiClient
 from .auth import PGEAuthManager
 from .backfill import async_backfill_range, async_fetch_hourly_day
-from .billing_statistics import async_cleanup_orphaned_billing_entity_mirrors
+from .billing_statistics import (
+    async_cleanup_orphaned_billing_entity_mirrors,
+    async_clear_bill_avg_temp_entity_statistics,
+)
 from .billing_sync import async_run_billing_sync
 from .const import (
     AUTH_MODE_CREDENTIAL,
@@ -178,6 +181,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
         await coordinator.async_repair_dirty_if_needed()
         await coordinator.async_repair_monthly_collisions_if_needed()
         await async_cleanup_orphaned_billing_entity_mirrors(
+            hass,
+            entry_id=entry.entry_id,
+            account_key=coordinator.account_key,
+            store=coordinator.import_store,
+        )
+        await async_clear_bill_avg_temp_entity_statistics(
             hass,
             entry_id=entry.entry_id,
             account_key=coordinator.account_key,
