@@ -52,7 +52,7 @@
       <rect x="0" y="362" width="86" height="40" rx="8" fill="#16213B" stroke="#23304F"/>
       <text x="43" y="387" text-anchor="middle">HACS</text>
       <rect x="98" y="362" width="104" height="40" rx="8" fill="#16213B" stroke="#23304F"/>
-      <text x="150" y="387" text-anchor="middle">v0.7.4</text>
+      <text x="150" y="387" text-anchor="middle">v0.7.5</text>
       <rect x="214" y="362" width="152" height="40" rx="8" fill="#16213B" stroke="#23304F"/>
       <text x="290" y="387" text-anchor="middle">HA 2026.7.0+</text>
       <rect x="378" y="362" width="200" height="40" rx="8" fill="#16213B" stroke="#23304F"/>
