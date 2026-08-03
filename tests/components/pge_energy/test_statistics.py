@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import MagicMock, patch
+
+from homeassistant.util import dt as dt_util
 
 from custom_components.pge_energy.const import (
     STATISTIC_ID_SUFFIX_CONSUMPTION,
@@ -10,6 +13,7 @@ from custom_components.pge_energy.const import (
 )
 from custom_components.pge_energy.models import UsageInterval, UsageResolution
 from custom_components.pge_energy.statistics import (
+    _async_mirror_entity_statistics,
     _build_cost_metadata,
     _build_cost_statistics,
     _build_entity_consumption_metadata,
@@ -176,3 +180,69 @@ class TestIncrementalStatistics:
         assert stats[0]["state"] == 2.50
         assert stats[1]["state"] == 5.00
         assert stats[1]["sum"] == 7.50
+
+
+class TestMirrorEntityStatisticsCompileCutoff:
+    def _mirror(self, import_mock, stats):
+        _async_mirror_entity_statistics(
+            MagicMock(),
+            account_key="abc123",
+            unique_suffix="energy",
+            entity_metadata=MagicMock(),
+            stats=stats,
+        )
+        return import_mock.call_args[0][2] if import_mock.call_count else None
+
+    def test_skips_unfinalized_hours(self):
+        """Only rows at least two hours past the current hour are mirrored.
+
+        HA Core's compile_statistics finalizes hour H during the 5-min slot at
+        H+55; a mirror row written earlier collides with its plain INSERT on
+        UNIQUE(metadata_id, start_ts).
+        """
+        now = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
+        stats = [
+            {"start": now, "state": 1.0, "sum": 1.0},
+            {"start": now - timedelta(hours=1), "state": 2.0, "sum": 3.0},
+            {"start": now - timedelta(hours=2), "state": 3.0, "sum": 6.0},
+            {"start": now - timedelta(hours=3), "state": 4.0, "sum": 10.0},
+            {"start": now - timedelta(hours=4), "state": 5.0, "sum": 15.0},
+        ]
+        with (
+            patch(
+                "custom_components.pge_energy.statistics.async_resolve_sensor_entity_id",
+                return_value="sensor.pge_x_energy",
+            ),
+            patch("custom_components.pge_energy.statistics.ha_async_import_statistics") as import_mock,
+        ):
+            mirrored = self._mirror(import_mock, stats)
+        assert [s["start"] for s in mirrored] == [now - timedelta(hours=3), now - timedelta(hours=4)]
+
+    def test_all_new_rows_skipped_without_import(self):
+        now = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
+        stats = [
+            {"start": now, "state": 1.0, "sum": 1.0},
+            {"start": now - timedelta(hours=1), "state": 2.0, "sum": 3.0},
+        ]
+        with (
+            patch(
+                "custom_components.pge_energy.statistics.async_resolve_sensor_entity_id",
+                return_value="sensor.pge_x_energy",
+            ),
+            patch("custom_components.pge_energy.statistics.ha_async_import_statistics") as import_mock,
+        ):
+            self._mirror(import_mock, stats)
+        import_mock.assert_not_called()
+
+    def test_older_rows_still_mirrored(self):
+        now = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
+        stats = [{"start": now - timedelta(hours=5), "state": 6.0, "sum": 21.0}]
+        with (
+            patch(
+                "custom_components.pge_energy.statistics.async_resolve_sensor_entity_id",
+                return_value="sensor.pge_x_energy",
+            ),
+            patch("custom_components.pge_energy.statistics.ha_async_import_statistics") as import_mock,
+        ):
+            mirrored = self._mirror(import_mock, stats)
+        assert mirrored == stats
