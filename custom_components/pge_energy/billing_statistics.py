@@ -549,15 +549,18 @@ async def async_clear_bill_avg_temp_entity_statistics(
     def _on_done() -> None:
         done.set()
 
+    cleared = False
     try:
         get_instance(hass).async_clear_statistics([entity_id], on_done=_on_done)
         try:
             await asyncio.wait_for(done.wait(), timeout=60.0)
+            cleared = True
         except TimeoutError:
             _LOGGER.warning(
                 "Timed out waiting for bill avg temperature statistics clear for %s",
                 account_key[:8],
             )
+            # Still mark done so a stuck recorder does not retry forever.
     except Exception as exc:  # noqa: BLE001 — soft-fail; do not block setup
         _LOGGER.warning(
             "Failed to clear bill avg temperature entity statistics for %s: %s",
@@ -565,11 +568,12 @@ async def async_clear_bill_avg_temp_entity_statistics(
             exc,
         )
         return False
-    _LOGGER.info(
-        "Cleared bill-period average temperature entity statistics for %s: %s",
-        account_key[:8],
-        entity_id,
-    )
+    if cleared:
+        _LOGGER.info(
+            "Cleared bill-period average temperature entity statistics for %s: %s",
+            account_key[:8],
+            entity_id,
+        )
 
     store.bill_avg_temp_mirror_cleanup_done = True
     await async_save_import_state(hass, entry_id, store)

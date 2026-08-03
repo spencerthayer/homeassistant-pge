@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -285,3 +286,41 @@ async def test_bill_avg_temp_mirror_cleanup_marks_done_when_entity_missing():
         assert ok is True
         assert store.bill_avg_temp_mirror_cleanup_done is True
         save.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bill_avg_temp_mirror_cleanup_timeout_does_not_log_cleared(caplog):
+    """Timeout must not claim success; still mark done so we do not retry forever."""
+    hass = MagicMock()
+    store = ImportStoreData(account_key="key", bill_avg_temp_mirror_cleanup_done=False)
+    # Never invoke on_done → wait_for times out.
+    clear = MagicMock()
+    instance = MagicMock()
+    instance.async_clear_statistics = clear
+
+    with (
+        patch(
+            "custom_components.pge_energy.billing_statistics.async_resolve_sensor_entity_id",
+            return_value="sensor.pge_key_bill_period_avg_temperature",
+        ),
+        patch(
+            "custom_components.pge_energy.billing_statistics.get_instance",
+            return_value=instance,
+        ),
+        patch(
+            "custom_components.pge_energy.billing_statistics.async_save_import_state",
+            new=AsyncMock(),
+        ) as save,
+        patch(
+            "custom_components.pge_energy.billing_statistics.asyncio.wait_for",
+            side_effect=TimeoutError,
+        ),
+        caplog.at_level(logging.INFO),
+    ):
+        ok = await async_clear_bill_avg_temp_entity_statistics(hass, entry_id="entry1", account_key="key", store=store)
+
+    assert ok is True
+    assert store.bill_avg_temp_mirror_cleanup_done is True
+    save.assert_awaited_once()
+    assert "Timed out waiting for bill avg temperature statistics clear" in caplog.text
+    assert "Cleared bill-period average temperature entity statistics" not in caplog.text
