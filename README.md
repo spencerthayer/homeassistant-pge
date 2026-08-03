@@ -1,21 +1,65 @@
-# Portland General Electric Energy Usage for Home Assistant
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="100%" alt="PGE Energy for Home Assistant — imports Portland General Electric usage, cost, and outdoor temperature into the Home Assistant Energy dashboard and a first-party /pge panel">
+</p>
 
-Custom Home Assistant integration that imports **Portland General Electric (PGE)** energy usage into the Energy Dashboard via PGE’s GraphQL API (not Opower, not HTML scraping).
+Home Assistant custom integration for **Portland General Electric (PGE)** — imports your energy usage into the HA Energy dashboard and a first-party `/pge` panel, using PGE's GraphQL API (not Opower, not HTML scraping).
 
-> **Not Pacific Gas & Electric (PG&E).** This integration is for [Portland General Electric](https://portlandgeneral.com/) in Oregon. It does **not** work with California PG&E / Opower integrations.
+> **Not Pacific Gas & Electric (PG&E).** This is for [Portland General Electric](https://portlandgeneral.com/) in Oregon. It does **not** work with California PG&E / Opower integrations.
+>
+> **Unsupported / unofficial:** MFA- and CAPTCHA-enabled PGE accounts are not supported (fail closed). The portal API is unofficial and may change without notice. Not affiliated with or endorsed by Portland General Electric.
 
 **Requires Home Assistant 2026.7.0+.**
 
-> **Unsupported / unofficial:** MFA- and CAPTCHA-enabled PGE accounts are not supported (fail closed). The customer portal API is unofficial and may change without notice. Not endorsed by or affiliated with Portland General Electric.
+---
+
+## The panel
+
+A first-party Home Assistant panel at `/pge` — usage, cost, outdoor temperature, billing, programs, and live sync progress for all configured accounts.
+
+<p align="center">
+  <img src="./assets/readme/panel-glance.png" width="100%" alt="PGE panel At a glance — yesterday and week kWh and cost, statement cycle, since-statement, PGE estimates, amount due (values redacted)">
+  <em>At a glance — yesterday and week totals, statement and since-statement sums, PGE's own open-cycle estimates, amount due.</em>
+</p>
+
+<p align="center">
+  <img src="./assets/readme/panel-usage.png" width="100%" alt="PGE panel Usage — hourly kWh bars with cost overlay, range accounting and breakdown tables (values redacted)">
+  <em>Usage — hourly kWh bars with a cost series, plus Range accounting and per-hour breakdown tables.</em>
+</p>
+
+<p align="center">
+  <img src="./assets/readme/panel-analytics.png" width="49%" alt="PGE panel Analytics — weather vs usage scatter and cost intelligence (values redacted)">
+  <img src="./assets/readme/panel-billing.png" width="49%" alt="PGE panel Billing — balance, statement, lifetime totals, bill PDF link, programs (values redacted)">
+  <br><em>Analytics — weather vs usage and cost intelligence · Billing — balance, statements, bill PDFs, programs.</em>
+</p>
+
+---
+
+## What it does
+
+- **Hourly → daily → monthly usage history** (kWh, cost, outdoor temperature) imported into HA Energy statistics, with tiered backfill of your full account history.
+- **Dual-published data**: every series is both a `sensor.pge_*` entity and a `pge_energy:*` statistic, so it works in the Energy dashboard, History, and the entity Statistics graph.
+- **Billing & programs** sensors — balance, amount due, statements, lifetime totals, autopay/paperless/PTR/Green Future/Time-of-Day enrollment, and PGE's open-cycle estimates.
+- **Unattended login** — PGE email/password (Cognito → Apigee), stored locally with automatic token renewal; rate limits soft-fail instead of locking your account.
+- **Resilient by default** — auth or sync failures keep your last-known sensors and recorder history; long backfills self-heal on stall; sync status always reaches a terminal state.
+
+## How it works
+
+<p align="center">
+  <img src="./assets/readme/workflow.svg" width="100%" alt="How it works — unattended login, tiered hourly/daily/monthly import into dual-published statistics, then Home Assistant Energy and the /pge panel">
+</p>
+
+A single `PGECoordinator` authenticates once per entry, then polls PGE's GraphQL endpoint on a Pacific sync clock (default **every 4 hours** from **12:00 AM** — 12am/4am/8am/noon/4pm/8pm). Closed intervals are imported as statistics; the `/pge` panel reads those same recorder statistics for its charts. Auth chain and data model details live in [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
+
+PGE publishes usage **once overnight**, so a "stuck" latest interval near `01:00` Pacific during the day is expected — not a sync failure.
+
+---
 
 ## Installation
 
 ### HACS (recommended)
 
-1. In HACS → **⋯** → **Custom repositories**, add  
-   `https://github.com/spencerthayer/homeassistant-pge`  
-   with category **Integration**.
-2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.7.4`).
+1. HACS → **⋯** → **Custom repositories**, add `https://github.com/spencerthayer/homeassistant-pge` with category **Integration**.
+2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.7.4`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -25,134 +69,77 @@ Custom Home Assistant integration that imports **Portland General Electric (PGE)
 
 ## Setup
 
-1. Settings → Devices & Services → Add Integration → “Portland General Electric Energy Usage”.
+1. Settings → Devices & Services → **Add Integration** → *Portland General Electric Energy Usage*.
 2. Enter PGE **email**, **password**, and **account number** (one entry per account).
-3. The same login can be reused for additional entries with different account numbers; separate logins each need their own entry.
-4. **MFA-enabled PGE accounts are not supported.** If PGE requires MFA or CAPTCHA, setup fails closed.
+3. The same login can own multiple entries with different account numbers; each login's password is stored in that entry.
+4. **MFA-enabled PGE accounts are not supported** — if PGE requires MFA or CAPTCHA, setup fails closed.
 
-## Architecture
+Setup validates connectivity with an hourly request for yesterday, then the first sync backfills history.
 
-### Authentication & API data model
+---
 
-```mermaid
-sequenceDiagram
-    participant User as HA Config Flow
-    participant PA as portal_auth.py
-    participant Cognito as AWS Cognito
-    participant Apigee as Apigee Token API
-    participant GraphQL as PGE GraphQL API
-    participant Entry as Config Entry
-    participant Coord as PGECoordinator
+## Usage
 
-    User->>PA: email + password
-    PA->>Cognito: InitiateAuth (USER_PASSWORD_AUTH)
-    Cognito-->>PA: IdToken + RefreshToken
-    PA->>Apigee: POST /token (idp_access_token=IdToken)
-    Apigee-->>PA: bearer access_token + expires_at
-    PA->>GraphQL: getAccountInfo (bearer token)
-    GraphQL-->>PA: encryptedPersonId + account list
-    PA-->>Entry: store token, encrypted IDs, account_key
+### Energy Dashboard
 
-    Note over PA,Entry: Runtime — password-first renew (short-lived bearer)
-    PA->>Cognito: USER_PASSWORD_AUTH (or REFRESH_TOKEN_AUTH fallback)
-    PA->>Apigee: re-exchange IdToken for bearer token
-    PA-->>Entry: persist updated token + expires_at
+1. Settings → Dashboards → Energy.
+2. Add electricity consumption — pick `pge_energy:<account>_consumption` (or the `sensor.pge_<account>_energy` statistic), and cost if you want it.
 
-    Note over Cognito,Coord: Cognito throttle / password-attempt lockout
-    Cognito-->>PA: TooManyRequests or Password attempts exceeded
-    PA-->>Coord: PGERateLimitError (no refresh amplify)
-    Coord->>Coord: shared email cooldown — skip InitiateAuth
-    Coord->>Coord: soft-fail retain sensors (no reauth UI)
-```
+### PGE panel `/pge`
 
-The integration authenticates through a **Cognito → Apigee → GraphQL** chain. Email/password are exchanged for a Cognito `IdToken`, which is then traded for an Apigee bearer token (short-lived). This bearer token authorizes all subsequent GraphQL calls (`getUsageCompare`, `getAccountDetailList`, `getEnergyTrackerData`, etc.). The `PGEAuthManager` wraps the token with proactive expiry checks and automatic renewal — on 401 mid-sync it calls `force_renew()` and retries once (concurrent waiters coalesce onto one login). After every renewal the fresh token is persisted back to the config entry (without triggering a reload).
+The integration registers `/pge` and (for admin users, by default) a sidebar item **PGE**. Use it for usage, cost, temperature, billing, programs, and live sync progress:
 
-When Cognito returns **Too many requests** or **Password attempts exceeded**, the integration raises a rate-limit error (not a bad-password failure): it starts a **shared per-email cooldown**, does **not** fall through to a second Cognito refresh call, soft-fails the poll while keeping last-known sensors/history, and does **not** open the reauth UI. GraphQL HTTP 429 uses the same soft-fail posture with its own `Retry-After` cooldown.
+- **At a glance** — yesterday and week (Pacific Sunday → yesterday) kWh/cost, statement and since-statement sums, PGE estimate cards, amount due. A collapsible **Sync status** section shows live import progress and PGE publication gaps.
+- **Usage** — combined multi-series chart (kWh bars + cost + temperature). Ranges end at Pacific midnight of the current day, so only complete published days appear. Fast-select: **24h / This cycle / Last cycle / 7 days / Month**, with **More…** for `6h`/`12h`/`3mo`/`6mo`/`12mo`/YTD. **Range accounting** scales with the window: totals, averages, `$/kWh`, median/min/max/stdev, and adaptive hour/day/month/year breakdown tables.
+- **Analytics** — weather vs usage (daily kWh vs outdoor °F) and cost intelligence (monthly average rate, billed vs payments).
+- **Billing** — balance, statements, lifetime totals, and programs; when bill PDFs are enabled, **View bill PDF** + **Statement details (PDF)**.
+- Configure → **Panel** customizes the sidebar link (show/hide, title, icon), the admin gate, and the default landing section. Hiding the link does **not** unregister `/pge` — it stays reachable by URL.
 
-### Sensor data model
+### Billing & programs
 
-```mermaid
-flowchart LR
-    subgraph API[PGE GraphQL API]
-        direction TB
-        GQ1[getUsageCompare<br/>HOURLY / DAILY / MONTHLY]
-        GQ2[getAccountDetailList<br/>+ paymentHistory]
-        GQ3[getEnergyTrackerData]
-        GQ4[getProgramsEnrollmentStatus]
-    end
+When **Import billing & programs** is on (default), the same device (`PGE <accountnum>`) gains balance, amount due, due date, last payment, current bill amount/kWh/period, previous balance/current charges, bill-period average temperature, YTD program savings, lifetime payments/billed, estimated current charges and next-bill (low/high) from PGE's own open-cycle projection, billing-cycle day/length, and binary sensors for Auto Pay, Paperless, Peak Time Rebates, Green Future, Time of Day, Smart Thermostat, and Habitat Support.
 
-    subgraph CLIENTS[API Clients]
-        UA[PGEApiClient] -->|"UsageResponse, UsageInterval list"| Coord
-        BA[PGEBillingApiClient] -->|AccountSnapshot| Coord
-        BA -->|"LedgerEvent list"| Coord
-        BA -->|EnergyTrackerEstimates| Coord
-        BA -->|ProgramsSnapshot| Coord
-    end
+The estimate sensors are PGE's projection (`getEnergyTrackerData`) and will not tie out against sums of imported hourly intervals; they stay unavailable until PGE reports `detailsAvailable`.
 
-    subgraph COORD[PGECoordinator]
-        Coord{lifetime_energy_kwh<br/>lifetime_cost_usd<br/>recent_intervals<br/>freshness}
-    end
+### Bill PDFs (opt-in)
 
-    subgraph STATS[Statistics Module]
-        IMP[async_import_with_baseline]
-        IMP -->|consumption| EXTC[(pge_energy:&lt;key&gt;_consumption<br/>sum, kWh)]
-        IMP -->|cost| EXTCST[(pge_energy:&lt;key&gt;_cost<br/>sum, USD)]
-        IMP -->|temperature| EXTT[(pge_energy:&lt;key&gt;_temperature<br/>mean, °F)]
-        IMP -->|mirror| MIR[(sensor.pge_*<br/>entity statistics)]
-    end
+Enable **Download bill PDFs** in Configure → Sync settings (requires billing import; default **off**). After each billing sync the integration downloads eligible statement PDFs to `www/pge_energy/<account>/bills/`, parses them locally with `pypdf`, reconciles amount/kWh/period against GraphQL (**fail-closed** on mismatch), and imports 18 statement-dated `_bill_pdf_*` statistics. GraphQL billing sensors remain canonical; the PDF line-item sensors are disabled by default to reduce clutter.
 
-    subgraph SENSORS[Sensors]
-        E[Energy / Cost /<br/>Outdoor Temperature] -->|total_increasing / total / measurement| HA
-        H[Hourly Energy / Cost] -->|measurement tip| HA
-        D[Current Day / Yesterday<br/>Energy & Cost] -->|total| HA
-        B[Account Balance / Amount Due<br/>Due Date / Last Payment] --> HA
-        L[Lifetime Payments / Billed] -->|total| HA
-        T[Billing Cycle Day /<br/>Estimated Charges] --> HA
-        P[Program Binary Sensors<br/>Autopay, Paperless, PTR,<br/>Green Future, TOD, etc.] -->|is_on| HA
-        S[Sync Status / Progress<br/>Data Age / Latest Interval] -->|diagnostic| HA
-    end
+> PDFs under `www/…` are reachable at `/local/…` **without** HA login if your instance is exposed — see [`SECURITY.md`](SECURITY.md).
 
-    GQ1 --> UA
-    GQ2 --> BA
-    GQ3 --> BA
-    GQ4 --> BA
+### Services
 
-    Coord -.->|accounts / sync/subscribe WS| PANEL[PGE Panel /pge]
-    PANEL -.->|recorder/statistics_during_period| STATS
+All long-running services require `entry_id`:
 
-    Coord -->|import via| STATS
-    Coord -->|read properties| SENSORS
-```
+| Service | Purpose |
+|---------|---------|
+| `pge_energy.refresh` | Force a poll (optional `entry_id`) |
+| `pge_energy.backfill` | Tiered hourly → daily → monthly backfill over `start_date`–`end_date` |
+| `pge_energy.retry_failed_ranges` | Retry previously failed import ranges |
+| `pge_energy.reset_import_checkpoint` | Reset the backfill watermark (does not delete recorder history) |
+| `pge_energy.download_bill_pdf` | Download a specific statement PDF (`bill_date`; optional `form`/`force`) |
+| `pge_energy.reparse_bill_pdfs` | Reparse retained PDFs only (no network) |
 
-All API clients share a single `PGEAuthManager` and `aiohttp.ClientSession`. Usage data (`PGEApiClient`) and billing/programs data (`PGEBillingApiClient`) hit the same GraphQL endpoint at `https://apix.portlandgeneral.com/pge-graphql` with different origin headers (`widget.portlandgeneral.com` vs `portlandgeneral.com`). The coordinator feeds the statistics module (dual-publish: external + entity-mirrored) and serves as the property source for all sensor entities. The `/pge` panel reads chart series directly from the HA recorder via `statistics_during_period`.
+---
 
-### Authentication status
+## Configure
 
-- Email/password login (Cognito → Apigee) with automatic token renewal; no MFA/CAPTCHA support (fail closed).
-- Cognito rate limits (`Too many requests`) and temporary password-attempt lockouts soft-fail with a shared per-email cooldown — retained sensors/history, no reauth UI, no password→refresh amplify while cooling down.
-- Account number selects which PGE account the entry binds to (matched against login discovery); entry title is `PGE <accountnum>`.
-- Setup validates connectivity with a **HOURLY yesterday** request (not a short DAILY window — those hard-error on the live API).
-- Reauth and **Update credentials** use email/password only (account number stays fixed). Passwords are stored in the Home Assistant config entry when needed as a renewal fallback.
+Settings → Devices & Services → PGE Energy → **Configure** (from any account entry):
 
-### Configure (options)
+- **Sync settings** — polling (value + minutes/hours/days unit, default **every 4 hours**), **Sync clock** (Pacific, default **12:00 AM**), correction window, history mode/start, hourly history days, auto backfill, cost/diagnostics, **Import billing & programs** (default on), **Download bill PDFs** (default off), concurrency, and the default-off diagnostic capture below.
+- **Panel** — integration-wide chrome for `/pge`: show in sidebar (default on), sidebar title (default `PGE`), icon (default `mdi:transmission-tower`), admin-only (default on), default landing section. Sidebar *order* stays with Home Assistant's sidebar editor / [Browser Mod](https://github.com/thomasloven/hass-browser_mod).
+- **Update credentials** — email/password only; the account number is read-only and statistic IDs are unchanged.
+- **Manual sync** — force **Refresh now** or **Backfill missing history** (uses your Sync settings). Stays available when the sidebar link is hidden.
 
-Settings → Devices & Services → PGE Energy → **Configure** (opened from any account entry):
-
-- **Sync settings:** polling (value + unit `minutes` / `hours` / `days`, default **every 4 hours**), **sync clock** (Pacific, default **12:00 AM** — anchors the hour/day grid), correction window, history mode/start, hourly history days, auto backfill, cost/diagnostics, **import billing & programs** (`include_billing`, default on), **download bill PDFs** (opt-in, default off — fetches portal PDFs to `www/pge_energy/…`, parses locally, imports 18 `_bill_pdf_*` statement statistics; `/local` exposure warning in SECURITY.md), concurrency, and the default-off **diagnostic capture (alpha)** described below. Per account.
-- **Panel:** integration-wide chrome for `/pge` (stored once for the whole domain, not per account): **Show PGE in sidebar** (default on), **Sidebar title** (default `PGE`), **Sidebar icon** (default `mdi:transmission-tower`), **Admin-only panel** (default on), **Default landing section** (At a glance / Usage / Analytics / Billing). Hiding the sidebar link does **not** unregister `/pge` — open that URL directly. **Admin-only panel** off lets non-admins open the route, but account/sync websocket APIs stay admin-only. Sidebar *order* remains Home Assistant’s sidebar editor or [Browser Mod](https://github.com/thomasloven/hass-browser_mod).
-- **Update credentials:** email/password; account number is read-only; statistic IDs unchanged.
-- **Manual sync:** force **Refresh now** (correction window) or **Backfill missing history** (uses current Sync settings history bounds). Remains available when the sidebar link is hidden. A notification links to the PGE device page; live **Sync status** / **Sync progress** (%) sensors show phase, ETA, and detail.
-- Details: [`docs/HA_SETTINGS_HISTORY.md`](docs/HA_SETTINGS_HISTORY.md).
+Details: [`docs/HA_SETTINGS_HISTORY.md`](docs/HA_SETTINGS_HISTORY.md).
 
 ### Grid import/export diagnostic capture (v0.7.3 alpha)
 
-Issue [#5](https://github.com/spencerthayer/homeassistant-pge/issues/5) is investigating separate grid import/return data for generating customers. PGE's GraphQL direction contract is not yet known, so v0.7.3 does **not** add or change Energy statistics. It adds a per-account **Enable diagnostic capture (alpha)** switch under Configure → Sync settings; it is **off by default**.
+Separate grid-return energy for generating customers is still under PGE GraphQL discovery ([#5](https://github.com/spencerthayer/homeassistant-pge/issues/5)). An off-by-default **Enable diagnostic capture (alpha)** switch logs a bounded allowlist of interval values under `PGE_ALPHA_GRID_CAPTURE` for requested captures. It never logs credentials, tokens, or identifiers. Enable only for a requested capture, review logs before sharing, and turn it off afterward.
 
-When explicitly enabled, successful HOURLY/DAILY/MONTHLY usage calls log a bounded allowlist of interval time, kWh, amount, usage status, interval size, and temperature under the prefix `PGE_ALPHA_GRID_CAPTURE`. The client also makes one best-effort schema discovery request to the same PGE GraphQL endpoint per integration load. It never logs request headers, credentials, tokens, account/person identifiers, or complete response envelopes; introspection failure does not fail sync. Usage timestamps and values are still privacy-sensitive. Enable only for a requested capture, review logs before sharing, and turn it off afterward.
+---
 
-Tester workflow: upgrade/restart, enable the switch, let normal sync run for 1–2 days (PGE publishes closed intervals overnight), then download Settings → System → Logs. The visible log filter helps inspection but may not limit the downloaded file, so share only the `PGE_ALPHA_GRID_CAPTURE` lines or review the full file first.
-
-## Sensors and statistics
+## Sensors & statistics
 
 Every usage series is available in **both** forms:
 
@@ -161,136 +148,35 @@ Every usage series is available in **both** forms:
 | Entity picker, History, most Lovelace cards | `sensor.pge_<account>_energy` / `_cost` / `_outdoor_temperature` |
 | Energy dashboard / statistics graphs | `pge_energy:<account_key>_consumption` / `_cost` / `_temperature` |
 
-Long-term hourly history is written to external statistics **and** mirrored onto the Energy / Cost / Outdoor temperature entity statistic IDs, so those sensors are fully graphable (Statistics graph on the entity, not only the latest state).
-
 | Sensor | Description |
 |--------|-------------|
-| Energy | Lifetime cumulative kWh (entity + mirrored history) |
-| Cost | Lifetime cumulative USD (entity + mirrored history) |
+| Energy / Cost | Lifetime cumulative kWh / USD (entity + mirrored history) |
 | Outdoor temperature | Latest °F; full history mirrored onto the entity |
-| Hourly energy / Hourly cost | Latest interval point values |
-| Current day energy / cost | Pacific local today totals |
-| Yesterday energy / cost | Pacific local yesterday totals |
-| Last successful update | Last successful API poll |
+| Hourly energy / cost | Latest closed interval values |
+| Current day / Yesterday energy & cost | Pacific-local day totals |
+| Last successful update / Data age | Sync freshness |
 | Latest available interval | Newest PGE interval end |
-| Data age | Seconds since last success |
-| Authentication expiration | Token expiry (disabled by default) |
-| Last API error | Last API error (disabled by default) |
+| Authentication expiration / Last API error | Diagnostics (disabled by default) |
 
-### Billing & programs (when `include_billing` is on)
+Billing sensors expose `external_statistic_id` and `entity_statistic_id` for automations and custom cards. Full billing/programs sensor and PDF-statistics catalogs: [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
 
-Same device (`PGE <accountnum>`). GraphQL account/ledger/programs sensors are **canonical** for balance, amount due, and statement totals.
-
-| Sensor / binary | Description | Dual stats |
-|-----------------|-------------|------------|
-| Account balance / Amount due | Current balance banner | `_account_balance` / `_amount_due` (mean) |
-| Due date / Last payment date | Timestamps | — |
-| Last payment amount | Most recent payment | `_last_payment_amount` (mean) |
-| Current bill amount / kWh / period | Latest bill details | mirrors latest of `_bill_amount` / `_bill_kwh` |
-| Previous balance / Current charges | Bill line items | — |
-| Bill period avg temperature | °F from view-bill | `_bill_avg_temperature` (mean, external-only) |
-| YTD program savings | Flex-load earnings | `_ytd_program_savings` (mean) |
-| Lifetime payments / Lifetime billed | Sums from imported ledger | `_payment_amount` / `_bill_amount` (sum) |
-| Estimated current charges / next bill (low, high) | PGE's own open-cycle projection from the portal Current Use card | — |
-| Billing cycle day / length | Position in the open cycle (e.g. day 17 of 30) | — |
-| Billing last sync | Billing watermark | diagnostic |
-| Auto Pay / Paperless bill | Binary enrollment | — |
-| Peak Time Rebates / Green Future / Time of Day / Smart Thermostat / Habitat Support | Program binary sensors | Green Future exposes `green_future_pct` |
-
-Energy / Cost / Outdoor temperature (and dual-publish billing sensors) expose `external_statistic_id` and `entity_statistic_id` attributes for automations and custom cards.
-
-The estimate sensors come straight from PGE (`getEnergyTrackerData`) and are its own projection for the open cycle — they will not tie out against sums of the imported hourly intervals, and they stay unavailable until PGE reports `detailsAvailable`.
-
-### Bill PDFs (opt-in, v0.7+)
-
-**Default off.** Enable **Download bill PDFs** in Configure → Sync settings (requires `include_billing`). After each structured billing sync the integration:
-
-1. **Downloads** the portal statement PDF (REST) for eligible bills — form `detailed` or `simplified`, retention `latest` / `all_imported` / `rolling_n`.
-2. **Writes** files under `www/pge_energy/<account>/bills/` (reachable at `/local/…` **without** HA login if the instance is exposed — see [`SECURITY.md`](SECURITY.md)).
-3. **Parses locally** with `pypdf` (layout + plain text), then **reconciles** amount due, total kWh, and period dates against GraphQL bill identity. Mismatches are **fail-closed**: the PDF file may be kept, but normalized Store/statistics are not published until reconciliation succeeds. Advisories (non-blocking layout notes) do not block publication.
-4. **Imports** 18 statement-dated external statistics (`pge_energy:<account_key>_bill_pdf_*`) — distinct from GraphQL `_bill_amount` / `_bill_kwh`. Binary GC never deletes normalized records or recorder history.
-5. Surfaces **View bill PDF**, a parse badge, and **Statement details (PDF)** on `/pge` Billing when a safe normalized record exists; `sensor.pge_*_bill_pdf_parse_status` reports parse outcome. Fourteen line-item sensors are disabled by default.
-
-Sync phases when enabled: `downloading_pdfs` → `parsing_pdfs` → `importing_pdf_statistics`. Soft-fail only — GraphQL billing sensors and last-known PDF data stay available. Details: [`docs/HA_SETTINGS_HISTORY.md`](docs/HA_SETTINGS_HISTORY.md), [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
-
-## Energy Dashboard
-
-1. Settings → Dashboards → Energy.
-2. Add electricity consumption.
-3. Select either `pge_energy:…_consumption` or the `sensor.pge_…_energy` statistic (and cost if desired).
-
-## PGE Energy panel (`/pge`)
-
-The integration registers [`/pge`](http://127.0.0.1:8123/pge) for usage, cost, outdoor temperature, billing, programs, and live sync progress across all config entries. By default it also adds a sidebar item **PGE** (admin users). Configure → **Panel** can hide that link, rename/re-icon it, change the admin gate, or pick a default landing section — `/pge` stays reachable either way. Sidebar *order* is still controlled through Home Assistant’s sidebar editor or [Browser Mod](https://github.com/thomasloven/hass-browser_mod); this integration does not rewrite those user-store settings.
-
-> **Recovery (0.5.41–0.5.45):** those versions could write synced Home Assistant sidebar user settings that override Browser Mod. After upgrading to **0.5.46+**, use Browser Mod’s **Clear** control for synced sidebar settings once (or reset order/hide in Home Assistant’s sidebar editor), reapply the desired Browser Mod preferences, then restart Home Assistant and hard-refresh if needed.
-
-- Static assets: `/pge_energy_frontend/` (panel JS + vendored [Apache ECharts](https://echarts.apache.org/examples/en/index.html)) and `/pge_energy_brand/` (bundled logo).
-- Data: `pge_energy/accounts` + `pge_energy/sync/subscribe` (admin websocket); chart series via built-in `recorder/statistics_during_period`.
-- At a glance includes Yesterday and Week (Pacific Sunday → yesterday) kWh/cost from imported intervals, plus statement / since-statement / PGE estimate cards.
-- Usage chart includes **Range accounting** for the selected window: totals, per-hour/day/month/year averages, $/kWh, median/min/max/stdev, and adaptive Pacific hour/day/month/year breakdown tables (scales from short windows through multi-decade history). Range accounting and breakdown accordions remember open/closed in the browser; **Billing** is always expanded (not an accordion).
-- Usage ranges end at Pacific midnight of the current day (exclusive): only complete published data through **yesterday**. Primary fast-select: **24h**, **This cycle**, **Last cycle**, **7 days**, **Month**; **More…** covers `6h` / `12h` / `3mo` / `6mo` / `12mo` / YTD (unavailable options stay visible but disabled). Default `24h`; ◀/▶ and datetime inputs scroll or pick a window. A collapsible **Sync status** section under At a glance (default collapsed; open/closed remembered in the browser) holds live import progress above **PGE publication gaps**.
-- Layout adapts for phone and tablet: summary metrics stack to one column under 640px, cost/heatmap grids stack under 900px, filter controls and charts scale for narrow viewports, and breakdown tables scroll horizontally.
-- Billing: when bill PDFs are enabled and a statement parsed safely, **View bill PDF** + **Statement details (PDF)** appear under Billing.
-- Note: `/energy/pge` cannot be a distinct page — HA routes panels by the first URL segment, and `energy` is the built-in Energy panel.
-
-## Services
-
-All long-running services require `entry_id`:
-
-- `pge_energy.refresh` — optional `entry_id`
-- `pge_energy.backfill` — `entry_id`, `start_date`, `end_date` (tiered hourly → daily → monthly)
-- `pge_energy.retry_failed_ranges` — `entry_id`
-- `pge_energy.reset_import_checkpoint` — `entry_id` (does not delete recorder history)
-- `pge_energy.download_bill_pdf` — `entry_id`, `bill_date` (known statement from Store index); optional `form` / `force`
-- `pge_energy.reparse_bill_pdfs` — `entry_id`; optional `bill_date` — reparse retained files only (no network)
+---
 
 ## Known limitations
 
-- MFA / CAPTCHA accounts unsupported by design.
-- Cognito login throttle / temporary password lockout is rate-limited and soft-failed (shared cooldown); the integration does not keep hammering InitiateAuth.
+- **MFA / CAPTCHA accounts are unsupported** by design (fail closed).
+- Cognito login throttle / temporary password lockout is rate-limited with a shared per-email cooldown and soft-failed — the integration never hammers `InitiateAuth`.
+- **PGE publishes once overnight.** Hourly intervals for a Pacific day appear after midnight; a stuck `Latest available interval` near `01:00` PT during the day is expected. Polling is 4-hourly on a Pacific clock grid by default.
 - Hourly day responses include a +1 boundary hour at `day_end`; the integration clips to `[day_start, day_end)`.
-- Full history uses daily/monthly when hourly retention ends (~1 year).
-- DAILY windows under ~31 days may hard-error (`Something unexpected happened`); prefer HOURLY or ≥31d DAILY.
+- Full history uses daily/monthly tiers once hourly retention ends (~1 year).
+- DAILY windows under ~31 days may hard-error; prefer HOURLY or ≥31-day DAILY.
 - MONTHLY returns the latest ~12 billing periods per call; older history requires paging backwards.
-- Response `totalKwhUsage` / `totalKwhCost` are reliable mainly for DAILY.
-- Separate grid-return energy is under PGE GraphQL discovery in v0.7.3; the integration does not infer or publish return values yet.
-- **PGE publishes usage once overnight, not continuously.** Hourly intervals for a Pacific calendar day typically appear after midnight (often with the tip stuck near `01:00` local until the next publication). A “stuck” Latest available interval during the day is expected — not a sync failure. Default polling is **every 4 hours** on a Pacific clock grid (**Sync clock**, default **12:00 AM** → 12am/4am/8am/noon/4pm/8pm); Configure → Sync settings can tighten or loosen that.
-- PGE may return transient 502s (retried). See [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
+- Separate grid-return energy is under GraphQL discovery (v0.7.3); the integration does not publish return values yet.
+- PGE may return transient 502s (retried). PGE's API is unofficial and may change without notice.
 
 ## Troubleshooting
 
-### Quiet expected log warnings
-
-`pypdf` emits layout-extraction warnings (`Limiting excessive whitespace…`, `Rotated text discovered…`) from `pypdf._text_extraction._layout_mode._fixed_width_page` on every bill-PDF parse. The integration already handles those conditions (it merges a plain-text extraction variant), so they are informational, not actionable. The integration also logs some caught-and-retried soft-failures at warning level that resolve on the next poll.
-
-To keep Settings → System → Logs focused on actionable entries, filter these with HA's native `logger` integration in `configuration.yaml` (config-only — survives HACS updates and is easily reversible):
-
-```yaml
-logger:
-  filters:
-    pypdf._text_extraction._layout_mode._fixed_width_page:
-      - "Limiting excessive whitespace.*"
-      - "Rotated text discovered.*"
-    custom_components.pge_energy.billing_sync:
-      - "soft-failed.*"
-    custom_components.pge_energy.bill_pdf_sync:
-      - "soft-failed.*"
-    custom_components.pge_energy.coordinator:
-      - "finished outside the normal path.*"
-    custom_components.pge_energy.__init__:
-      - "already in progress"
-```
-
-Restart Home Assistant for the filters to apply. Auth failures, reauth prompts, backfill/statistics errors, and other actionable messages are intentionally **not** filtered. If a future `pypdf` version renames its logger so the filter stops matching, the blunt fallback is `logger: logs: pypdf: critical` (safe here — `pypdf` is only used by this integration).
-
-### `sqlite3.IntegrityError: UNIQUE constraint failed: statistics.metadata_id, statistics.start_ts`
-
-Pre-0.7.4 installs could log this ("Blocked attempt to insert duplicated statistic rows") after each billing sync: the bill-period average temperature statistic was mirrored onto its recorder-tracked entity, pre-seeding the current-hour slot that HA Core's `compile_statistics` then tries to plain-INSERT. Fixed in 0.7.4 by making that series external-only (HA compiles the sensor's own hourly rows natively; the `/pge` panel already reads the external `pge_energy:*` ids). Existing stale rows are cleared once automatically on the first setup after upgrade. If the traceback still appears after 0.7.4, report it — it would mean a different entity statistic is colliding.
-
-## Local CLI testing
-
-The packaged CLI reuses production `api` / `auth` / `portal_auth` modules (no running Home Assistant required beyond the test venv for package imports). Prefer an opt-in `.env` (gitignored; `chmod 600`; never auto-loaded). See [`docs/LIVE_TESTING.md`](docs/LIVE_TESTING.md) for commands, fixture sanitization, and UI UAT notes.
+Common issues — including quiet expected log warnings (`pypdf` layout warnings, caught soft-failures), `sqlite3.IntegrityError: UNIQUE constraint failed` on pre-0.7.4 installs, and the logger filters that keep Settings → System → Logs focused — are collected in [`docs/HA_TROUBLESHOOTING.md`](docs/HA_TROUBLESHOOTING.md).
 
 ## Development
 
@@ -300,11 +186,16 @@ python3 -m venv .venv
 bash scripts/run_tests.sh
 ```
 
+Local CLI testing reuses the production `api` / `auth` / `portal_auth` modules with an opt-in `.env` (gitignored, never auto-loaded): [`docs/LIVE_TESTING.md`](docs/LIVE_TESTING.md).
+
 ## Security
 
 See [`SECURITY.md`](SECURITY.md). Diagnostics redact tokens, passwords, emails, person IDs, and account numbers.
 
 ## Removal
 
-Settings → Devices & Services → PGE Energy → Delete. Optionally remove `custom_components/pge_energy`.
-To revoke portal access, change the PGE password and remove the integration.
+Settings → Devices & Services → PGE Energy → **Delete**. Optionally remove `custom_components/pge_energy`. To revoke portal access, change your PGE password and remove the integration.
+
+## License
+
+[MIT](LICENSE)

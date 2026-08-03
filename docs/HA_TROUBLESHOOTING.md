@@ -1,0 +1,29 @@
+# Troubleshooting
+
+## Quiet expected log warnings
+
+`pypdf` emits layout-extraction warnings (`Limiting excessive whitespace…`, `Rotated text discovered…`) from `pypdf._text_extraction._layout_mode._fixed_width_page` on every bill-PDF parse. The integration already handles those conditions (it merges a plain-text extraction variant), so they are informational, not actionable. The integration also logs some caught-and-retried soft-failures at warning level that resolve on the next poll.
+
+To keep Settings → System → Logs focused on actionable entries, filter these with HA's native `logger` integration in `configuration.yaml` (config-only — survives HACS updates and is easily reversible):
+
+```yaml
+logger:
+  filters:
+    pypdf._text_extraction._layout_mode._fixed_width_page:
+      - "Limiting excessive whitespace.*"
+      - "Rotated text discovered.*"
+    custom_components.pge_energy.billing_sync:
+      - "soft-failed.*"
+    custom_components.pge_energy.bill_pdf_sync:
+      - "soft-failed.*"
+    custom_components.pge_energy.coordinator:
+      - "finished outside the normal path.*"
+    custom_components.pge_energy.__init__:
+      - "already in progress"
+```
+
+Restart Home Assistant for the filters to apply. Auth failures, reauth prompts, backfill/statistics errors, and other actionable messages are intentionally **not** filtered. If a future `pypdf` version renames its logger so the filter stops matching, the blunt fallback is `logger: logs: pypdf: critical` (safe here — `pypdf` is only used by this integration).
+
+## `sqlite3.IntegrityError: UNIQUE constraint failed: statistics.metadata_id, statistics.start_ts`
+
+Pre-0.7.4 installs could log this ("Blocked attempt to insert duplicated statistic rows") after each billing sync: the bill-period average temperature statistic was mirrored onto its recorder-tracked entity, pre-seeding the current-hour slot that HA Core's `compile_statistics` then tries to plain-INSERT. Fixed in 0.7.4 by making that series external-only (HA compiles the sensor's own hourly rows natively; the `/pge` panel already reads the external `pge_energy:*` ids). Existing stale rows are cleared once automatically on the first setup after upgrade. If the traceback still appears after 0.7.4, report it — it would mean a different entity statistic is colliding.
