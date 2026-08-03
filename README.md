@@ -15,7 +15,7 @@ Custom Home Assistant integration that imports **Portland General Electric (PGE)
 1. In HACS → **⋯** → **Custom repositories**, add  
    `https://github.com/spencerthayer/homeassistant-pge`  
    with category **Integration**.
-2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.7.3`).
+2. Search for and install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.7.4`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -286,7 +286,7 @@ Restart Home Assistant for the filters to apply. Auth failures, reauth prompts, 
 
 ### `sqlite3.IntegrityError: UNIQUE constraint failed: statistics.metadata_id, statistics.start_ts`
 
-Pre-0.7.3 installs could log this ("Blocked attempt to insert duplicated statistic rows") after each billing sync: the bill-period average temperature statistic was mirrored onto its recorder-tracked entity, pre-seeding the current-hour slot that HA Core's `compile_statistics` then tries to plain-INSERT. Fixed in 0.7.3 by making that series external-only (HA compiles the sensor's own hourly rows natively; the `/pge` panel already reads the external `pge_energy:*` ids). Existing stale rows are cleared once automatically on the first setup after upgrade. If the traceback still appears after 0.7.3, report it — it would mean a different entity statistic is colliding.
+Pre-0.7.4 installs could log this ("Blocked attempt to insert duplicated statistic rows") after each billing sync: the bill-period average temperature statistic was mirrored onto its recorder-tracked entity, pre-seeding the current-hour slot that HA Core's `compile_statistics` then tries to plain-INSERT. Fixed in 0.7.4 by making that series external-only (HA compiles the sensor's own hourly rows natively; the `/pge` panel already reads the external `pge_energy:*` ids). Existing stale rows are cleared once automatically on the first setup after upgrade. If the traceback still appears after 0.7.4, report it — it would mean a different entity statistic is colliding.
 
 ## Local CLI testing
 

@@ -10,7 +10,7 @@ import {
   seriesColors,
   tooltipTheme,
   withAlpha,
-} from "./theme.js?v=0.7.3";
+} from "./theme.js?v=0.7.4";
 
 export { seriesColors };
 
