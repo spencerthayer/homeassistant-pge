@@ -188,7 +188,7 @@ Same device (`PGE <accountnum>`). GraphQL account/ledger/programs sensors are **
 | Last payment amount | Most recent payment | `_last_payment_amount` (mean) |
 | Current bill amount / kWh / period | Latest bill details | mirrors latest of `_bill_amount` / `_bill_kwh` |
 | Previous balance / Current charges | Bill line items | — |
-| Bill period avg temperature | °F from view-bill | `_bill_avg_temperature` (mean) |
+| Bill period avg temperature | °F from view-bill | `_bill_avg_temperature` (mean, external-only) |
 | YTD program savings | Flex-load earnings | `_ytd_program_savings` (mean) |
 | Lifetime payments / Lifetime billed | Sums from imported ledger | `_payment_amount` / `_bill_amount` (sum) |
 | Estimated current charges / next bill (low, high) | PGE's own open-cycle projection from the portal Current Use card | — |
@@ -283,6 +283,10 @@ logger:
 ```
 
 Restart Home Assistant for the filters to apply. Auth failures, reauth prompts, backfill/statistics errors, and other actionable messages are intentionally **not** filtered. If a future `pypdf` version renames its logger so the filter stops matching, the blunt fallback is `logger: logs: pypdf: critical` (safe here — `pypdf` is only used by this integration).
+
+### `sqlite3.IntegrityError: UNIQUE constraint failed: statistics.metadata_id, statistics.start_ts`
+
+Pre-0.7.3 installs could log this ("Blocked attempt to insert duplicated statistic rows") after each billing sync: the bill-period average temperature statistic was mirrored onto its recorder-tracked entity, pre-seeding the current-hour slot that HA Core's `compile_statistics` then tries to plain-INSERT. Fixed in 0.7.3 by making that series external-only (HA compiles the sensor's own hourly rows natively; the `/pge` panel already reads the external `pge_energy:*` ids). Existing stale rows are cleared once automatically on the first setup after upgrade. If the traceback still appears after 0.7.3, report it — it would mean a different entity statistic is colliding.
 
 ## Local CLI testing
 

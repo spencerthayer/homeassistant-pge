@@ -261,7 +261,7 @@ When parsing reconciles: `_bill_pdf_amount_due`, `_bill_pdf_total_kwh`, plus 16 
 
 ### Billing statistics suffixes
 
-External `pge_energy:<account_key>_*` (+ mirrored entity stats): `_account_balance`, `_amount_due`, `_last_payment_amount`, `_bill_avg_temperature`, `_ytd_program_savings` (mean); `_bill_amount`, `_bill_kwh`, `_payment_amount` (sum from ledger).
+External `pge_energy:<account_key>_*` series: `_account_balance`, `_amount_due`, `_last_payment_amount`, `_bill_avg_temperature`, `_ytd_program_savings` (mean); `_bill_amount`, `_bill_kwh`, `_payment_amount` (sum from ledger). Mean series are **external-only** — snapshot-stamped rows are never mirrored onto recorder entity statistics because HA Core's `compile_statistics` does a plain INSERT for the same hour and logs `UNIQUE constraint failed: statistics.metadata_id, statistics.start_ts` ("Blocked attempt to insert duplicated statistic rows") against a pre-seeded slot. The `_bill_amount` / `_payment_amount` sum series still mirror onto `sensor.pge_*_lifetime_billed` / `_lifetime_payments` entity stats.
 
 ## Panel websocket API (`/pge`)
 

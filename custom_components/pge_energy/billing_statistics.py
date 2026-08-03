@@ -10,9 +10,15 @@ Two shapes are used:
 
 * **mean** series (account balance, amount due, last payment amount, bill
   period average temperature, YTD program savings) — one non-cumulative row per
-  billing snapshot timestamp. Monetary means are external-only (no entity
-  mirror): those sensors use ``state_class=None`` and HA raises
-  ``STATE_CLASS_REMOVED_ISSUE`` whenever entity recorder metadata exists.
+  billing snapshot timestamp. Mean series are **external-only** (no entity
+  mirror): a recorder-tracked sensor (``state_class=MEASUREMENT``) must not
+  receive snapshot-stamped entity rows because HA Core's ``compile_statistics``
+  does a plain INSERT for that hour and logs
+  ``UNIQUE constraint failed: statistics.metadata_id, statistics.start_ts``
+  ("Blocked attempt to insert duplicated statistic rows") against the
+  pre-seeded slot. Monetary mean sensors additionally use ``state_class=None``
+  and HA raises ``STATE_CLASS_REMOVED_ISSUE`` whenever entity recorder metadata
+  exists.
 * **sum** series (bill amount, bill kWh, payment amount) — one cumulative row
   per ledger event, upserted by hour so re-syncing the paged feed is
   idempotent.
@@ -129,19 +135,6 @@ def _external_sum_metadata(stat_id: str, name: str, *, unit: str | None, unit_cl
     )
 
 
-def _entity_mean_metadata(entity_id: str, name: str, *, unit: str | None, unit_class: str | None) -> StatisticMetaData:
-    return StatisticMetaData(
-        has_mean=True,
-        mean_type=StatisticMeanType.ARITHMETIC,
-        has_sum=False,
-        name=name,
-        source=RECORDER_DOMAIN,
-        statistic_id=entity_id,
-        unit_class=unit_class,
-        unit_of_measurement=unit,
-    )
-
-
 def _entity_sum_metadata(entity_id: str, name: str, *, unit: str | None, unit_class: str | None) -> StatisticMetaData:
     return StatisticMetaData(
         has_mean=False,
@@ -223,13 +216,20 @@ def _import_mean_point(
     account_id: str | None,
     *,
     suffix: str,
-    entity_suffix: str | None,
     value: float | None,
     when: datetime,
     unit: str | None,
     unit_class: str | None,
     label: str,
 ) -> None:
+    """Write one external-only mean row (never mirrored to an entity statistic).
+
+    Mean series must stay external-only: snapshot-stamped rows pre-seed the
+    current-hour slot of a recorder-tracked sensor, and HA Core's
+    ``compile_statistics`` plain INSERT for that hour then logs
+    ``UNIQUE constraint failed: statistics.metadata_id, statistics.start_ts``
+    ("Blocked attempt to insert duplicated statistic rows").
+    """
     if value is None:
         return
     stat_id = _get_statistic_id(account_key, suffix)
@@ -240,14 +240,6 @@ def _import_mean_point(
         _external_mean_metadata(stat_id, name, unit=unit, unit_class=unit_class),
         [row],
     )
-    if entity_suffix is not None:
-        _async_mirror_entity_statistics(
-            hass,
-            account_key=account_key,
-            unique_suffix=entity_suffix,
-            entity_metadata=_entity_mean_metadata("sensor._", name, unit=unit, unit_class=unit_class),
-            stats=[row],
-        )
 
 
 async def _async_import_sum_series(
@@ -322,7 +314,6 @@ async def async_import_billing_snapshot(
         account_key,
         account_id,
         suffix=STATISTIC_ID_SUFFIX_ACCOUNT_BALANCE,
-        entity_suffix=None,
         value=snapshot.amount_due,
         when=when,
         unit=_USD,
@@ -334,7 +325,6 @@ async def async_import_billing_snapshot(
         account_key,
         account_id,
         suffix=STATISTIC_ID_SUFFIX_AMOUNT_DUE,
-        entity_suffix=None,
         value=snapshot.amount_due,
         when=when,
         unit=_USD,
@@ -346,7 +336,6 @@ async def async_import_billing_snapshot(
         account_key,
         account_id,
         suffix=STATISTIC_ID_SUFFIX_LAST_PAYMENT_AMOUNT,
-        entity_suffix=None,
         value=snapshot.last_payment_amount,
         when=when,
         unit=_USD,
@@ -354,12 +343,15 @@ async def async_import_billing_snapshot(
         label="last payment amount",
     )
     if snapshot.bill is not None:
+        # External-only: the sensor is recorder-tracked (state_class=MEASUREMENT)
+        # and HA Core compiles its hourly rows natively. Mirroring the current
+        # sync-hour slot here collides with the next compile INSERT (recorder
+        # logs "Blocked attempt to insert duplicated statistic rows").
         _import_mean_point(
             hass,
             account_key,
             account_id,
             suffix=STATISTIC_ID_SUFFIX_BILL_AVG_TEMPERATURE,
-            entity_suffix=ENTITY_UNIQUE_BILL_AVG_TEMPERATURE,
             value=snapshot.bill.avg_temperature_f,
             when=when,
             unit=UnitOfTemperature.FAHRENHEIT,
@@ -447,7 +439,6 @@ async def async_import_programs_metrics(
         account_key,
         account_id,
         suffix=STATISTIC_ID_SUFFIX_YTD_PROGRAM_SAVINGS,
-        entity_suffix=None,
         value=programs.ytd_flex_load_earnings,
         when=when,
         unit=_USD,
@@ -523,5 +514,67 @@ async def async_cleanup_orphaned_billing_entity_mirrors(
         )
 
     store.billing_mirror_cleanup_done = True
+    await async_save_import_state(hass, entry_id, store)
+    return True
+
+
+async def async_clear_bill_avg_temp_entity_statistics(
+    hass: HomeAssistant,
+    *,
+    entry_id: str,
+    account_key: str,
+    store: ImportStoreData,
+) -> bool:
+    """Clear the bill-period average temperature entity statistics once.
+
+    The bill avg temperature mean series is external-only; HA Core compiles the
+    sensor's own hourly rows natively. Old mirror rows written at billing-sync
+    hours pre-seeded the not-yet-compiled slot and triggered the recorder
+    ``UNIQUE constraint failed: statistics.metadata_id, statistics.start_ts``
+    traceback every compile cycle. This clears those stale rows once (so a
+    purge/repack recompile cannot re-trigger the collision) and lets HA rebuild
+    native rows. Returns True when cleanup ran (or was already done).
+    """
+    if store.bill_avg_temp_mirror_cleanup_done:
+        return True
+
+    entity_id = async_resolve_sensor_entity_id(hass, account_key, ENTITY_UNIQUE_BILL_AVG_TEMPERATURE)
+    if entity_id is None:
+        store.bill_avg_temp_mirror_cleanup_done = True
+        await async_save_import_state(hass, entry_id, store)
+        return True
+
+    done = asyncio.Event()
+
+    def _on_done() -> None:
+        done.set()
+
+    cleared = False
+    try:
+        get_instance(hass).async_clear_statistics([entity_id], on_done=_on_done)
+        try:
+            await asyncio.wait_for(done.wait(), timeout=60.0)
+            cleared = True
+        except TimeoutError:
+            _LOGGER.warning(
+                "Timed out waiting for bill avg temperature statistics clear for %s",
+                account_key[:8],
+            )
+            # Still mark done so a stuck recorder does not retry forever.
+    except Exception as exc:  # noqa: BLE001 — soft-fail; do not block setup
+        _LOGGER.warning(
+            "Failed to clear bill avg temperature entity statistics for %s: %s",
+            account_key[:8],
+            exc,
+        )
+        return False
+    if cleared:
+        _LOGGER.info(
+            "Cleared bill-period average temperature entity statistics for %s: %s",
+            account_key[:8],
+            entity_id,
+        )
+
+    store.bill_avg_temp_mirror_cleanup_done = True
     await async_save_import_state(hass, entry_id, store)
     return True

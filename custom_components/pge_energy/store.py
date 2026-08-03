@@ -75,6 +75,10 @@ class ImportStoreData:
     # One-time clear of entity statistics for monetary mean sensors that no
     # longer carry a state_class (stops STATE_CLASS_REMOVED_ISSUE repairs).
     billing_mirror_cleanup_done: bool = False
+    # One-time clear of bill avg temperature entity statistics (stops recorder
+    # "Blocked attempt to insert duplicated statistic rows" after the series
+    # became external-only).
+    bill_avg_temp_mirror_cleanup_done: bool = False
     # Bill PDF index and phase summaries (binary retention independent of normalized data).
     bill_pdf_index: dict[str, BillPdfIndexEntry] = field(default_factory=dict)
     bill_pdf_last_success: str | None = None
@@ -119,6 +123,7 @@ class ImportStoreData:
             billing_failed_pages=list(data.get("billing_failed_pages") or []),
             billing_last_error=data.get("billing_last_error"),
             billing_mirror_cleanup_done=bool(data.get("billing_mirror_cleanup_done", False)),
+            bill_avg_temp_mirror_cleanup_done=bool(data.get("bill_avg_temp_mirror_cleanup_done", False)),
             bill_pdf_index=_load_bill_pdf_index(data),
             bill_pdf_last_success=data.get("bill_pdf_last_success"),
             bill_pdf_last_error=data.get("bill_pdf_last_error"),
