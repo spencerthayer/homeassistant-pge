@@ -211,8 +211,28 @@ def _async_mirror_entity_statistics(
     entity_metadata: StatisticMetaData,
     stats: list[dict],
 ) -> None:
-    """Copy the same hourly rows onto the sensor's recorder statistic_id."""
+    """Copy the same hourly rows onto the sensor's recorder statistic_id.
+
+    Only mirror rows HA Core has already compiled. ``compile_statistics``
+    finalizes hour H ~5-10 min after it closes (the 5-min slot at H+55), and a
+    mirror row written before that plain-INSERTs collides on
+    ``UNIQUE(statistics.metadata_id, statistics.start_ts)``, which HA logs as
+    "Blocked attempt to insert duplicated statistic rows". Exclude the current
+    hour and the last two closed hours; the row is picked up on the next cycle
+    once it ages past the cutoff. The newest compiled slot at any poll time is
+    the last-closed hour, so the cutoff leaves >=~1h of margin for recorder
+    backlog.
+    """
     if not stats:
+        return
+    cutoff = dt_util.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
+    stats = [s for s in stats if _as_utc_datetime(s["start"]) < cutoff]
+    if not stats:
+        _LOGGER.info(
+            "Skip entity stats mirror for %s_%s — newest rows not yet finalized by compile_statistics",
+            account_key[:8],
+            unique_suffix,
+        )
         return
     entity_id = async_resolve_sensor_entity_id(hass, account_key, unique_suffix)
     if entity_id is None:
