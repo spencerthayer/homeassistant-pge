@@ -2,7 +2,8 @@
 # Shut down the local Home Assistant UAT server started by ./start (or leftover live hass).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
 PID_FILE="$ROOT/outputs/ha_live/hass.pid"

@@ -2,7 +2,8 @@
 # Boot the local Home Assistant UAT server (http://127.0.0.1:8123).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
 PID_FILE="$ROOT/outputs/ha_live/hass.pid"
@@ -23,7 +24,7 @@ if [[ -f "$PID_FILE" ]]; then
   old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [[ -n "${old_pid:-}" ]] && kill -0 "$old_pid" 2>/dev/null; then
     echo "Home Assistant already running (pid $old_pid) — http://${HOST}:${PORT}"
-    echo "  stop with: ./stop"
+    echo "  stop with: ./scripts/stop.sh"
     exit 0
   fi
   rm -f "$PID_FILE"
@@ -31,7 +32,7 @@ fi
 
 if curl -sf --connect-timeout 1 "http://${HOST}:${PORT}/" >/dev/null 2>&1; then
   echo "error: something already listens on ${HOST}:${PORT}; refuse to start a second instance" >&2
-  echo "  tip: ./stop   (or free the port), then ./start" >&2
+  echo "  tip: ./scripts/stop.sh   (or free the port), then ./scripts/start.sh" >&2
   exit 1
 fi
 
