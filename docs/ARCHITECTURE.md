@@ -101,10 +101,10 @@ Implemented in `backfill.py` + helpers in `options.py`; wired from `__init__.py`
 
 | Script    | Role                                                                                                                           |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `./start` | Resume latest `outputs/ha_live/20*` (or `current`); refresh `pge_energy` symlink; daemonize `.venv/bin/hass`; wait for `:8123` |
-| `./stop`  | SIGTERM/SIGKILL live hass; clear pid; confirm port closed                                                                      |
+| `./scripts/start.sh` | Resume latest `outputs/ha_live/20*` (or `current`); refresh `pge_energy` symlink; daemonize `.venv/bin/hass`; wait for `:8123` |
+| `./scripts/stop.sh`  | SIGTERM/SIGKILL live hass; clear pid; confirm port closed                                                                      |
 
-Bare `homeassistant.restart` from the UI **exits** this process (no Supervisor) — use `./stop` && `./start` to reload custom component code.
+Bare `homeassistant.restart` from the UI **exits** this process (no Supervisor) — use `./scripts/stop.sh` && `./scripts/start.sh` to reload custom component code.
 
 ## Key Modules
 
@@ -135,8 +135,8 @@ Mean billing series (account balance / amount due / last payment / bill period a
 
 ## Related docs
 
-- [`docs/HA_SETTINGS_HISTORY.md`](docs/HA_SETTINGS_HISTORY.md) — Configure options, manual sync, deferred bill PDFs
-- [`docs/LIVE_TESTING.md`](docs/LIVE_TESTING.md) — CLI probes and maintainer UAT
+- [`HA_SETTINGS_HISTORY.md`](HA_SETTINGS_HISTORY.md) — Configure options, manual sync, deferred bill PDFs
+- [`LIVE_TESTING.md`](LIVE_TESTING.md) — CLI probes and maintainer UAT
 - [`DATA_CONTRACT.md`](DATA_CONTRACT.md) — GraphQL shapes and retention
-- [`SECURITY.md`](SECURITY.md) — Credential storage and redaction
+- [`../SECURITY.md`](../SECURITY.md) — Credential storage and redaction
 - Auth: Cognito + Apigee hybrid email/password in `portal_auth.py` (MFA/CAPTCHA fail closed)

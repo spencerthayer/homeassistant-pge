@@ -39,7 +39,7 @@ _Analytics — weather vs usage and cost intelligence · Billing — balance, st
 
 ![How it works — unattended login, tiered hourly/daily/monthly import into dual-published statistics, then Home Assistant Energy and the /pge panel](./assets/readme/workflow.svg)
 
-A single `PGECoordinator` authenticates once per entry, then polls PGE's GraphQL endpoint on a Pacific sync clock (default **every 4 hours** from **12:00 AM** — 12am/4am/8am/noon/4pm/8pm). Closed intervals are imported as statistics; the `/pge` panel reads those same recorder statistics for its charts. Auth chain and data model details live in [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
+A single `PGECoordinator` authenticates once per entry, then polls PGE's GraphQL endpoint on a Pacific sync clock (default **every 4 hours** from **12:00 AM** — 12am/4am/8am/noon/4pm/8pm). Closed intervals are imported as statistics; the `/pge` panel reads those same recorder statistics for its charts. Auth chain and data model details live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md).
 
 PGE publishes usage **once overnight**, so a "stuck" latest interval near `01:00` Pacific during the day is expected — not a sync failure.
 
@@ -149,7 +149,7 @@ Every usage series is available in **both** forms:
 | Latest available interval                  | Newest PGE interval end                                   |
 | Authentication expiration / Last API error | Diagnostics (disabled by default)                         |
 
-Billing sensors expose `external_statistic_id` and `entity_statistic_id` for automations and custom cards. Full billing/programs sensor and PDF-statistics catalogs: [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
+Billing sensors expose `external_statistic_id` and `entity_statistic_id` for automations and custom cards. Full billing/programs sensor and PDF-statistics catalogs: [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md).
 
 ---
 
