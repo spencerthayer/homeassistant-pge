@@ -22,8 +22,11 @@ _At a glance — yesterday and week totals, statement and since-statement sums, 
 ![PGE panel Usage — hourly kWh bars with cost overlay, range accounting and breakdown tables (values redacted)](./assets/readme/panel-usage.png)
 _Usage — hourly kWh bars with a cost series, plus Range accounting and per-hour breakdown tables._
 
-![PGE panel Analytics — weather vs usage scatter and cost intelligence (values redacted)](./assets/readme/panel-analytics.png) ![PGE panel Billing — balance, statement, lifetime totals, bill PDF link, programs (values redacted)](./assets/readme/panel-billing.png)
-_Analytics — weather vs usage and cost intelligence · Billing — balance, statements, bill PDFs, programs._
+<p align="center">
+  <img src="./assets/readme/panel-analytics.png" width="49%" alt="PGE panel Analytics — weather vs usage scatter and cost intelligence (values redacted)">
+  <img src="./assets/readme/panel-billing.png" width="49%" alt="PGE panel Billing — balance, statement, lifetime totals, bill PDF link, programs (values redacted)">
+  <br><em>Analytics — weather vs usage and cost intelligence · Billing — balance, statements, bill PDFs, programs.</em>
+</p>
 
 ---
 

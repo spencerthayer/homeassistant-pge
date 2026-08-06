@@ -6,7 +6,7 @@
 flowchart TD
   A1["Config flow<br/> (email + password + account number)"]
   A2["Options flow<br/> (Configure)"]
-  A1 -->|"one HA entry per PGE account number<br/>unique id pge_account_<id>"| A2
+  A1 -->|"one HA entry per PGE account number<br/>unique id pge_account_#lt;id#gt;"| A2
 
   A2 -->|"Sync settings / credentials"| EntryOptions["entry.options + entry.data"]
   A2 -->|"Panel"| PanelStore["domain Store pge_energy.panel<br/>(integration-wide chrome)"]
