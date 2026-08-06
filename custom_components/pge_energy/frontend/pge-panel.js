@@ -1471,7 +1471,7 @@ class PgeEnergyPanel extends HTMLElement {
       estNextMin != null && estNextMax != null
         ? `${this._fmt(estNextMin, "", true)}/${this._fmt(estNextMax, "", true)}`
         : "—";
- 
+
 
     const spark = (vals, color) => sparklineSvg(vals || [], { stroke: color });
     el.innerHTML = `

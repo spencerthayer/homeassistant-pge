@@ -1,0 +1,21 @@
+name: "Prek Checks"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  prek:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 'Checkout'
+        uses: actions/checkout@v7
+
+      - name: 'Run Prek'
+        uses: j178/prek-action@v3.0.0
+        with:
+            extra-args: '--all-files --no-group no-ci'
