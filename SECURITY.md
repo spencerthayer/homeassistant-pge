@@ -18,14 +18,14 @@
 
 ## Storage
 
-| Data | Location | Notes |
-|------|----------|--------|
-| Email / password or refresh secret | HA config entry | HA’s storage trust boundary |
-| Short-lived access token | Memory preferred | Persist only when renewal requires it |
-| Immutable `account_key` | HA config entry | Not derived from renewable person IDs |
-| Encrypted account / premise / SA ids | HA config entry | Opaque portal identifiers for billing/programs; redact in diagnostics/logs |
-| Import/backfill state | HA `Store` | No secrets; includes billing ledger offset checkpoint |
-| Statistics | HA recorder | Cumulative energy/cost + billing mean/sum series |
+| Data                                 | Location         | Notes                                                                      |
+| ------------------------------------ | ---------------- | -------------------------------------------------------------------------- |
+| Email / password or refresh secret   | HA config entry  | HA’s storage trust boundary                                                |
+| Short-lived access token             | Memory preferred | Persist only when renewal requires it                                      |
+| Immutable `account_key`              | HA config entry  | Not derived from renewable person IDs                                      |
+| Encrypted account / premise / SA ids | HA config entry  | Opaque portal identifiers for billing/programs; redact in diagnostics/logs |
+| Import/backfill state                | HA `Store`       | No secrets; includes billing ledger offset checkpoint                      |
+| Statistics                           | HA recorder      | Cumulative energy/cost + billing mean/sum series                           |
 
 ## Diagnostics redaction
 

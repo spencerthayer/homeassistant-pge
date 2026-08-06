@@ -2,38 +2,36 @@
 
 ## Component Diagram
 
-```text
-HA UI
-  Config flow (email + password + account number)
-       │  one HA entry per PGE account number (unique id `pge_account_<id>`)
-       ▼
-  Options flow (Configure)
-       │  Sync settings / credentials ──► entry.options + entry.data
-       │  Panel ──► domain Store `pge_energy.panel` (integration-wide chrome)
-       ▼
-  portal_auth ──► AuthSnapshot ──► Auth Manager
-                                       ↓
-                              PGE GraphQL API (apix.portlandgeneral.com)
-                                       ↓
-                 ┌─────────────────────┴─────────────────────┐
-                 ↓                                           ↓
-        PGE API Client (usage)                    PGEBillingApiClient
-                 ↓                                           ↓
-                              PGE Data Coordinator
-                                       ↓
-          ┌────────────────────────────┼────────────────────────────┐
-          ↓                            ↓                            ↓
-   Statistics importer          Sensor + binary_sensor          Diagnostics
-   (usage + billing dual)       (usage + billing/programs)      (redacted)
-          ↓
-   HA Recorder → Energy Dashboard / History / Statistics
-                                       ↑
-                              Panel `/pge` (optional sidebar link)
-           (panel_settings.py + panel.py + frontend/pge-panel.js + websocket.py)
+```mermaid
+flowchart TD
+  A1["Config flow<br/> (email + password + account number)"]
+  A2["Options flow<br/> (Configure)"]
+  A1 -->|"one HA entry per PGE account number<br/>unique id pge_account_<id>"| A2
 
-  Tiered usage history (auto_backfill / pge_energy.backfill)
-       hourly (newest N days) → daily (older days) → monthly (oldest gaps)
-  Billing ledger paging (billing_sync + Store checkpoint; soft-fail)
+  A2 -->|"Sync settings / credentials"| EntryOptions["entry.options + entry.data"]
+  A2 -->|"Panel"| PanelStore["domain Store pge_energy.panel<br/>(integration-wide chrome)"]
+  A2 --> PortalAuth[portal_auth]
+
+  PortalAuth --> AuthSnapshot[AuthSnapshot]
+  AuthSnapshot --> AuthManager[Auth Manager]
+  AuthManager --> PGEAPI["PGE GraphQL API<br/>(apix.portlandgeneral.com)"]
+
+  PGEAPI --> PGEUsage["PGE API Client<br/>(usage)"]
+  PGEAPI --> PGEBilling[PGEBillingApiClient]
+
+  PGEUsage --> Coordinator["PGE Data Coordinator"]
+  PGEBilling --> Coordinator
+
+  Coordinator --> StatsImporter["Statistics importer<br/>(usage + billing dual)"]
+  Coordinator --> Sensors["Sensor + binary_sensor<br/>(usage + billing/programs)"]
+  Coordinator --> Diagnostics["Diagnostics<br/>(redacted)"]
+
+  StatsImporter --> Recorder["HA Recorder<br/>Energy Dashboard / History / Statistics"]
+  PanelStore --> Panel["Panel /pge<br/>(optional sidebar link)"]
+  Panel --> Recorder
+
+  Coordinator --> Note["Tiered usage history<br/>(auto_backfill / pge_energy.backfill)<br/>hourly → daily → monthly"]
+  Coordinator --> BillingNote["Billing ledger paging<br/>(billing_sync + Store checkpoint; soft-fail)"]
 ```
 
 ## Trust Boundaries
@@ -101,17 +99,17 @@ Implemented in `backfill.py` + helpers in `options.py`; wired from `__init__.py`
 
 ## Local UAT lifecycle
 
-| Script | Role |
-|--------|------|
+| Script    | Role                                                                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `./start` | Resume latest `outputs/ha_live/20*` (or `current`); refresh `pge_energy` symlink; daemonize `.venv/bin/hass`; wait for `:8123` |
-| `./stop` | SIGTERM/SIGKILL live hass; clear pid; confirm port closed |
+| `./stop`  | SIGTERM/SIGKILL live hass; clear pid; confirm port closed                                                                      |
 
 Bare `homeassistant.restart` from the UI **exits** this process (no Supervisor) — use `./stop` && `./start` to reload custom component code.
 
 ## Key Modules
 
 | Module | Role |
-|--------|------|
+| ------ | ---- |
 | `portal_auth.py` | Email/password login/refresh (Cognito + Apigee) |
 | `auth.py` | Auth manager, snapshots, immutable account key + encrypted billing ids |
 | `api.py` | GraphQL client + monthly paging + error classification |
