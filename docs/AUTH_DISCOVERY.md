@@ -44,6 +44,6 @@ Fixtures:
 ## Related docs
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — runtime auth / soft-fail flows
-- [`SECURITY.md`](SECURITY.md) — credential storage
-- [`README.md`](README.md) — user-facing auth diagram
-- [`docs/LIVE_TESTING.md`](docs/LIVE_TESTING.md) — CLI / fixture sanitization
+- [`../SECURITY.md`](../SECURITY.md) — credential storage
+- [`../README.md`](../README.md) — user-facing auth diagram
+- [`LIVE_TESTING.md`](LIVE_TESTING.md) — CLI / fixture sanitization

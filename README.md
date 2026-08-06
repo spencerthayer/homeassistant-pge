@@ -22,8 +22,11 @@ _At a glance — yesterday and week totals, statement and since-statement sums, 
 ![PGE panel Usage — hourly kWh bars with cost overlay, range accounting and breakdown tables (values redacted)](./assets/readme/panel-usage.png)
 _Usage — hourly kWh bars with a cost series, plus Range accounting and per-hour breakdown tables._
 
-![PGE panel Analytics — weather vs usage scatter and cost intelligence (values redacted)](./assets/readme/panel-analytics.png) ![PGE panel Billing — balance, statement, lifetime totals, bill PDF link, programs (values redacted)](./assets/readme/panel-billing.png)
-_Analytics — weather vs usage and cost intelligence · Billing — balance, statements, bill PDFs, programs._
+<p align="center">
+  <img src="./assets/readme/panel-analytics.png" width="49%" alt="PGE panel Analytics — weather vs usage scatter and cost intelligence (values redacted)">
+  <img src="./assets/readme/panel-billing.png" width="49%" alt="PGE panel Billing — balance, statement, lifetime totals, bill PDF link, programs (values redacted)">
+  <br><em>Analytics — weather vs usage and cost intelligence · Billing — balance, statements, bill PDFs, programs.</em>
+</p>
 
 ---
 
@@ -39,7 +42,7 @@ _Analytics — weather vs usage and cost intelligence · Billing — balance, st
 
 ![How it works — unattended login, tiered hourly/daily/monthly import into dual-published statistics, then Home Assistant Energy and the /pge panel](./assets/readme/workflow.svg)
 
-A single `PGECoordinator` authenticates once per entry, then polls PGE's GraphQL endpoint on a Pacific sync clock (default **every 4 hours** from **12:00 AM** — 12am/4am/8am/noon/4pm/8pm). Closed intervals are imported as statistics; the `/pge` panel reads those same recorder statistics for its charts. Auth chain and data model details live in [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
+A single `PGECoordinator` authenticates once per entry, then polls PGE's GraphQL endpoint on a Pacific sync clock (default **every 4 hours** from **12:00 AM** — 12am/4am/8am/noon/4pm/8pm). Closed intervals are imported as statistics; the `/pge` panel reads those same recorder statistics for its charts. Auth chain and data model details live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md).
 
 PGE publishes usage **once overnight**, so a "stuck" latest interval near `01:00` Pacific during the day is expected — not a sync failure.
 
@@ -149,7 +152,7 @@ Every usage series is available in **both** forms:
 | Latest available interval                  | Newest PGE interval end                                   |
 | Authentication expiration / Last API error | Diagnostics (disabled by default)                         |
 
-Billing sensors expose `external_statistic_id` and `entity_statistic_id` for automations and custom cards. Full billing/programs sensor and PDF-statistics catalogs: [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
+Billing sensors expose `external_statistic_id` and `entity_statistic_id` for automations and custom cards. Full billing/programs sensor and PDF-statistics catalogs: [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md).
 
 ---
 
