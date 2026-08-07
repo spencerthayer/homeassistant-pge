@@ -1166,10 +1166,7 @@ async def _async_upsert_cumulative_overlay(
         if start < changed_from:
             continue
         # Clamp legacy negative states when replaying through an existing series.
-        if start in overlay:
-            state = max(0.0, float(overlay[start]))
-        else:
-            state = max(0.0, float(existing_map[start]["state"]))
+        state = max(0.0, float(overlay[start])) if start in overlay else max(0.0, float(existing_map[start]["state"]))
         running += state
         stats.append(_stat_row(start, state, running))
 
@@ -1402,9 +1399,7 @@ async def async_refresh_lifetime_totals(
     cost = await _async_get_last_stats(hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_COST))
     temp = await _async_get_last_stats(hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_TEMPERATURE))
     returned = await _async_get_last_stats(hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_RETURN))
-    compensation = await _async_get_last_stats(
-        hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_COMPENSATION)
-    )
+    compensation = await _async_get_last_stats(hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_COMPENSATION))
     return (
         energy[0] if energy else None,
         cost[0] if cost else None,

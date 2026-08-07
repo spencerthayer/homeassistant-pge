@@ -278,7 +278,7 @@ def _parse_interval(
     else:
         kwh = _safe_decimal(raw_kwh)
         if kwh is None:
-            raise PGESchemaError("Interval missing kwh")
+            raise PGESchemaError("Interval kwh must be numeric")
 
     if resolution == UsageResolution.HOURLY:
         interval_time = raw.get("intervalTime")

@@ -144,7 +144,7 @@ class TestIntervalParsing:
 
     def test_interval_unparsable_kwh_still_errors(self):
         raw = {**MOCK_HOURLY_INTERVAL, "kwh": "not-a-number"}
-        with pytest.raises(PGESchemaError):
+        with pytest.raises(PGESchemaError, match="Interval kwh must be numeric"):
             _parse_interval(raw, UsageResolution.HOURLY, "key1")
 
     def test_signed_export_interval(self):

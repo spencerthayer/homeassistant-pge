@@ -27,7 +27,6 @@ from .const import (
 )
 from .coordinator import PGECoordinator
 from .day_validation import clip_hourly_to_local_day, is_invalid_closed_day, validate_hourly_day
-from .usage_direction import explicit_gap_intervals, importable_energy_intervals
 from .models import UsageInterval, UsageResolution
 from .options import (
     compute_hourly_date_range,
@@ -38,6 +37,7 @@ from .options import (
 from .statistics import async_import_with_baseline
 from .store import ImportStoreData, async_save_import_state
 from .time_util import PGE_TZ, iter_local_days, local_day_bounds, today_local
+from .usage_direction import explicit_gap_intervals, importable_energy_intervals
 
 _LOGGER = logging.getLogger(__name__)
 
