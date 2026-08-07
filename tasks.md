@@ -13,6 +13,14 @@
 - [x] Ship PATCH HACS release `v0.8.1` (includes signed import/export + Copilot follow-up; v0.8.0 tag was withdrawn)
 - [x] Address Copilot suppressed feedback: return/compensation day sums report `0` (not unavailable) when published intervals have no export; fix `DirectionalUsage` field docstring
 
+## Bill PDF rotated text — issue #16
+
+- [x] Keep rotated payment-stub text in layout extraction (`layout_mode_strip_rotated=False`)
+- [x] Replace dead `warnings.filterwarnings` with a targeted pypdf `logging.Filter`
+- [x] Unit tests: layout retains rotated stubs; rotation warnings silenced; Form XObject via plain fallback
+- [x] Live HA: force `download_bill_pdf` for 2026-08-05 → amount/kWh reconcile, confidence 1.0, no `Rotated text` log lines
+- [ ] Ship PATCH HACS release `v0.8.2` after green CI
+
 ## Active agents
 
 - None
