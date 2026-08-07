@@ -8,6 +8,7 @@ from custom_components.pge_energy.auth import (
     PGEAuthManager,
     generate_account_key,
     generate_immutable_account_key,
+    generate_stable_account_key,
     set_shared_cognito_rate_limit_until,
 )
 from custom_components.pge_energy.const import COGNITO_RATE_LIMIT_UNTIL_KEY, DOMAIN
@@ -29,6 +30,17 @@ class TestAccountKeyGeneration:
         key = generate_immutable_account_key()
         assert len(key) == 16
         assert key != generate_immutable_account_key()
+
+    def test_stable_key_same_account_same_key(self):
+        key = generate_stable_account_key("5792070000")
+        assert len(key) == 16
+        assert key == generate_stable_account_key("5792070000")
+        assert key == generate_stable_account_key(" 5792070000 ")
+        assert key != generate_stable_account_key("5792070001")
+
+    def test_stable_key_requires_account_id(self):
+        with pytest.raises(ValueError):
+            generate_stable_account_key("")
 
     def test_persisted_account_key_not_derived_from_person_id(self):
         mgr = PGEAuthManager(

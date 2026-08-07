@@ -9,6 +9,7 @@
 - [x] Repair proven signed fine-grained recorder history without guessing at coarse monthly direction
 - [x] Add return/compensation sensors, websocket IDs, `/pge` export charting, and HA Energy verification
 - [x] Live HA UAT on `/pge`: sync complete, KPIs populated, frontend `?v=0.8.0`, export KPI hidden on non-generating account
+- [x] Address [#10](https://github.com/spencerthayer/homeassistant-pge/issues/10): Energy dashboard docs, stable `account_key`, clear external stats on entry remove
 - [ ] Ship MINOR HACS release `v0.8.0` after exact-SHA green CI on `solar`
 
 ## Active agents

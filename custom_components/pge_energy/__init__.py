@@ -61,6 +61,7 @@ from .options import (
 )
 from .panel import async_setup_panel, async_teardown_panel
 from .statistics import (
+    async_clear_entry_statistics,
     async_import_with_baseline,
     async_migrate_signed_usage_split,
     setup_statistics_sensors,
@@ -695,6 +696,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool
                 hass.services.async_remove(DOMAIN, "retry_failed_ranges")
                 hass.services.async_remove(DOMAIN, "reset_import_checkpoint")
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Purge this entry's external statistics so delete/re-add does not orphan history."""
+    account_key = entry.data.get(CONF_ACCOUNT_KEY)
+    if not account_key:
+        return
+    await async_clear_entry_statistics(hass, str(account_key))
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: PGEConfigEntry) -> None:

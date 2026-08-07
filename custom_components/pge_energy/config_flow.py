@@ -27,7 +27,7 @@ from homeassistant.helpers.selector import (
 
 from . import portal_auth
 from .api import PGEApiClient
-from .auth import PGEAuthManager, generate_immutable_account_key
+from .auth import PGEAuthManager, generate_stable_account_key
 from .billing_api import PGEBillingApiClient
 from .const import (
     AUTH_MODE_CREDENTIAL,
@@ -312,7 +312,7 @@ class PGEConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors["base"] = "account_not_found" if self._accounts else "no_accounts"
                 else:
                     self._account_id = resolved
-                    self._account_key = generate_immutable_account_key()
+                    self._account_key = generate_stable_account_key(resolved)
                     try:
                         return await self._async_finish_credential_entry()
                     except PGEAuthenticationError:

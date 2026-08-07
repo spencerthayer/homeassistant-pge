@@ -76,8 +76,21 @@ Setup validates connectivity with an hourly request for yesterday, then the firs
 
 ### Energy Dashboard
 
-1. Settings → Dashboards → Energy.
-2. Add electricity consumption — pick `pge_energy:<account>_consumption` (or the `sensor.pge_<account>_energy` statistic) for **Energy imported from grid**. For solar/generator accounts, also add `pge_energy:<account>_return` (or `sensor.pge_<account>_return`) for **Energy exported to grid**. Add cost/compensation series if wanted.
+The Energy dashboard needs a **statistic** (or a lifetime cumulative sensor). Tip/day sensors are the wrong pick.
+
+1. Settings → Dashboards → Energy → **Add consumption**.
+2. Prefer the external statistic `pge_energy:<account_key>_consumption` for **Grid consumption**.
+   - Open More info on `sensor.pge_<account_number>_energy` and copy the `external_statistic_id` attribute.
+   - The middle segment is an opaque `account_key` hash — searching by PGE account number will not find it ([#10](https://github.com/spencerthayer/homeassistant-pge/issues/10)).
+3. Simpler alternative: pick `sensor.pge_<account_number>_energy` (lifetime imported kWh, `total_increasing`). Prefer the external id when possible — backfill and repairs write that series directly.
+4. Solar / net-metered accounts (v0.8.0+): also add `pge_energy:<account_key>_return` (or `sensor.pge_<account_number>_return`) for **Return to grid**, plus `_cost` / `_compensation` if wanted.
+
+Do **not** use for Grid consumption:
+
+- `sensor.pge_*_hourly_energy` — latest closed hour tip only
+- `sensor.pge_*_current_day_energy` — Pacific day total that resets
+
+If the dashboard shows a huge negative kWh spike after a history rebuild, use the external `_consumption` / `_return` series (v0.8.0+ splits signed HOURLY import/export) and clear any stale orphaned `pge_energy:*` ids under Developer Tools → Statistics.
 
 ### PGE panel `/pge`
 
@@ -139,8 +152,8 @@ Every usage series is available in **both** forms:
 
 | Use case                                    | Pick                                                              |
 | ------------------------------------------- | ----------------------------------------------------------------- |
-| Entity picker, History, most Lovelace cards | `sensor.pge_<account>_energy` / `_cost` / `_outdoor_temperature`  |
-| Energy dashboard / statistics graphs        | `pge_energy:<account_key>_consumption` / `_return` / `_cost` / `_compensation` / `_temperature` |
+| Entity picker, History, most Lovelace cards | `sensor.pge_<account_number>_energy` / `_cost` / `_outdoor_temperature`  |
+| Energy dashboard / statistics graphs        | `pge_energy:<account_key>_consumption` / `_return` / `_cost` / `_compensation` / `_temperature` (see `external_statistic_id` on the energy sensor) |
 
 | Sensor                                     | Description                                               |
 | ------------------------------------------ | --------------------------------------------------------- |
@@ -188,7 +201,7 @@ See [`SECURITY.md`](SECURITY.md). Diagnostics redact tokens, passwords, emails, 
 
 ## Removal
 
-Settings → Devices & Services → PGE Energy → **Delete**. Optionally remove `custom_components/pge_energy`. To revoke portal access, change your PGE password and remove the integration.
+Settings → Devices & Services → PGE Energy → **Delete**. Deleting an entry clears that entry's external `pge_energy:<account_key>_*` statistics so they do not linger as orphans. New installs derive a stable `account_key` from the PGE account number, so delete/re-add reuses the same statistic ids. Optionally remove `custom_components/pge_energy`. To revoke portal access, change your PGE password and remove the integration.
 
 ## License
 

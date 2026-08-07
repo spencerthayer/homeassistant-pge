@@ -38,7 +38,7 @@ flowchart TD
 
 1. **PGE Portal** (external): Login + GraphQL. MFA/CAPTCHA unsupported.
 2. **Home Assistant** (trusted): Config entry storage, Store for backfill state, recorder.
-3. **Immutable `account_key`**: Survives person-ID/token rotation; never derived from renewable secrets after first persist.
+3. **Stable `account_key`**: New installs derive an opaque key from the PGE account number so delete/re-add keeps the same `pge_energy:<account_key>_*` statistic ids. Persisted keys survive person-ID/token rotation and are never recomputed from renewable secrets. Entry removal clears that entry's external statistics (see [#10](https://github.com/spencerthayer/homeassistant-pge/issues/10)).
 4. **Local CLI / UAT**: Optional `.env` + packaged CLI (`docs/LIVE_TESTING.md`); HA owner login is separate from PGE portal credentials.
 
 ## Runtime Flows
@@ -47,7 +47,7 @@ flowchart TD
 
 1. Setup collects **email + password + account number** (required). Same login may create multiple entries with different account numbers; separate logins each get their own entry.
 2. `portal_auth` login (Cognito `USER_PASSWORD_AUTH` → Apigee bearer → `getAccountInfo`); match the entered account number to discovered accounts (exact or digits-only).
-3. Validate with HOURLY yesterday `GetUsageCompare`; persist email, renewal secret (or password fallback), account id, person id, immutable `account_key`. Best-effort AccountDetail discovery also persists encrypted account / premise / SA ids for programs and ledger. Entry unique id is account-scoped (`pge_account_<id>`). Title/device name: `PGE <accountnum>`.
+3. Validate with HOURLY yesterday `GetUsageCompare`; persist email, renewal secret (or password fallback), account id, person id, and a stable `account_key` derived from the account number. Best-effort AccountDetail discovery also persists encrypted account / premise / SA ids for programs and ledger. Entry unique id is account-scoped (`pge_account_<id>`). Title/device name: `PGE <accountnum>` (entity ids use the account number; Energy statistic ids use `account_key`).
 4. Keep access token in memory; renew under async lock before GraphQL calls (skew before expiry; forced 401 renew+retry on credential mode). Tokens are short-lived — password/refresh re-login may run nearly every sync.
 5. Cognito `TooManyRequests` / “Password attempts exceeded” → `PGERateLimitError` with a shared per-email cooldown (no further InitiateAuth while cooling down; no password→refresh amplify; soft-fail retains sensors without reauth UI). Concurrent `force_renew` waiters coalesce onto one login. See [`AUTH_DISCOVERY.md`](AUTH_DISCOVERY.md).
 6. MFA/CAPTCHA → fail closed. Manual bearer-token paste is removed (legacy `auth_mode=manual_token` entries may still load until reauth upgrades them).

@@ -37,6 +37,7 @@ from .const import (
     ENTITY_UNIQUE_ENERGY,
     ENTITY_UNIQUE_RETURN,
     ENTITY_UNIQUE_TEMPERATURE,
+    ENTRY_STATISTIC_SUFFIXES,
     MONTHLY_LUMP_MIN_COST,
     MONTHLY_LUMP_MIN_KWH,
     STATISTIC_ID_SUFFIX_COMPENSATION,
@@ -80,6 +81,46 @@ class ImportBaselineResult:
 
 def _get_statistic_id(account_key: str, suffix: str) -> str:
     return f"{DOMAIN}:{account_key}{suffix}"
+
+
+def entry_statistic_ids(account_key: str) -> list[str]:
+    """Return every external statistic id owned by one config entry."""
+    return [_get_statistic_id(account_key, suffix) for suffix in ENTRY_STATISTIC_SUFFIXES]
+
+
+async def async_clear_entry_statistics(hass: HomeAssistant, account_key: str) -> bool:
+    """Clear external statistics for an entry (best-effort; used on remove)."""
+    if not account_key:
+        return False
+    statistic_ids = entry_statistic_ids(account_key)
+    done = asyncio.Event()
+
+    def _on_done() -> None:
+        done.set()
+
+    try:
+        get_instance(hass).async_clear_statistics(statistic_ids, on_done=_on_done)
+        try:
+            await asyncio.wait_for(done.wait(), timeout=60.0)
+        except TimeoutError:
+            _LOGGER.warning(
+                "Timed out clearing entry statistics for %s",
+                account_key[:8],
+            )
+            return False
+    except Exception as exc:  # noqa: BLE001 — soft-fail; removal must still succeed
+        _LOGGER.warning(
+            "Failed to clear entry statistics for %s: %s",
+            account_key[:8],
+            exc,
+        )
+        return False
+    _LOGGER.info(
+        "Cleared %s external statistic id(s) for removed entry %s",
+        len(statistic_ids),
+        account_key[:8],
+    )
+    return True
 
 
 def async_resolve_sensor_entity_id(
