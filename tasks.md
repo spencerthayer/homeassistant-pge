@@ -19,7 +19,7 @@
 - [x] Replace dead `warnings.filterwarnings` with a targeted pypdf `logging.Filter`
 - [x] Unit tests: layout retains rotated stubs; rotation warnings silenced; Form XObject via plain fallback
 - [x] Live HA: force `download_bill_pdf` for 2026-08-05 → amount/kWh reconcile, confidence 1.0, no `Rotated text` log lines
-- [ ] Ship PATCH HACS release `v0.8.2` after green CI
+- [x] Ship PATCH HACS release [`v0.8.2`](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.8.2); closed [#16](https://github.com/spencerthayer/homeassistant-pge/issues/16)
 
 ## Active agents
 
