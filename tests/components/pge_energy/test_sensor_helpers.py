@@ -18,8 +18,10 @@ from custom_components.pge_energy.sensor import (
     PGEHourlyCostSensor,
     PGEHourlyEnergySensor,
     _intervals_in_range,
+    _sum_compensation,
     _sum_cost,
     _sum_kwh,
+    _sum_return_kwh,
 )
 from custom_components.pge_energy.statistics import (
     _build_entity_consumption_metadata,
@@ -48,6 +50,24 @@ class TestDayHelpers:
         intervals = [_iv(0, 1.5, 0.3), _iv(1, 2.0, 0.4), _iv(2, 1.0, None)]
         assert _sum_kwh(intervals) == 4.5
         assert _sum_cost(intervals) == 0.7
+
+    def test_sum_return_and_compensation_zero_when_no_export(self):
+        """Published import-only hours report 0 export, not unavailable."""
+        intervals = [_iv(0, 1.5, 0.3), _iv(1, 2.0, 0.4)]
+        assert _sum_return_kwh(intervals) == 0.0
+        assert _sum_compensation(intervals) == 0.0
+
+    def test_sum_return_and_compensation_none_without_data(self):
+        assert _sum_return_kwh([]) is None
+        assert _sum_compensation([]) is None
+        assert _sum_return_kwh([_iv(0, 1.0, amount=None)]) == 0.0
+        # Compensation needs amount samples; kWh-only rows are not enough.
+        assert _sum_compensation([_iv(0, 1.0, amount=None)]) is None
+
+    def test_sum_return_and_compensation_export_hours(self):
+        intervals = [_iv(0, 2.0, 0.4), _iv(1, -1.5, -0.2)]
+        assert _sum_return_kwh(intervals) == 1.5
+        assert _sum_compensation(intervals) == 0.2
 
     def test_intervals_in_range(self):
         intervals = [_iv(0, 1.0, day=22), _iv(0, 2.0, day=23), _iv(1, 3.0, day=23)]
