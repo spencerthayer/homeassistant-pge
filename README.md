@@ -53,7 +53,7 @@ PGE publishes usage **once overnight**, so a "stuck" latest interval near `01:00
 ### HACS (recommended)
 
 1. HACS → **⋯** → **Custom repositories**, add `https://github.com/spencerthayer/homeassistant-pge` with category **Integration**.
-2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.7.5`).
+2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.8.0`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -76,8 +76,21 @@ Setup validates connectivity with an hourly request for yesterday, then the firs
 
 ### Energy Dashboard
 
-1. Settings → Dashboards → Energy.
-2. Add electricity consumption — pick `pge_energy:<account>_consumption` (or the `sensor.pge_<account>_energy` statistic), and cost if you want it.
+The Energy dashboard needs a **statistic** (or a lifetime cumulative sensor). Tip/day sensors are the wrong pick.
+
+1. Settings → Dashboards → Energy → **Add consumption**.
+2. Prefer the external statistic `pge_energy:<account_key>_consumption` for **Grid consumption**.
+   - Open More info on `sensor.pge_<account_number>_energy` and copy the `external_statistic_id` attribute.
+   - The middle segment is an opaque `account_key` hash — searching by PGE account number will not find it ([#10](https://github.com/spencerthayer/homeassistant-pge/issues/10)).
+3. Simpler alternative: pick `sensor.pge_<account_number>_energy` (lifetime imported kWh, `total_increasing`). Prefer the external id when possible — backfill and repairs write that series directly.
+4. Solar / net-metered accounts (v0.8.0+): also add `pge_energy:<account_key>_return` (or `sensor.pge_<account_number>_return`) for **Return to grid**, plus `_cost` / `_compensation` if wanted.
+
+Do **not** use for Grid consumption:
+
+- `sensor.pge_*_hourly_energy` — latest closed hour tip only
+- `sensor.pge_*_current_day_energy` — Pacific day total that resets
+
+If the dashboard shows a huge negative kWh spike after a history rebuild, use the external `_consumption` / `_return` series (v0.8.0+ splits signed HOURLY import/export) and clear any stale orphaned `pge_energy:*` ids under Developer Tools → Statistics.
 
 ### PGE panel `/pge`
 
@@ -129,7 +142,7 @@ Details: [`docs/HA_SETTINGS_HISTORY.md`](docs/HA_SETTINGS_HISTORY.md).
 
 ### Grid import/export diagnostic capture (v0.7.3 alpha)
 
-Separate grid-return energy for generating customers is still under PGE GraphQL discovery ([#5](https://github.com/spencerthayer/homeassistant-pge/issues/5)). An off-by-default **Enable diagnostic capture (alpha)** switch logs a bounded allowlist of interval values under `PGE_ALPHA_GRID_CAPTURE` for requested captures. It never logs credentials, tokens, or identifiers. Enable only for a requested capture, review logs before sharing, and turn it off afterward.
+Generating / net-metered accounts publish signed HOURLY usage: positive kWh is grid import, negative kWh is grid export ([#5](https://github.com/spencerthayer/homeassistant-pge/issues/5)). The integration splits those into non-negative `_consumption` / `_return` (and `_cost` / `_compensation`) statistics for the Energy dashboard and `/pge` panel. An off-by-default **Enable diagnostic capture (alpha)** switch remains available for follow-up GraphQL captures (`PGE_ALPHA_GRID_CAPTURE`); it never logs credentials, tokens, or identifiers.
 
 ---
 
@@ -139,8 +152,8 @@ Every usage series is available in **both** forms:
 
 | Use case                                    | Pick                                                              |
 | ------------------------------------------- | ----------------------------------------------------------------- |
-| Entity picker, History, most Lovelace cards | `sensor.pge_<account>_energy` / `_cost` / `_outdoor_temperature`  |
-| Energy dashboard / statistics graphs        | `pge_energy:<account_key>_consumption` / `_cost` / `_temperature` |
+| Entity picker, History, most Lovelace cards | `sensor.pge_<account_number>_energy` / `_cost` / `_outdoor_temperature`  |
+| Energy dashboard / statistics graphs        | `pge_energy:<account_key>_consumption` / `_return` / `_cost` / `_compensation` / `_temperature` (see `external_statistic_id` on the energy sensor) |
 
 | Sensor                                     | Description                                               |
 | ------------------------------------------ | --------------------------------------------------------- |
@@ -165,7 +178,7 @@ Billing sensors expose `external_statistic_id` and `entity_statistic_id` for aut
 - Full history uses daily/monthly tiers once hourly retention ends (~1 year).
 - DAILY windows under ~31 days may hard-error; prefer HOURLY or ≥31-day DAILY.
 - MONTHLY returns the latest ~12 billing periods per call; older history requires paging backwards.
-- Separate grid-return energy is under GraphQL discovery (v0.7.3); the integration does not publish return values yet.
+- Grid export uses signed HOURLY rows only; DAILY/MONTHLY net totals are not split into gross import/export.
 - PGE may return transient 502s (retried). PGE's API is unofficial and may change without notice.
 
 ## Troubleshooting
@@ -188,7 +201,7 @@ See [`SECURITY.md`](SECURITY.md). Diagnostics redact tokens, passwords, emails, 
 
 ## Removal
 
-Settings → Devices & Services → PGE Energy → **Delete**. Optionally remove `custom_components/pge_energy`. To revoke portal access, change your PGE password and remove the integration.
+Settings → Devices & Services → PGE Energy → **Delete**. Deleting an entry clears that entry's external `pge_energy:<account_key>_*` statistics so they do not linger as orphans. New installs derive a stable `account_key` from the PGE account number, so delete/re-add reuses the same statistic ids. Optionally remove `custom_components/pge_energy`. To revoke portal access, change your PGE password and remove the integration.
 
 ## License
 

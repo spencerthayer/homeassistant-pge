@@ -6,6 +6,10 @@ from datetime import date, timedelta
 
 from .models import UsageInterval
 from .time_util import local_day_bounds, today_local
+from .usage_direction import energy_available
+
+# Closed-day outcomes that advance completion (including permanent explicit gaps).
+_COMPLETE_REASONS = frozenset({"complete", "complete_with_gap"})
 
 
 def clip_hourly_to_local_day(
@@ -42,6 +46,8 @@ def validate_hourly_day(
     - Starts must be unique after normalization
     - Closed days must be contiguous hourly intervals spanning the local day
       (23/25-hour DST days are handled via local_day_bounds length)
+    - Explicit PGE null-kWh rows still occupy their start for contiguity; when
+      the closed day is otherwise complete the reason is ``complete_with_gap``
     - When clip_boundary=True (default), the PGE +1 day_end boundary hour is
       removed before validation
     """
@@ -69,6 +75,7 @@ def validate_hourly_day(
 
     # Contiguity: each successive start must equal previous + 1 hour, and cover
     # the full local day from day_start through the last hour before day_end.
+    # Explicit null-kWh rows count toward coverage (they are not omitted gaps).
     expected = day_start
     for start in starts:
         if start != expected:
@@ -77,11 +84,13 @@ def validate_hourly_day(
     if expected != day_end:
         return False, "gap"
 
+    if any(not energy_available(iv) for iv in intervals):
+        return True, "complete_with_gap"
     return True, "complete"
 
 
 def is_invalid_closed_day(ok_complete: bool, reason: str) -> bool:
     """True when a closed-day response must not advance completion."""
-    if ok_complete:
+    if ok_complete or reason in _COMPLETE_REASONS:
         return False
     return reason not in {"current_day_empty", "current_day_partial"}

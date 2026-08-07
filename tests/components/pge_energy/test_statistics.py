@@ -95,6 +95,20 @@ class TestBuildStatistics:
         assert stats[1]["state"] == 2.0
         assert stats[1]["sum"] == 3.5
 
+    def test_signed_export_splits_to_non_negative_import(self):
+        from custom_components.pge_energy.statistics import _build_return_statistics
+
+        intervals = [
+            _make_interval(0, 1.0, 0.20, day=1),
+            _make_interval(1, -2.5, -0.50, day=1),
+        ]
+        cons = _build_statistics(intervals)
+        ret = _build_return_statistics(intervals)
+        assert cons[0]["state"] == 1.0
+        assert cons[1]["state"] == 0.0
+        assert len(ret) == 1
+        assert ret[0]["state"] == 2.5
+
     def test_sorted_by_start(self):
         intervals = [
             _make_interval(2, 3.0, 0.60, day=1),

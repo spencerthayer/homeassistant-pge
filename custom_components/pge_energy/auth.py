@@ -41,8 +41,22 @@ def generate_legacy_account_key(portal_identity: str, account_id: str, encrypted
 generate_account_key = generate_legacy_account_key
 
 
+def generate_stable_account_key(account_id: str) -> str:
+    """Opaque key stable for the same PGE account number across delete/re-add.
+
+    Statistic ids are ``pge_energy:<account_key>_*``. Deriving the key from the
+    account number (not person id / tokens) keeps Energy dashboard sources and
+    recorder history attached when an entry is removed and set up again.
+    Credential renewal still leaves the persisted key untouched.
+    """
+    normalized = str(account_id or "").strip()
+    if not normalized:
+        raise ValueError("account_id is required for a stable account_key")
+    return hashlib.sha256(f"{DOMAIN}:account:{normalized}".encode()).hexdigest()[:16]
+
+
 def generate_immutable_account_key() -> str:
-    """Random opaque key that never changes across credential renewal."""
+    """Random opaque key for ephemeral/CLI use (not used by config setup)."""
     return secrets.token_hex(8)
 
 

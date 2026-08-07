@@ -32,19 +32,26 @@ from .const import (
     DAILY_LUMP_MIN_KWH,
     DEFAULT_HISTORY_FLOOR,
     DOMAIN,
+    ENTITY_UNIQUE_COMPENSATION,
     ENTITY_UNIQUE_COST,
     ENTITY_UNIQUE_ENERGY,
+    ENTITY_UNIQUE_RETURN,
     ENTITY_UNIQUE_TEMPERATURE,
+    ENTRY_STATISTIC_SUFFIXES,
     MONTHLY_LUMP_MIN_COST,
     MONTHLY_LUMP_MIN_KWH,
+    STATISTIC_ID_SUFFIX_COMPENSATION,
     STATISTIC_ID_SUFFIX_CONSUMPTION,
     STATISTIC_ID_SUFFIX_COST,
+    STATISTIC_ID_SUFFIX_RETURN,
     STATISTIC_ID_SUFFIX_TEMPERATURE,
     STATISTICS_ACK_WRITE_ATTEMPTS,
 )
-from .models import UsageInterval
+from .models import UsageInterval, UsageResolution
 from .options import pge_display_name
+from .store import ImportStoreData, async_save_import_state
 from .time_util import PGE_TZ, local_day_bounds
+from .usage_direction import split_signed_usage
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,6 +83,46 @@ def _get_statistic_id(account_key: str, suffix: str) -> str:
     return f"{DOMAIN}:{account_key}{suffix}"
 
 
+def entry_statistic_ids(account_key: str) -> list[str]:
+    """Return every external statistic id owned by one config entry."""
+    return [_get_statistic_id(account_key, suffix) for suffix in ENTRY_STATISTIC_SUFFIXES]
+
+
+async def async_clear_entry_statistics(hass: HomeAssistant, account_key: str) -> bool:
+    """Clear external statistics for an entry (best-effort; used on remove)."""
+    if not account_key:
+        return False
+    statistic_ids = entry_statistic_ids(account_key)
+    done = asyncio.Event()
+
+    def _on_done() -> None:
+        done.set()
+
+    try:
+        get_instance(hass).async_clear_statistics(statistic_ids, on_done=_on_done)
+        try:
+            await asyncio.wait_for(done.wait(), timeout=60.0)
+        except TimeoutError:
+            _LOGGER.warning(
+                "Timed out clearing entry statistics for %s",
+                account_key[:8],
+            )
+            return False
+    except Exception as exc:  # noqa: BLE001 — soft-fail; removal must still succeed
+        _LOGGER.warning(
+            "Failed to clear entry statistics for %s: %s",
+            account_key[:8],
+            exc,
+        )
+        return False
+    _LOGGER.info(
+        "Cleared %s external statistic id(s) for removed entry %s",
+        len(statistic_ids),
+        account_key[:8],
+    )
+    return True
+
+
 def async_resolve_sensor_entity_id(
     hass: HomeAssistant,
     account_key: str,
@@ -91,10 +138,16 @@ def _statistic_display_name(
     *,
     cost: bool = False,
     temperature: bool = False,
+    return_energy: bool = False,
+    compensation: bool = False,
 ) -> str:
     base = pge_display_name(account_id) if account_id else pge_display_name(account_key[:8])
     if cost:
         return f"{base} cost"
+    if compensation:
+        return f"{base} compensation"
+    if return_energy:
+        return f"{base} return"
     if temperature:
         return f"{base} temperature"
     return base
@@ -148,6 +201,34 @@ def _build_cost_metadata(account_key: str, account_id: str | None = None) -> Sta
     )
 
 
+def _build_return_metadata(account_key: str, account_id: str | None = None) -> StatisticMetaData:
+    stat_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_RETURN)
+    return StatisticMetaData(
+        has_mean=False,
+        mean_type=StatisticMeanType.NONE,
+        has_sum=True,
+        name=_statistic_display_name(account_id, account_key, return_energy=True),
+        source=DOMAIN,
+        statistic_id=stat_id,
+        unit_class="energy",
+        unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+    )
+
+
+def _build_compensation_metadata(account_key: str, account_id: str | None = None) -> StatisticMetaData:
+    stat_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_COMPENSATION)
+    return StatisticMetaData(
+        has_mean=False,
+        mean_type=StatisticMeanType.NONE,
+        has_sum=True,
+        name=_statistic_display_name(account_id, account_key, compensation=True),
+        source=DOMAIN,
+        statistic_id=stat_id,
+        unit_class=None,
+        unit_of_measurement="USD",
+    )
+
+
 def _build_temperature_metadata(account_key: str, account_id: str | None = None) -> StatisticMetaData:
     """PGE-reported outdoor temperature (°F) for each usage interval."""
     stat_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_TEMPERATURE)
@@ -188,6 +269,14 @@ def _build_entity_cost_metadata(entity_id: str, name: str) -> StatisticMetaData:
         unit_class=None,
         unit_of_measurement="USD",
     )
+
+
+def _build_entity_return_metadata(entity_id: str, name: str) -> StatisticMetaData:
+    return _build_entity_consumption_metadata(entity_id, name)
+
+
+def _build_entity_compensation_metadata(entity_id: str, name: str) -> StatisticMetaData:
+    return _build_entity_cost_metadata(entity_id, name)
 
 
 def _build_entity_temperature_metadata(entity_id: str, name: str) -> StatisticMetaData:
@@ -287,12 +376,41 @@ def _recalculate_sums(stats: list[dict]) -> None:
 
 
 def _build_statistics(intervals: list[UsageInterval]) -> list[dict]:
+    """Build non-negative grid-import statistics from signed PGE intervals."""
     stats = []
     for iv in sorted(intervals, key=lambda x: x.start):
+        if iv.kwh is None:
+            continue
+        split = split_signed_usage(iv.kwh, iv.amount, resolution=iv.resolution)
         stats.append(
             {
                 "start": iv.start,
-                "state": float(iv.kwh),
+                "state": float(split.consumption),
+                "sum": 0.0,
+                "last_reset": None,
+                "min": None,
+                "max": None,
+                "mean": None,
+                "mean_weight": None,
+            }
+        )
+    _recalculate_sums(stats)
+    return stats
+
+
+def _build_return_statistics(intervals: list[UsageInterval]) -> list[dict]:
+    """Build non-negative grid-export statistics from signed hourly intervals."""
+    stats = []
+    for iv in sorted(intervals, key=lambda x: x.start):
+        if iv.kwh is None or iv.resolution != UsageResolution.HOURLY:
+            continue
+        split = split_signed_usage(iv.kwh, iv.amount, resolution=iv.resolution)
+        if split.return_kwh <= 0:
+            continue
+        stats.append(
+            {
+                "start": iv.start,
+                "state": float(split.return_kwh),
                 "sum": 0.0,
                 "last_reset": None,
                 "min": None,
@@ -308,12 +426,39 @@ def _build_statistics(intervals: list[UsageInterval]) -> list[dict]:
 def _build_cost_statistics(intervals: list[UsageInterval]) -> list[dict]:
     stats = []
     for iv in sorted(intervals, key=lambda x: x.start):
-        if iv.amount is None:
+        if iv.kwh is None or iv.amount is None:
+            continue
+        split = split_signed_usage(iv.kwh, iv.amount, resolution=iv.resolution)
+        if split.cost is None:
             continue
         stats.append(
             {
                 "start": iv.start,
-                "state": float(iv.amount),
+                "state": float(split.cost),
+                "sum": 0.0,
+                "last_reset": None,
+                "min": None,
+                "max": None,
+                "mean": None,
+                "mean_weight": None,
+            }
+        )
+    _recalculate_sums(stats)
+    return stats
+
+
+def _build_compensation_statistics(intervals: list[UsageInterval]) -> list[dict]:
+    stats = []
+    for iv in sorted(intervals, key=lambda x: x.start):
+        if iv.kwh is None or iv.amount is None or iv.resolution != UsageResolution.HOURLY:
+            continue
+        split = split_signed_usage(iv.kwh, iv.amount, resolution=iv.resolution)
+        if split.compensation is None or split.compensation <= 0:
+            continue
+        stats.append(
+            {
+                "start": iv.start,
+                "state": float(split.compensation),
                 "sum": 0.0,
                 "last_reset": None,
                 "min": None,
@@ -344,16 +489,42 @@ def _build_incremental_statistics(
     running_sum = baseline_sum
 
     for iv in sorted(intervals, key=lambda x: x.start):
+        if iv.kwh is None:
+            continue
+        split = split_signed_usage(iv.kwh, iv.amount, resolution=iv.resolution)
         if use_cost:
-            if iv.amount is None:
+            if split.cost is None:
                 continue
-            state = float(iv.amount)
+            state = float(split.cost)
         else:
-            state = float(iv.kwh)
+            state = float(split.consumption)
         running_sum += state
         stats.append(_stat_row(iv.start, state, running_sum))
 
     return stats
+
+
+def _directional_overlays(
+    intervals: list[UsageInterval],
+) -> tuple[dict[datetime, float], dict[datetime, float], dict[datetime, float], dict[datetime, float]]:
+    """Map UTC starts to non-negative consumption/return/cost/compensation states."""
+    consumption: dict[datetime, float] = {}
+    returns: dict[datetime, float] = {}
+    costs: dict[datetime, float] = {}
+    comps: dict[datetime, float] = {}
+    for iv in intervals:
+        if iv.kwh is None:
+            continue
+        start = iv.start.astimezone(UTC)
+        split = split_signed_usage(iv.kwh, iv.amount, resolution=iv.resolution)
+        consumption[start] = float(split.consumption)
+        if iv.resolution == UsageResolution.HOURLY:
+            returns[start] = float(split.return_kwh)
+            if split.compensation is not None:
+                comps[start] = float(split.compensation)
+        if split.cost is not None:
+            costs[start] = float(split.cost)
+    return consumption, returns, costs, comps
 
 
 def _dedupe_intervals(intervals: list[UsageInterval]) -> list[UsageInterval]:
@@ -934,6 +1105,100 @@ def _local_dates_from_starts(starts: list[datetime] | set[datetime]) -> tuple[st
     return tuple(sorted({start.astimezone(PGE_TZ).date().isoformat() for start in starts}))
 
 
+async def _async_upsert_cumulative_overlay(
+    hass: HomeAssistant,
+    *,
+    account_key: str,
+    account_id: str | None,
+    statistic_suffix: str,
+    entity_unique_suffix: str,
+    overlay: dict[datetime, float],
+    metadata_builder,
+    entity_metadata_builder,
+    display_name: str,
+    lump_min: float | None,
+    daily_lump_min: float | None,
+    hard_ack: bool,
+) -> tuple[str, ...]:
+    """Merge ``overlay`` into a cumulative external (+ mirrored) series.
+
+    Returns local dates whose ack failed (empty when ``hard_ack`` raises).
+    """
+    if not overlay:
+        return ()
+
+    statistic_id = _get_statistic_id(account_key, statistic_suffix)
+    changed_from = min(overlay)
+    changed_to = max(overlay)
+    last = await _async_get_last_stats(hass, statistic_id)
+    suffix_end = changed_to
+    if last and last[1] is not None and last[1] > suffix_end:
+        suffix_end = last[1]
+
+    day_floor = min(start.astimezone(PGE_TZ).date() for start in overlay)
+    day_start, _ = local_day_bounds(day_floor)
+    read_from = min(changed_from, day_start.astimezone(UTC))
+    existing_map = await _async_get_stats_map(hass, statistic_id, read_from, suffix_end + timedelta(hours=1))
+
+    if lump_min is not None and daily_lump_min is not None:
+        scrubbed = _scrub_monthly_lumps_for_days(
+            existing_map,
+            overlay,
+            lump_min=lump_min,
+            daily_lump_min=daily_lump_min,
+        )
+        if scrubbed:
+            _LOGGER.info(
+                "Scrubbed %s monthly %s lump(s) on days receiving finer intervals",
+                scrubbed,
+                statistic_suffix.lstrip("_"),
+            )
+            changed_from = min([changed_from, *overlay.keys()])
+
+    merged_starts = sorted(set(existing_map) | set(overlay))
+    if not merged_starts:
+        return ()
+
+    anchor = await _async_anchor_sum(hass, statistic_id, changed_from)
+    running = anchor
+    stats: list[dict] = []
+    for start in merged_starts:
+        if start < changed_from:
+            continue
+        # Clamp legacy negative states when replaying through an existing series.
+        state = max(0.0, float(overlay[start])) if start in overlay else max(0.0, float(existing_map[start]["state"]))
+        running += state
+        stats.append(_stat_row(start, state, running))
+
+    if not stats:
+        return ()
+
+    meta = metadata_builder(account_key, account_id)
+    async_add_external_statistics(hass, meta, stats)
+    _async_mirror_entity_statistics(
+        hass,
+        account_key=account_key,
+        unique_suffix=entity_unique_suffix,
+        entity_metadata=entity_metadata_builder("sensor._", display_name),
+        stats=stats,
+    )
+    try:
+        await async_ack_external_statistics(
+            hass,
+            statistic_id=statistic_id,
+            metadata=meta,
+            stats=stats,
+            expected_states=_expected_from_stats(stats),
+            start=changed_from,
+            end=suffix_end + timedelta(hours=1),
+        )
+    except RuntimeError:
+        if hard_ack:
+            raise
+        return _local_dates_from_starts(list(overlay))
+    return ()
+
+
 async def async_import_with_baseline(
     hass: HomeAssistant,
     account_key: str,
@@ -944,165 +1209,102 @@ async def async_import_with_baseline(
 ) -> ImportBaselineResult:
     """Upsert intervals and rebuild the affected cumulative-sum suffix.
 
-    Consumption ack failure propagates. Cost/temperature ack failures are soft:
-    external + entity rows are written together, days are listed in
-    ``cost_failed_days`` for retry, and the poll can clear ``dirty_from``.
+    Consumption ack failure propagates. Cost/return/compensation/temperature ack
+    failures are soft: days are listed in ``cost_failed_days`` for retry, and the
+    poll can clear ``dirty_from``. Coarse DAILY/MONTHLY rows never invent return
+    or compensation — only HOURLY signed rows populate those series.
     """
     if not intervals:
         return ImportBaselineResult(0)
 
     intervals = _dedupe_intervals(intervals)
     soft_failed: set[str] = set()
+    overlay_kwh, overlay_return, overlay_cost, overlay_comp = _directional_overlays(intervals)
+
     # Temperature is independent of cumulative kWh/cost sums — import even when
     # consumption/cost ack fails (dirty recorder / monthly vs daily collisions).
     try:
-        changed_from = min(iv.start for iv in intervals).astimezone(UTC)
-        changed_to = max(iv.start for iv in intervals).astimezone(UTC)
-
-        consumption_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_CONSUMPTION)
-        cost_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_COST)
-
-        last = await _async_get_last_stats(hass, consumption_id)
-        suffix_end = changed_to
-        if last and last[1] is not None and last[1] > suffix_end:
-            suffix_end = last[1]
-
-        # Widen the read window to the Pacific day start so a month-start lump
-        # earlier the same local day is visible for scrubbing.
-        day_floor = min(iv.start.astimezone(PGE_TZ).date() for iv in intervals)
-        day_start, _ = local_day_bounds(day_floor)
-        read_from = min(changed_from, day_start.astimezone(UTC))
-
-        existing_map = await _async_get_stats_map(hass, consumption_id, read_from, suffix_end + timedelta(hours=1))
-        overlay_kwh = {iv.start.astimezone(UTC): float(iv.kwh) for iv in intervals}
-        scrubbed = _scrub_monthly_lumps_for_days(
-            existing_map,
-            overlay_kwh,
-            lump_min=MONTHLY_LUMP_MIN_KWH,
-            daily_lump_min=DAILY_LUMP_MIN_KWH,
-        )
-        if scrubbed:
-            _LOGGER.info(
-                "Scrubbed %s monthly consumption lump(s) on days receiving finer intervals",
-                scrubbed,
-            )
-            changed_from = min([changed_from, *overlay_kwh.keys()])
-
-        # Merge: API overlays, keep existing later rows not in API batch.
-        merged_starts = sorted(set(existing_map) | set(overlay_kwh))
-        if not merged_starts:
-            return ImportBaselineResult(0)
-
-        anchor = await _async_anchor_sum(hass, consumption_id, changed_from)
-        running = anchor
-        consumption_stats: list[dict] = []
-        for start in merged_starts:
-            if start < changed_from:
-                continue
-            state = overlay_kwh[start] if start in overlay_kwh else float(existing_map[start]["state"])
-            running += state
-            consumption_stats.append(_stat_row(start, state, running))
-
-        if consumption_stats:
-            cons_meta = _build_consumption_metadata(account_key, account_id)
-            async_add_external_statistics(hass, cons_meta, consumption_stats)
-            await async_ack_external_statistics(
-                hass,
-                statistic_id=consumption_id,
-                metadata=cons_meta,
-                stats=consumption_stats,
-                expected_states=_expected_from_stats(consumption_stats),
-                start=changed_from,
-                end=suffix_end + timedelta(hours=1),
-            )
-            _async_mirror_entity_statistics(
+        if overlay_kwh:
+            await _async_upsert_cumulative_overlay(
                 hass,
                 account_key=account_key,
-                unique_suffix=ENTITY_UNIQUE_ENERGY,
-                entity_metadata=_build_entity_consumption_metadata(
-                    "sensor._",
-                    _statistic_display_name(account_id, account_key),
-                ),
-                stats=consumption_stats,
+                account_id=account_id,
+                statistic_suffix=STATISTIC_ID_SUFFIX_CONSUMPTION,
+                entity_unique_suffix=ENTITY_UNIQUE_ENERGY,
+                overlay=overlay_kwh,
+                metadata_builder=_build_consumption_metadata,
+                entity_metadata_builder=_build_entity_consumption_metadata,
+                display_name=_statistic_display_name(account_id, account_key),
+                lump_min=MONTHLY_LUMP_MIN_KWH,
+                daily_lump_min=DAILY_LUMP_MIN_KWH,
+                hard_ack=True,
             )
 
-        if include_cost:
-            cost_intervals = [iv for iv in intervals if iv.amount is not None]
-            if cost_intervals:
-                cost_changed_from = min(iv.start for iv in cost_intervals).astimezone(UTC)
-                cost_changed_to = max(iv.start for iv in cost_intervals).astimezone(UTC)
-                cost_day_floor = min(iv.start.astimezone(PGE_TZ).date() for iv in cost_intervals)
-                cost_day_start, _ = local_day_bounds(cost_day_floor)
-                cost_read_from = min(cost_changed_from, cost_day_start.astimezone(UTC))
-                cost_last = await _async_get_last_stats(hass, cost_id)
-                cost_suffix_end = cost_changed_to
-                if cost_last and cost_last[1] is not None and cost_last[1] > cost_suffix_end:
-                    cost_suffix_end = cost_last[1]
+        if overlay_return:
+            failed = await _async_upsert_cumulative_overlay(
+                hass,
+                account_key=account_key,
+                account_id=account_id,
+                statistic_suffix=STATISTIC_ID_SUFFIX_RETURN,
+                entity_unique_suffix=ENTITY_UNIQUE_RETURN,
+                overlay=overlay_return,
+                metadata_builder=_build_return_metadata,
+                entity_metadata_builder=_build_entity_return_metadata,
+                display_name=_statistic_display_name(account_id, account_key, return_energy=True),
+                lump_min=None,
+                daily_lump_min=None,
+                hard_ack=False,
+            )
+            if failed:
+                soft_failed.update(failed)
+                _LOGGER.error(
+                    "Return statistics ack failed (non-fatal); marking days failed: %s",
+                    ", ".join(failed) or "(none)",
+                )
 
-                cost_existing = await _async_get_stats_map(
-                    hass,
-                    cost_id,
-                    cost_read_from,
-                    cost_suffix_end + timedelta(hours=1),
+        if include_cost and overlay_cost:
+            failed = await _async_upsert_cumulative_overlay(
+                hass,
+                account_key=account_key,
+                account_id=account_id,
+                statistic_suffix=STATISTIC_ID_SUFFIX_COST,
+                entity_unique_suffix=ENTITY_UNIQUE_COST,
+                overlay=overlay_cost,
+                metadata_builder=_build_cost_metadata,
+                entity_metadata_builder=_build_entity_cost_metadata,
+                display_name=_statistic_display_name(account_id, account_key, cost=True),
+                lump_min=MONTHLY_LUMP_MIN_COST,
+                daily_lump_min=DAILY_LUMP_MIN_COST,
+                hard_ack=False,
+            )
+            if failed:
+                soft_failed.update(failed)
+                _LOGGER.error(
+                    "Cost statistics ack failed (non-fatal); marking days failed: %s",
+                    ", ".join(failed) or "(none)",
                 )
-                overlay_cost = {
-                    iv.start.astimezone(UTC): float(iv.amount) for iv in cost_intervals if iv.amount is not None
-                }
-                cost_scrubbed = _scrub_monthly_lumps_for_days(
-                    cost_existing,
-                    overlay_cost,
-                    lump_min=MONTHLY_LUMP_MIN_COST,
-                    daily_lump_min=DAILY_LUMP_MIN_COST,
+
+        if include_cost and overlay_comp:
+            failed = await _async_upsert_cumulative_overlay(
+                hass,
+                account_key=account_key,
+                account_id=account_id,
+                statistic_suffix=STATISTIC_ID_SUFFIX_COMPENSATION,
+                entity_unique_suffix=ENTITY_UNIQUE_COMPENSATION,
+                overlay=overlay_comp,
+                metadata_builder=_build_compensation_metadata,
+                entity_metadata_builder=_build_entity_compensation_metadata,
+                display_name=_statistic_display_name(account_id, account_key, compensation=True),
+                lump_min=None,
+                daily_lump_min=None,
+                hard_ack=False,
+            )
+            if failed:
+                soft_failed.update(failed)
+                _LOGGER.error(
+                    "Compensation statistics ack failed (non-fatal); marking days failed: %s",
+                    ", ".join(failed) or "(none)",
                 )
-                if cost_scrubbed:
-                    _LOGGER.info(
-                        "Scrubbed %s monthly cost lump(s) on days receiving finer intervals",
-                        cost_scrubbed,
-                    )
-                    cost_changed_from = min([cost_changed_from, *overlay_cost.keys()])
-                cost_starts = sorted(set(cost_existing) | set(overlay_cost))
-                cost_anchor = await _async_anchor_sum(hass, cost_id, cost_changed_from)
-                cost_running = cost_anchor
-                cost_stats: list[dict] = []
-                for start in cost_starts:
-                    if start < cost_changed_from:
-                        continue
-                    state = overlay_cost[start] if start in overlay_cost else float(cost_existing[start]["state"])
-                    cost_running += state
-                    cost_stats.append(_stat_row(start, state, cost_running))
-                if cost_stats:
-                    cost_meta = _build_cost_metadata(account_key, account_id)
-                    async_add_external_statistics(hass, cost_meta, cost_stats)
-                    # Mirror before ack so a failed cost ack cannot leave the
-                    # external series ahead of the entity mirror.
-                    _async_mirror_entity_statistics(
-                        hass,
-                        account_key=account_key,
-                        unique_suffix=ENTITY_UNIQUE_COST,
-                        entity_metadata=_build_entity_cost_metadata(
-                            "sensor._",
-                            _statistic_display_name(account_id, account_key, cost=True),
-                        ),
-                        stats=cost_stats,
-                    )
-                    try:
-                        await async_ack_external_statistics(
-                            hass,
-                            statistic_id=cost_id,
-                            metadata=cost_meta,
-                            stats=cost_stats,
-                            expected_states=_expected_from_stats(cost_stats),
-                            start=cost_changed_from,
-                            end=cost_suffix_end + timedelta(hours=1),
-                        )
-                    except RuntimeError as exc:
-                        failed = _local_dates_from_starts(list(overlay_cost))
-                        soft_failed.update(failed)
-                        _LOGGER.error(
-                            "Cost statistics ack failed (non-fatal); marking days failed: %s (%s)",
-                            ", ".join(failed) or "(none)",
-                            exc,
-                        )
     finally:
         soft_failed.update(
             await _async_import_temperature_overlay(
@@ -1191,16 +1393,160 @@ async def _async_import_temperature_overlay(
 async def async_refresh_lifetime_totals(
     hass: HomeAssistant,
     account_key: str,
-) -> tuple[float | None, float | None, float | None]:
-    """Return (energy_sum_kwh, cost_sum_usd, latest_temperature_f) from recorder."""
+) -> tuple[float | None, float | None, float | None, float | None, float | None]:
+    """Return (energy, cost, temp, return_kwh, compensation_usd) from recorder."""
     energy = await _async_get_last_stats(hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_CONSUMPTION))
     cost = await _async_get_last_stats(hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_COST))
     temp = await _async_get_last_stats(hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_TEMPERATURE))
+    returned = await _async_get_last_stats(hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_RETURN))
+    compensation = await _async_get_last_stats(hass, _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_COMPENSATION))
     return (
         energy[0] if energy else None,
         cost[0] if cost else None,
         temp[0] if temp else None,
+        returned[0] if returned else None,
+        compensation[0] if compensation else None,
     )
+
+
+def _looks_fine_grained(state: float) -> bool:
+    """Heuristic: monthly lumps are huge; signed hourly export stays well below."""
+    return abs(state) < MONTHLY_LUMP_MIN_KWH
+
+
+async def async_migrate_signed_usage_split(
+    hass: HomeAssistant,
+    account_key: str,
+    store: ImportStoreData,
+    *,
+    account_id: str | None = None,
+    entry_id: str | None = None,
+) -> bool:
+    """One-time split of negative fine-grained consumption/cost into return/compensation.
+
+    Returns True when migration is complete (or already done). False means retry later.
+    """
+    if store.signed_usage_split_migration_done:
+        return True
+
+    floor_start, _ = local_day_bounds(DEFAULT_HISTORY_FLOOR)
+    consumption_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_CONSUMPTION)
+    cost_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_COST)
+    try:
+        consumption_map = await _async_get_stats_map(hass, consumption_id, floor_start.astimezone(UTC))
+        cost_map = await _async_get_stats_map(hass, cost_id, floor_start.astimezone(UTC))
+    except Exception as exc:
+        _LOGGER.warning("Signed-usage migration read failed for %s: %s", account_key[:8], exc)
+        return False
+
+    cons_overlay: dict[datetime, float] = {}
+    return_overlay: dict[datetime, float] = {}
+    for start, row in consumption_map.items():
+        state = float(row["state"])
+        if state >= 0 or not _looks_fine_grained(state):
+            continue
+        cons_overlay[start] = 0.0
+        return_overlay[start] = abs(state)
+
+    cost_overlay: dict[datetime, float] = {}
+    comp_overlay: dict[datetime, float] = {}
+    for start, row in cost_map.items():
+        state = float(row["state"])
+        if state >= 0 or not _looks_fine_grained(state):
+            continue
+        cost_overlay[start] = 0.0
+        comp_overlay[start] = abs(state)
+
+    if not cons_overlay and not cost_overlay:
+        store.signed_usage_split_migration_done = True
+        if entry_id:
+            await async_save_import_state(hass, entry_id, store, critical=False)
+        return True
+
+    try:
+        if cons_overlay:
+            await _async_upsert_cumulative_overlay(
+                hass,
+                account_key=account_key,
+                account_id=account_id,
+                statistic_suffix=STATISTIC_ID_SUFFIX_CONSUMPTION,
+                entity_unique_suffix=ENTITY_UNIQUE_ENERGY,
+                overlay=cons_overlay,
+                metadata_builder=_build_consumption_metadata,
+                entity_metadata_builder=_build_entity_consumption_metadata,
+                display_name=_statistic_display_name(account_id, account_key),
+                lump_min=None,
+                daily_lump_min=None,
+                hard_ack=True,
+            )
+        if return_overlay:
+            failed = await _async_upsert_cumulative_overlay(
+                hass,
+                account_key=account_key,
+                account_id=account_id,
+                statistic_suffix=STATISTIC_ID_SUFFIX_RETURN,
+                entity_unique_suffix=ENTITY_UNIQUE_RETURN,
+                overlay=return_overlay,
+                metadata_builder=_build_return_metadata,
+                entity_metadata_builder=_build_entity_return_metadata,
+                display_name=_statistic_display_name(account_id, account_key, return_energy=True),
+                lump_min=None,
+                daily_lump_min=None,
+                hard_ack=False,
+            )
+            if failed:
+                _LOGGER.error("Signed-usage return migration ack failed for %s", account_key[:8])
+                return False
+        if cost_overlay:
+            failed = await _async_upsert_cumulative_overlay(
+                hass,
+                account_key=account_key,
+                account_id=account_id,
+                statistic_suffix=STATISTIC_ID_SUFFIX_COST,
+                entity_unique_suffix=ENTITY_UNIQUE_COST,
+                overlay=cost_overlay,
+                metadata_builder=_build_cost_metadata,
+                entity_metadata_builder=_build_entity_cost_metadata,
+                display_name=_statistic_display_name(account_id, account_key, cost=True),
+                lump_min=None,
+                daily_lump_min=None,
+                hard_ack=False,
+            )
+            if failed:
+                _LOGGER.error("Signed-usage cost migration ack failed for %s", account_key[:8])
+                return False
+        if comp_overlay:
+            failed = await _async_upsert_cumulative_overlay(
+                hass,
+                account_key=account_key,
+                account_id=account_id,
+                statistic_suffix=STATISTIC_ID_SUFFIX_COMPENSATION,
+                entity_unique_suffix=ENTITY_UNIQUE_COMPENSATION,
+                overlay=comp_overlay,
+                metadata_builder=_build_compensation_metadata,
+                entity_metadata_builder=_build_entity_compensation_metadata,
+                display_name=_statistic_display_name(account_id, account_key, compensation=True),
+                lump_min=None,
+                daily_lump_min=None,
+                hard_ack=False,
+            )
+            if failed:
+                _LOGGER.error("Signed-usage compensation migration ack failed for %s", account_key[:8])
+                return False
+    except Exception as exc:
+        _LOGGER.warning("Signed-usage migration write failed for %s: %s", account_key[:8], exc)
+        return False
+
+    store.signed_usage_split_migration_done = True
+    if entry_id:
+        await async_save_import_state(hass, entry_id, store, critical=False)
+    _LOGGER.info(
+        "Signed-usage migration complete for %s (%s consumption, %s cost rows)",
+        account_key[:8],
+        len(cons_overlay),
+        len(cost_overlay),
+    )
+    return True
 
 
 async def async_import_statistics(
@@ -1221,18 +1567,27 @@ def setup_statistics_sensors(
     account_key: str,
 ) -> None:
     consumption_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_CONSUMPTION)
+    return_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_RETURN)
     cost_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_COST)
+    compensation_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_COMPENSATION)
     temperature_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_TEMPERATURE)
     energy_entity = async_resolve_sensor_entity_id(hass, account_key, ENTITY_UNIQUE_ENERGY)
+    return_entity = async_resolve_sensor_entity_id(hass, account_key, ENTITY_UNIQUE_RETURN)
     cost_entity = async_resolve_sensor_entity_id(hass, account_key, ENTITY_UNIQUE_COST)
+    compensation_entity = async_resolve_sensor_entity_id(hass, account_key, ENTITY_UNIQUE_COMPENSATION)
     temp_entity = async_resolve_sensor_entity_id(hass, account_key, ENTITY_UNIQUE_TEMPERATURE)
     _LOGGER.debug(
-        "Statistic IDs: consumption=%s, cost=%s, temperature=%s; entity mirrors: energy=%s, cost=%s, temperature=%s",
+        "Statistic IDs: consumption=%s, return=%s, cost=%s, compensation=%s, temperature=%s; "
+        "entity mirrors: energy=%s, return=%s, cost=%s, compensation=%s, temperature=%s",
         consumption_id,
+        return_id,
         cost_id,
+        compensation_id,
         temperature_id,
         energy_entity,
+        return_entity,
         cost_entity,
+        compensation_entity,
         temp_entity,
     )
 

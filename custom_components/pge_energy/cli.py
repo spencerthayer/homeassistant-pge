@@ -226,7 +226,7 @@ async def _cmd_fetch(args: argparse.Namespace) -> int:
                     request_end = day_end - timedelta(milliseconds=1)
                     resp = await client.get_usage(resolution, day_start, request_end, auth.account_key)
                     clipped = clip_hourly_to_local_day(day, resp.intervals)
-                    total = sum(float(iv.kwh) for iv in clipped)
+                    total = sum(float(iv.kwh) for iv in clipped if iv.kwh is not None)
                     print(f"{day.isoformat()} rows_raw={len(resp.intervals)} rows={len(clipped)} kwh={total:.3f}")
                     for iv in clipped:
                         rows_out.append(

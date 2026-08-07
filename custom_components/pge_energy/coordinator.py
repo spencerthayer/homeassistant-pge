@@ -141,7 +141,9 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._failed_days_this_poll: list[str] = []
         self._recent_intervals: list[UsageInterval] = []
         self._lifetime_energy_kwh: float | None = None
+        self._lifetime_return_kwh: float | None = None
         self._lifetime_cost_usd: float | None = None
+        self._lifetime_compensation_usd: float | None = None
         self._latest_temperature_f: float | None = None
         self._backfill_in_progress = False
         self._backfill_oldest: datetime | None = None
@@ -214,8 +216,16 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self._lifetime_energy_kwh
 
     @property
+    def lifetime_return_kwh(self) -> float | None:
+        return self._lifetime_return_kwh
+
+    @property
     def lifetime_cost_usd(self) -> float | None:
         return self._lifetime_cost_usd
+
+    @property
+    def lifetime_compensation_usd(self) -> float | None:
+        return self._lifetime_compensation_usd
 
     @property
     def latest_temperature_f(self) -> float | None:
@@ -512,13 +522,17 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_refresh_lifetime_totals(self) -> None:
         """Refresh cumulative energy/cost/temperature from recorder for sensors."""
         try:
-            energy, cost, temp = await async_refresh_lifetime_totals(self.hass, self.account_key)
+            energy, cost, temp, returned, compensation = await async_refresh_lifetime_totals(
+                self.hass, self.account_key
+            )
         except Exception as exc:
             _LOGGER.debug("Lifetime totals refresh skipped: %s", exc)
             return
         self._lifetime_energy_kwh = energy
         self._lifetime_cost_usd = cost
         self._latest_temperature_f = temp
+        self._lifetime_return_kwh = returned
+        self._lifetime_compensation_usd = compensation
 
     async def async_repair_dirty_if_needed(self) -> None:
         """Rebuild statistic sums after an interrupted import.

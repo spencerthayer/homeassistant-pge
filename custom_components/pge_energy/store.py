@@ -79,6 +79,9 @@ class ImportStoreData:
     # "Blocked attempt to insert duplicated statistic rows" after the series
     # became external-only).
     bill_avg_temp_mirror_cleanup_done: bool = False
+    # One-time split of signed fine-grained consumption/cost into
+    # return/compensation series for net-metered accounts.
+    signed_usage_split_migration_done: bool = False
     # Bill PDF index and phase summaries (binary retention independent of normalized data).
     bill_pdf_index: dict[str, BillPdfIndexEntry] = field(default_factory=dict)
     bill_pdf_last_success: str | None = None
@@ -124,6 +127,7 @@ class ImportStoreData:
             billing_last_error=data.get("billing_last_error"),
             billing_mirror_cleanup_done=bool(data.get("billing_mirror_cleanup_done", False)),
             bill_avg_temp_mirror_cleanup_done=bool(data.get("bill_avg_temp_mirror_cleanup_done", False)),
+            signed_usage_split_migration_done=bool(data.get("signed_usage_split_migration_done", False)),
             bill_pdf_index=_load_bill_pdf_index(data),
             bill_pdf_last_success=data.get("bill_pdf_last_success"),
             bill_pdf_last_error=data.get("bill_pdf_last_error"),

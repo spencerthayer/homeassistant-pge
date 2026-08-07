@@ -60,7 +60,12 @@ from .options import (
     resolve_history_bounds,
 )
 from .panel import async_setup_panel, async_teardown_panel
-from .statistics import async_import_with_baseline, setup_statistics_sensors
+from .statistics import (
+    async_clear_entry_statistics,
+    async_import_with_baseline,
+    async_migrate_signed_usage_split,
+    setup_statistics_sensors,
+)
 from .store import async_save_import_state, discard_store_cache
 from .time_util import iter_local_days, today_local
 from .websocket import async_setup_websocket
@@ -204,6 +209,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
             account_key=coordinator.account_key,
             store=coordinator.import_store,
         )
+        await async_migrate_signed_usage_split(
+            hass,
+            coordinator.account_key,
+            coordinator.import_store,
+            account_id=coordinator.account_id,
+            entry_id=entry.entry_id,
+        )
+        await coordinator.async_refresh_lifetime_totals()
         if (
             coordinator.import_store.target_start
             and coordinator.import_store.target_end
@@ -683,6 +696,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool
                 hass.services.async_remove(DOMAIN, "retry_failed_ranges")
                 hass.services.async_remove(DOMAIN, "reset_import_checkpoint")
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Purge this entry's external statistics so delete/re-add does not orphan history."""
+    account_key = entry.data.get(CONF_ACCOUNT_KEY)
+    if not account_key:
+        return
+    await async_clear_entry_statistics(hass, str(account_key))
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: PGEConfigEntry) -> None:
