@@ -129,18 +129,20 @@ def _sum_kwh(intervals: list[UsageInterval]) -> float | None:
 
 
 def _sum_return_kwh(intervals: list[UsageInterval]) -> float | None:
-    """Sum non-negative grid-export kWh from signed hourly intervals."""
+    """Sum non-negative grid-export kWh from signed hourly intervals.
+
+    Returns ``0`` when published intervals exist but none exported; ``None``
+    only when there is no usable kWh data in the range.
+    """
     total = 0.0
-    any_value = False
+    any_published = False
     for iv in intervals:
         if iv.kwh is None:
             continue
+        any_published = True
         split = split_signed_usage(iv.kwh, iv.amount, resolution=iv.resolution)
-        if split.return_kwh <= 0:
-            continue
-        any_value = True
         total += float(split.return_kwh)
-    return total if any_value else None
+    return total if any_published else None
 
 
 def _sum_cost(intervals: list[UsageInterval]) -> float | None:
@@ -158,17 +160,17 @@ def _sum_cost(intervals: list[UsageInterval]) -> float | None:
 
 
 def _sum_compensation(intervals: list[UsageInterval]) -> float | None:
+    """Sum export credits; ``0`` when amounts exist but none are credits."""
     total = 0.0
-    any_value = False
+    any_published = False
     for iv in intervals:
         if iv.kwh is None or iv.amount is None:
             continue
+        any_published = True
         split = split_signed_usage(iv.kwh, iv.amount, resolution=iv.resolution)
-        if split.compensation is None or split.compensation <= 0:
-            continue
-        any_value = True
-        total += float(split.compensation)
-    return total if any_value else None
+        if split.compensation is not None and split.compensation > 0:
+            total += float(split.compensation)
+    return total if any_published else None
 
 
 async def async_setup_entry(

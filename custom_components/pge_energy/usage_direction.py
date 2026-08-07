@@ -12,13 +12,15 @@ _ZERO = Decimal("0")
 
 @dataclass(frozen=True, slots=True)
 class DirectionalUsage:
-    """Non-negative directional components for one energy interval."""
+    """Non-negative directional components for one energy interval.
+
+    ``compensation`` is set only for hourly export credits; otherwise None.
+    """
 
     consumption: Decimal
     return_kwh: Decimal
     cost: Decimal | None
     compensation: Decimal | None
-    """Compensation is set only for hourly export credits; otherwise None."""
 
 
 def split_signed_usage(
