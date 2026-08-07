@@ -1,0 +1,43 @@
+# Configuration file for `prek`, a git hook framework written in Rust.
+# See https://prek.j178.dev for more information.
+#:schema https://www.schemastore.org/prek.json
+
+exclude = ".devcontainer/devcontainer.json"
+
+[[repos]]
+repo = "builtin"
+hooks = [
+    { id = "check-json" },
+    { id = "check-toml" },
+    { id = "check-yaml" },
+    { id = "check-executables-have-shebangs" },
+    { id = "check-shebang-scripts-are-executable" },
+    { id = "end-of-file-fixer" },
+    { id = "trailing-whitespace" },
+    { id = "requirements-txt-fixer" },
+]
+
+[[repos]]
+repo = "https://github.com/shellcheck-py/shellcheck-py"
+rev = "v0.11.0.1"
+hooks = [
+    { id = "shellcheck" },
+]
+
+[[repos]]
+repo = "https://github.com/rhysd/actionlint"
+rev = "v1.7.12"
+hooks = [
+    { id = "actionlint" },
+]
+
+[[repos]]
+repo = "https://github.com/astral-sh/ruff-pre-commit"
+rev = "v0.16.1"
+hooks = [
+    { id= "ruff-check", name = "Ruff check" },
+    { id = "ruff-check", name = "Ruff check & fix", args = ["--fix"], groups = ["no-ci"] },
+
+    { id = "ruff-format", name = "ruff format check", args = ["--check"] },
+    { id = "ruff-format", name = "ruff format & fix", groups = ["no-ci"] },
+]

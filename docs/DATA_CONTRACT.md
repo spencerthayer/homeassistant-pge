@@ -2,19 +2,19 @@
 
 ## Endpoint
 
-```
+```none
 POST https://apix.portlandgeneral.com/pge-graphql
 ```
 
 ## Required Headers
 
-| Header                | Value                                        |
-| --------------------- | -------------------------------------------- |
-| `Authorization`       | `Bearer <token>`                             |
-| `aws_graphql_server`  | `graphql_server`                             |
-| `Content-Type`        | `application/json`                           |
-| `Origin`              | `https://widget.portlandgeneral.com`         |
-| `Referer`             | `https://widget.portlandgeneral.com/`        |
+| Header               | Value                                 |
+| -------------------- | ------------------------------------- |
+| `Authorization`      | `Bearer <token>`                      |
+| `aws_graphql_server` | `graphql_server`                      |
+| `Content-Type`       | `application/json`                    |
+| `Origin`             | `https://widget.portlandgeneral.com`  |
+| `Referer`            | `https://widget.portlandgeneral.com/` |
 
 ## Operation
 
@@ -48,11 +48,11 @@ query GetUsageCompare($params: GetUsageCompareParams!) {
 
 The returned usage list field depends on the `displayMode` parameter:
 
-| `displayMode` | Field returned         |
-| ------------- | ---------------------- |
-| `HOURLY`      | `hourlyUsageList`      |
-| `DAILY`       | `dailyUsageList`       |
-| `MONTHLY`     | `monthlyUsageList`     |
+| `displayMode` | Field returned     |
+| ------------- | ------------------ |
+| `HOURLY`      | `hourlyUsageList`  |
+| `DAILY`       | `dailyUsageList`   |
+| `MONTHLY`     | `monthlyUsageList` |
 
 ## Variables
 
@@ -72,28 +72,28 @@ The returned usage list field depends on the `displayMode` parameter:
 
 ### Top-level fields
 
-| Field                     | Type             | Example            |
-| ------------------------- | ---------------- | ------------------ |
-| `isCustomerEnrolledInTOD` | boolean          | `true`             |
-| `acctType`                | string           | `"RES"`            |
-| `totalKwhUsage`           | string or null   | `"1234.56"`        |
-| `totalKwhCost`            | string or null   | `"234.56"`         |
+| Field                     | Type           | Example     |
+| ------------------------- | -------------- | ----------- |
+| `isCustomerEnrolledInTOD` | boolean        | `true`      |
+| `acctType`                | string         | `"RES"`     |
+| `totalKwhUsage`           | string or null | `"1234.56"` |
+| `totalKwhCost`            | string or null | `"234.56"`  |
 
 ### Usage list item fields (common)
 
-| Field                      | Type                    |
-| -------------------------- | ----------------------- |
-| `intervalTime`             | string                  |
-| `kwh`                      | string (decimal)        |
-| `amount`                   | float or integer        |
-| `intervalSize`             | integer or null         |
-| `usageStatus`              | string or null          |
-| `temperature`              | string or null          |
-| `startDate`                | string or null          |
-| `endDate`                  | string or null          |
-| `similarHomesKwh`          | string or null          |
-| `efficientSimilarHomesKwh` | string or null          |
-| `rank`                     | null                    |
+| Field                      | Type             |
+| -------------------------- | ---------------- |
+| `intervalTime`             | string           |
+| `kwh`                      | string (decimal) |
+| `amount`                   | float or integer |
+| `intervalSize`             | integer or null  |
+| `usageStatus`              | string or null   |
+| `temperature`              | string or null   |
+| `startDate`                | string or null   |
+| `endDate`                  | string or null   |
+| `similarHomesKwh`          | string or null   |
+| `efficientSimilarHomesKwh` | string or null   |
+| `rank`                     | null             |
 
 ### Grid return discovery (v0.7.3 alpha)
 
@@ -126,19 +126,19 @@ This was introspected with a non-generating account, so field availability and t
 
 ### HOURLY
 
-| Field                | Value                                                                            |
-| -------------------- | -------------------------------------------------------------------------------- |
-| `intervalTime`       | `"DD-MON-YYYY HH:MM:SS"` format — **local time** in `America/Los_Angeles` (e.g., `"01-JUL-2025 00:00:00"`) |
-| `intervalSize`       | `900` (integer, minutes)                                                         |
-| `kwh`                | string (decimal, e.g., `"1.57"`)                                                 |
-| `amount`             | float (e.g., `0.29`)                                                             |
-| `usageStatus`        | `"kWh-Delivered"`                                                                |
-| `temperature`        | string (integer, Fahrenheit) or `null`                                           |
-| `startDate`          | `null`                                                                           |
-| `endDate`            | `null`                                                                           |
-| `similarHomesKwh`    | `null`                                                                           |
-| `efficientSimilarHomesKwh` | `null`                                                                       |
-| `rank`               | `null`                                                                           |
+| Field                      | Value                                                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `intervalTime`             | `"DD-MON-YYYY HH:MM:SS"` format — **local time** in `America/Los_Angeles` (e.g., `"01-JUL-2025 00:00:00"`) |
+| `intervalSize`             | `900` (integer, minutes)                                                                                   |
+| `kwh`                      | string (decimal, e.g., `"1.57"`)                                                                           |
+| `amount`                   | float (e.g., `0.29`)                                                                                       |
+| `usageStatus`              | `"kWh-Delivered"`                                                                                          |
+| `temperature`              | string (integer, Fahrenheit) or `null`                                                                     |
+| `startDate`                | `null`                                                                                                     |
+| `endDate`                  | `null`                                                                                                     |
+| `similarHomesKwh`          | `null`                                                                                                     |
+| `efficientSimilarHomesKwh` | `null`                                                                                                     |
+| `rank`                     | `null`                                                                                                     |
 
 - **Rows returned:** ~25 per closed day — 24 local-day hours **plus** a +1 boundary hour whose start equals `day_end` exactly. Consumers must filter interval starts to `[day_start, day_end)` and dedupe the shared boundary hour across adjacent day fetches.
 - **Retention:** ~1 year back from current date
@@ -148,19 +148,19 @@ This was introspected with a non-generating account, so field availability and t
 
 ### DAILY
 
-| Field                | Value                                                                            |
-| -------------------- | -------------------------------------------------------------------------------- |
-| `intervalTime`       | `"YYYY-MM-DD-00.00.00"` format (e.g., `"2026-06-07-00.00.00"`)                  |
-| `startDate`          | ISO 8601 UTC (e.g., `"2026-06-07T07:00:00.000Z"`) — note: 7-hour offset from local midnight |
-| `endDate`            | ISO 8601 UTC (e.g., `"2026-06-08T07:00:00.000Z"`)                               |
-| `intervalSize`       | `null`                                                                           |
-| `kwh`                | string (e.g., `"47.0"`)                                                          |
-| `amount`             | integer (e.g., `10`)                                                             |
-| `usageStatus`        | `null`                                                                           |
-| `temperature`        | string (float, e.g., `"56.96"`) or `null`                                        |
-| `similarHomesKwh`    | string or `null`                                                                 |
-| `efficientSimilarHomesKwh` | string or `null`                                                             |
-| `rank`               | `null`                                                                           |
+| Field                      | Value                                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------------------- |
+| `intervalTime`             | `"YYYY-MM-DD-00.00.00"` format (e.g., `"2026-06-07-00.00.00"`)                              |
+| `startDate`                | ISO 8601 UTC (e.g., `"2026-06-07T07:00:00.000Z"`) — note: 7-hour offset from local midnight |
+| `endDate`                  | ISO 8601 UTC (e.g., `"2026-06-08T07:00:00.000Z"`)                                           |
+| `intervalSize`             | `null`                                                                                      |
+| `kwh`                      | string (e.g., `"47.0"`)                                                                     |
+| `amount`                   | integer (e.g., `10`)                                                                        |
+| `usageStatus`              | `null`                                                                                      |
+| `temperature`              | string (float, e.g., `"56.96"`) or `null`                                                   |
+| `similarHomesKwh`          | string or `null`                                                                            |
+| `efficientSimilarHomesKwh` | string or `null`                                                                            |
+| `rank`                     | `null`                                                                                      |
 
 - **Rows returned:** ~31 per successful chunk
 - **Retention:** ~5 years back
@@ -169,19 +169,19 @@ This was introspected with a non-generating account, so field availability and t
 
 ### MONTHLY
 
-| Field                | Value                                                                            |
-| -------------------- | -------------------------------------------------------------------------------- |
-| `intervalTime`       | `"YYYY-MM-DD-00.00.00"` format                                                   |
-| `startDate`          | ISO 8601 UTC                                                                     |
-| `endDate`            | ISO 8601 UTC                                                                     |
-| `intervalSize`       | `null`                                                                           |
-| `kwh`                | string                                                                           |
-| `amount`             | integer (sometimes `0`)                                                          |
-| `usageStatus`        | `null`                                                                           |
-| `temperature`        | `null`                                                                           |
-| `similarHomesKwh`    | string or `null`                                                                 |
-| `efficientSimilarHomesKwh` | string or `null`                                                             |
-| `rank`               | `null`                                                                           |
+| Field                      | Value                          |
+| -------------------------- | ------------------------------ |
+| `intervalTime`             | `"YYYY-MM-DD-00.00.00"` format |
+| `startDate`                | ISO 8601 UTC                   |
+| `endDate`                  | ISO 8601 UTC                   |
+| `intervalSize`             | `null`                         |
+| `kwh`                      | string                         |
+| `amount`                   | integer (sometimes `0`)        |
+| `usageStatus`              | `null`                         |
+| `temperature`              | `null`                         |
+| `similarHomesKwh`          | string or `null`               |
+| `efficientSimilarHomesKwh` | string or `null`               |
+| `rank`                     | `null`                         |
 
 - **Rows returned:** latest ~12 **billing periods** relative to the requested **end** (not absolute “always newest”). Page the window backwards for older history via `get_monthly_usage_paged`.
 - **Gotcha:** requesting `end = last incomplete day` can omit the open billing cycle that still covers that day (live: `end=2021-07-31` returned periods through `2021-06-08` only, dropping `2021-07-08→2021-08-06`). Backfill must page from **yesterday** back to the gap start.
@@ -287,7 +287,7 @@ Chart series are **not** served by a custom command — the panel calls Home Ass
 
 ## Known API Behaviors
 
-- **Publication is overnight / daily, not real-time.** PGE does not continuously publish new hourly intervals through the day. During daytime polls the newest available tip often sits near the early-morning Pacific hour (commonly ~`01:00` local / `08:00Z` in PDT) until the next overnight drop. Treat “Latest available interval” as newest *published*, not wall-clock freshness. The integration defaults to polling **every 4 hours** on a Pacific clock grid (`sync_local_time` default **00:00**) so overnight publication is picked up without waiting a full day.
+- **Publication is overnight / daily, not real-time.** PGE does not continuously publish new hourly intervals through the day. During daytime polls the newest available tip often sits near the early-morning Pacific hour (commonly ~`01:00` local / `08:00Z` in PDT) until the next overnight drop. Treat “Latest available interval” as newest _published_, not wall-clock freshness. The integration defaults to polling **every 4 hours** on a Pacific clock grid (`sync_local_time` default **00:00**) so overnight publication is picked up without waiting a full day.
 - **HTTP 502 transient errors** occur intermittently — retry with backoff.
 - **MONTHLY** returns the latest ~12 billing periods regardless of range width.
 - **DAILY** short windows (<~31d) may hard-error; use ≥31d or HOURLY for validation.

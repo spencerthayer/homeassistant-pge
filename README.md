@@ -1,6 +1,6 @@
-<p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="PGE Energy for Home Assistant — imports Portland General Electric usage, cost, and outdoor temperature into the Home Assistant Energy dashboard and a first-party /pge panel">
-</p>
+# Portland General Electric (PGE) Energy for Home Assistant
+
+![PGE Energy for Home Assistant — imports Portland General Electric usage, cost, and outdoor temperature into the Home Assistant Energy dashboard and a first-party /pge panel](./assets/readme/hero.svg)
 
 Home Assistant custom integration for **Portland General Electric (PGE)** — imports your energy usage into the HA Energy dashboard and a first-party `/pge` panel, using PGE's GraphQL API (not Opower, not HTML scraping).
 
@@ -16,15 +16,11 @@ Home Assistant custom integration for **Portland General Electric (PGE)** — im
 
 A first-party Home Assistant panel at `/pge` — usage, cost, outdoor temperature, billing, programs, and live sync progress for all configured accounts.
 
-<p align="center">
-  <img src="./assets/readme/panel-glance.png" width="100%" alt="PGE panel At a glance — yesterday and week kWh and cost, statement cycle, since-statement, PGE estimates, amount due (values redacted)">
-  <em>At a glance — yesterday and week totals, statement and since-statement sums, PGE's own open-cycle estimates, amount due.</em>
-</p>
+![PGE panel At a glance — yesterday and week kWh and cost, statement cycle, since-statement, PGE estimates, amount due (values redacted)](./assets/readme/panel-glance.png)
+_At a glance — yesterday and week totals, statement and since-statement sums, PGE's own open-cycle estimates, amount due._
 
-<p align="center">
-  <img src="./assets/readme/panel-usage.png" width="100%" alt="PGE panel Usage — hourly kWh bars with cost overlay, range accounting and breakdown tables (values redacted)">
-  <em>Usage — hourly kWh bars with a cost series, plus Range accounting and per-hour breakdown tables.</em>
-</p>
+![PGE panel Usage — hourly kWh bars with cost overlay, range accounting and breakdown tables (values redacted)](./assets/readme/panel-usage.png)
+_Usage — hourly kWh bars with a cost series, plus Range accounting and per-hour breakdown tables._
 
 <p align="center">
   <img src="./assets/readme/panel-analytics.png" width="49%" alt="PGE panel Analytics — weather vs usage scatter and cost intelligence (values redacted)">
@@ -44,11 +40,9 @@ A first-party Home Assistant panel at `/pge` — usage, cost, outdoor temperatur
 
 ## How it works
 
-<p align="center">
-  <img src="./assets/readme/workflow.svg" width="100%" alt="How it works — unattended login, tiered hourly/daily/monthly import into dual-published statistics, then Home Assistant Energy and the /pge panel">
-</p>
+![How it works — unattended login, tiered hourly/daily/monthly import into dual-published statistics, then Home Assistant Energy and the /pge panel](./assets/readme/workflow.svg)
 
-A single `PGECoordinator` authenticates once per entry, then polls PGE's GraphQL endpoint on a Pacific sync clock (default **every 4 hours** from **12:00 AM** — 12am/4am/8am/noon/4pm/8pm). Closed intervals are imported as statistics; the `/pge` panel reads those same recorder statistics for its charts. Auth chain and data model details live in [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
+A single `PGECoordinator` authenticates once per entry, then polls PGE's GraphQL endpoint on a Pacific sync clock (default **every 4 hours** from **12:00 AM** — 12am/4am/8am/noon/4pm/8pm). Closed intervals are imported as statistics; the `/pge` panel reads those same recorder statistics for its charts. Auth chain and data model details live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md).
 
 PGE publishes usage **once overnight**, so a "stuck" latest interval near `01:00` Pacific during the day is expected — not a sync failure.
 
@@ -69,7 +63,7 @@ PGE publishes usage **once overnight**, so a "stuck" latest interval near `01:00
 
 ## Setup
 
-1. Settings → Devices & Services → **Add Integration** → *Portland General Electric Energy Usage*.
+1. Settings → Devices & Services → **Add Integration** → _Portland General Electric Energy Usage_.
 2. Enter PGE **email**, **password**, and **account number** (one entry per account).
 3. The same login can own multiple entries with different account numbers; each login's password is stored in that entry.
 4. **MFA-enabled PGE accounts are not supported** — if PGE requires MFA or CAPTCHA, setup fails closed.
@@ -111,14 +105,14 @@ Enable **Download bill PDFs** in Configure → Sync settings (requires billing i
 
 All long-running services require `entry_id`:
 
-| Service | Purpose |
-|---------|---------|
-| `pge_energy.refresh` | Force a poll (optional `entry_id`) |
-| `pge_energy.backfill` | Tiered hourly → daily → monthly backfill over `start_date`–`end_date` |
-| `pge_energy.retry_failed_ranges` | Retry previously failed import ranges |
-| `pge_energy.reset_import_checkpoint` | Reset the backfill watermark (does not delete recorder history) |
-| `pge_energy.download_bill_pdf` | Download a specific statement PDF (`bill_date`; optional `form`/`force`) |
-| `pge_energy.reparse_bill_pdfs` | Reparse retained PDFs only (no network) |
+| Service                              | Purpose                                                                  |
+| ------------------------------------ | ------------------------------------------------------------------------ |
+| `pge_energy.refresh`                 | Force a poll (optional `entry_id`)                                       |
+| `pge_energy.backfill`                | Tiered hourly → daily → monthly backfill over `start_date`–`end_date`    |
+| `pge_energy.retry_failed_ranges`     | Retry previously failed import ranges                                    |
+| `pge_energy.reset_import_checkpoint` | Reset the backfill watermark (does not delete recorder history)          |
+| `pge_energy.download_bill_pdf`       | Download a specific statement PDF (`bill_date`; optional `form`/`force`) |
+| `pge_energy.reparse_bill_pdfs`       | Reparse retained PDFs only (no network)                                  |
 
 ---
 
@@ -127,7 +121,7 @@ All long-running services require `entry_id`:
 Settings → Devices & Services → PGE Energy → **Configure** (from any account entry):
 
 - **Sync settings** — polling (value + minutes/hours/days unit, default **every 4 hours**), **Sync clock** (Pacific, default **12:00 AM**), correction window, history mode/start, hourly history days, auto backfill, cost/diagnostics, **Import billing & programs** (default on), **Download bill PDFs** (default off), concurrency, and the default-off diagnostic capture below.
-- **Panel** — integration-wide chrome for `/pge`: show in sidebar (default on), sidebar title (default `PGE`), icon (default `mdi:transmission-tower`), admin-only (default on), default landing section. Sidebar *order* stays with Home Assistant's sidebar editor / [Browser Mod](https://github.com/thomasloven/hass-browser_mod).
+- **Panel** — integration-wide chrome for `/pge`: show in sidebar (default on), sidebar title (default `PGE`), icon (default `mdi:transmission-tower`), admin-only (default on), default landing section. Sidebar _order_ stays with Home Assistant's sidebar editor / [Browser Mod](https://github.com/thomasloven/hass-browser_mod).
 - **Update credentials** — email/password only; the account number is read-only and statistic IDs are unchanged.
 - **Manual sync** — force **Refresh now** or **Backfill missing history** (uses your Sync settings). Stays available when the sidebar link is hidden.
 
@@ -143,22 +137,22 @@ Separate grid-return energy for generating customers is still under PGE GraphQL 
 
 Every usage series is available in **both** forms:
 
-| Use case | Pick |
-|----------|------|
-| Entity picker, History, most Lovelace cards | `sensor.pge_<account>_energy` / `_cost` / `_outdoor_temperature` |
-| Energy dashboard / statistics graphs | `pge_energy:<account_key>_consumption` / `_cost` / `_temperature` |
+| Use case                                    | Pick                                                              |
+| ------------------------------------------- | ----------------------------------------------------------------- |
+| Entity picker, History, most Lovelace cards | `sensor.pge_<account>_energy` / `_cost` / `_outdoor_temperature`  |
+| Energy dashboard / statistics graphs        | `pge_energy:<account_key>_consumption` / `_cost` / `_temperature` |
 
-| Sensor | Description |
-|--------|-------------|
-| Energy / Cost | Lifetime cumulative kWh / USD (entity + mirrored history) |
-| Outdoor temperature | Latest °F; full history mirrored onto the entity |
-| Hourly energy / cost | Latest closed interval values |
-| Current day / Yesterday energy & cost | Pacific-local day totals |
-| Last successful update / Data age | Sync freshness |
-| Latest available interval | Newest PGE interval end |
-| Authentication expiration / Last API error | Diagnostics (disabled by default) |
+| Sensor                                     | Description                                               |
+| ------------------------------------------ | --------------------------------------------------------- |
+| Energy / Cost                              | Lifetime cumulative kWh / USD (entity + mirrored history) |
+| Outdoor temperature                        | Latest °F; full history mirrored onto the entity          |
+| Hourly energy / cost                       | Latest closed interval values                             |
+| Current day / Yesterday energy & cost      | Pacific-local day totals                                  |
+| Last successful update / Data age          | Sync freshness                                            |
+| Latest available interval                  | Newest PGE interval end                                   |
+| Authentication expiration / Last API error | Diagnostics (disabled by default)                         |
 
-Billing sensors expose `external_statistic_id` and `entity_statistic_id` for automations and custom cards. Full billing/programs sensor and PDF-statistics catalogs: [`DATA_CONTRACT.md`](DATA_CONTRACT.md).
+Billing sensors expose `external_statistic_id` and `entity_statistic_id` for automations and custom cards. Full billing/programs sensor and PDF-statistics catalogs: [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md).
 
 ---
 

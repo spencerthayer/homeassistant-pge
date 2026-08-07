@@ -18,14 +18,14 @@
 
 ## Storage
 
-| Data | Location | Notes |
-|------|----------|--------|
-| Email / password or refresh secret | HA config entry | HA’s storage trust boundary |
-| Short-lived access token | Memory preferred | Persist only when renewal requires it |
-| Immutable `account_key` | HA config entry | Not derived from renewable person IDs |
-| Encrypted account / premise / SA ids | HA config entry | Opaque portal identifiers for billing/programs; redact in diagnostics/logs |
-| Import/backfill state | HA `Store` | No secrets; includes billing ledger offset checkpoint |
-| Statistics | HA recorder | Cumulative energy/cost + billing mean/sum series |
+| Data                                 | Location         | Notes                                                                      |
+| ------------------------------------ | ---------------- | -------------------------------------------------------------------------- |
+| Email / password or refresh secret   | HA config entry  | HA’s storage trust boundary                                                |
+| Short-lived access token             | Memory preferred | Persist only when renewal requires it                                      |
+| Immutable `account_key`              | HA config entry  | Not derived from renewable person IDs                                      |
+| Encrypted account / premise / SA ids | HA config entry  | Opaque portal identifiers for billing/programs; redact in diagnostics/logs |
+| Import/backfill state                | HA `Store`       | No secrets; includes billing ledger offset checkpoint                      |
+| Statistics                           | HA recorder      | Cumulative energy/cost + billing mean/sum series                           |
 
 ## Diagnostics redaction
 
@@ -52,7 +52,7 @@ When **Download bill PDFs** is enabled, statement PDFs are written under `www/pg
 - **Update credentials** writes email/password or refresh secret into `entry.data` only (plus best-effort encrypted billing ids); never changes account number, immutable `account_key`, or statistic IDs (account number shown read-only).
 - Reauth uses email/password only (no token paste). Config-entry unique id is account-scoped so the same PGE account cannot be added twice.
 - A failed renew/poll must not wipe already-downloaded usage or billing: sensors keep last-known values, recorder statistics stay, and credential reauth is requested without destroying history.
-- Cognito InitiateAuth throttle / password-attempt lockout is treated as a rate limit (shared per-email cooldown): soft-fail without treating it as bad credentials or opening reauth. See [`AUTH_DISCOVERY.md`](AUTH_DISCOVERY.md).
+- Cognito InitiateAuth throttle / password-attempt lockout is treated as a rate limit (shared per-email cooldown): soft-fail without treating it as bad credentials or opening reauth. See [`docs/AUTH_DISCOVERY.md`](docs/AUTH_DISCOVERY.md).
 
 ## Local CLI vs PGE secrets
 

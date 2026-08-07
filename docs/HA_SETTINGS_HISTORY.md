@@ -5,7 +5,7 @@ Settings → Devices & Services → **Portland General Electric Energy Usage** �
 ## Sync settings
 
 | Option | Default | Notes |
-|--------|---------|-------|
+| ------ | ------- | ----- |
 | Polling interval + unit | `4` + `hours` | Value plus `minutes` / `hours` / `days`. Minute intervals are a fixed cadence (minimum 15). Hour/day intervals align to the Pacific sync clock grid. |
 | Sync clock (`sync_local_time`) | `00:00:00` Pacific | Anchors the hour/day polling grid (e.g. every 4 hours → 12am / 4am / 8am / noon / 4pm / 8pm). |
 | Correction window | `7` days | How far back each scheduled/manual refresh re-fetches for late PGE corrections. |
@@ -37,23 +37,23 @@ Services for the same bounds: `pge_energy.backfill`, `pge_energy.retry_failed_ra
 
 Configure → **Manual sync**:
 
-| Action | Behavior |
-|--------|----------|
-| **Refresh now** | Re-fetches the correction window (same idea as `pge_energy.refresh`). |
+| Action                       | Behavior                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------ |
+| **Refresh now**              | Re-fetches the correction window (same idea as `pge_energy.refresh`).          |
 | **Backfill missing history** | Tiered hourly → daily → monthly over the current Sync settings history bounds. |
 
 One job per entry. If a job is already running, the flow shows status and a link to the device page instead of starting a second job.
 
 After start, a persistent notification links to the device (`PGE <accountnum>`). Live progress sensors:
 
-| Sensor | Role |
-|--------|------|
-| Sync status | `idle` / `refreshing` / `backfilling` / `complete` / `failed` |
-| Sync phase | `idle` / `correction` / `hourly` / `daily` / `monthly` / billing phases / `downloading_pdfs` / `parsing_pdfs` / `importing_pdf_statistics` |
-| Sync progress | `0`–`100` % |
-| Sync ETA | Remaining seconds (unknown until enough samples) |
-| Sync detail | Short line (e.g. `Hourly 42/120`) |
-| Sync last error | Cleared on a new job start |
+| Sensor          | Role                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Sync status     | `idle` / `refreshing` / `backfilling` / `complete` / `failed`                                                                              |
+| Sync phase      | `idle` / `correction` / `hourly` / `daily` / `monthly` / billing phases / `downloading_pdfs` / `parsing_pdfs` / `importing_pdf_statistics` |
+| Sync progress   | `0`–`100` %                                                                                                                                |
+| Sync ETA        | Remaining seconds (unknown until enough samples)                                                                                           |
+| Sync detail     | Short line (e.g. `Hourly 42/120`)                                                                                                          |
+| Sync last error | Cleared on a new job start                                                                                                                 |
 
 The sidebar panel at `/pge` also mirrors sync progress for admins.
 
@@ -67,13 +67,13 @@ Email / password only. Account number is read-only after setup. Statistic IDs an
 
 Opt-in download + local parsing of portal statement PDFs. **Default off.**
 
-| Surface | Notes |
-|---------|--------|
-| Configure → Sync settings | Master toggle, form, retention, rolling count. |
-| Services | `pge_energy.download_bill_pdf` (by known `bill_date` from Store index); `pge_energy.reparse_bill_pdfs` (retained files only, no network). |
-| Sensors | `bill_pdf_parse_status` (diagnostic); 14 disabled-by-default line-item sensors; current bill amount/kWh attributes include PDF link/status when available. |
-| Statistics | 18 external sum series `pge_energy:<account_key>_bill_pdf_*` (statement-dated). GraphQL `_bill_amount` / `_bill_kwh` remain canonical. |
-| Panel `/pge` | **View bill PDF** link, parse badge, **Statement details (PDF)** table when a safe normalized record exists. |
-| Security | PDFs under `www/pge_energy/` are served at `/local/…` without HA login if the instance is exposed. See `SECURITY.md`. |
+| Surface                   | Notes                                                                                                                                                      |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Configure → Sync settings | Master toggle, form, retention, rolling count.                                                                                                             |
+| Services                  | `pge_energy.download_bill_pdf` (by known `bill_date` from Store index); `pge_energy.reparse_bill_pdfs` (retained files only, no network).                  |
+| Sensors                   | `bill_pdf_parse_status` (diagnostic); 14 disabled-by-default line-item sensors; current bill amount/kWh attributes include PDF link/status when available. |
+| Statistics                | 18 external sum series `pge_energy:<account_key>_bill_pdf_*` (statement-dated). GraphQL `_bill_amount` / `_bill_kwh` remain canonical.                     |
+| Panel `/pge`              | **View bill PDF** link, parse badge, **Statement details (PDF)** table when a safe normalized record exists.                                               |
+| Security                  | PDFs under `www/pge_energy/` are served at `/local/…` without HA login if the instance is exposed. See `SECURITY.md`.                                      |
 
 Sync phases when enabled: `downloading_pdfs` → `parsing_pdfs` → `importing_pdf_statistics` (after structured billing). Failures are soft: retained PDFs, last-known normalized data, and GraphQL billing sensors stay available.

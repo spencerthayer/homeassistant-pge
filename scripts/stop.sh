@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Shut down the local Home Assistant UAT server started by ./start (or leftover live hass).
+# Shut down the local Home Assistant UAT server started by ./scripts/start.sh (or leftover live hass).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
 PID_FILE="$ROOT/outputs/ha_live/hass.pid"
@@ -35,7 +36,7 @@ kill_pid() {
   stopped_any=1
 }
 
-# 1) PID file from ./start
+# 1) PID file from ./scripts/start.sh
 if [[ -f "$PID_FILE" ]]; then
   pid="$(tr -d '[:space:]' <"$PID_FILE" || true)"
   if [[ -n "${pid:-}" ]]; then

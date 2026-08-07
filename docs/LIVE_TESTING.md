@@ -62,4 +62,4 @@ Install via HACS (or copy `custom_components/pge_energy`), restart Home Assistan
 2. Open `/pge` (admin) and confirm At a glance + Usage + Billing populate after the first poll/backfill.
 3. Confirm Energy dashboard can select `pge_energy:…_consumption` (or the mirrored `sensor.pge_…_energy` statistic).
 
-Private development harnesses (`./start` / `./stop`, in-process HA scripts) are not part of this public repository.
+Private development harnesses (`./scripts/start.sh` / `./scripts/stop.sh`, in-process HA scripts) live under `scripts/` for maintainer UAT.
