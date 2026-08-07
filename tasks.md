@@ -21,6 +21,10 @@
 - [x] Live HA: force `download_bill_pdf` for 2026-08-05 → amount/kWh reconcile, confidence 1.0, no `Rotated text` log lines
 - [x] Ship PATCH HACS release [`v0.8.2`](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.8.2); closed [#16](https://github.com/spencerthayer/homeassistant-pge/issues/16)
 
+## Agent / repo process
+
+- [x] Add always-on Cursor rule: HITL required to merge any PR (no auto-merge without permission)
+
 ## Active agents
 
 - None
