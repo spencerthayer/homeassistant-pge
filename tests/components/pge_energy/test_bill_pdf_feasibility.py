@@ -7,6 +7,7 @@ Home Assistant recorder writes.
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date
 from decimal import Decimal
@@ -21,6 +22,9 @@ from custom_components.pge_energy.bill_pdf_parser import (
     extract_pdf_text,
     normalize_bill_text,
 )
+
+_TEXT_VARIANT_SEPARATOR = "\n<<<PGE_PLAIN_TEXT_FALLBACK>>>\n"
+_PYPDF_FIXED_WIDTH_LOGGER = "pypdf._text_extraction._layout_mode._fixed_width_page"
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "billing"
 
@@ -56,6 +60,59 @@ def _build_text_pdf(lines: list[str], *, rotated_lines: list[str] | None = None)
         ),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+    ]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for object_number, body in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{object_number} 0 obj\n".encode())
+        pdf.extend(body)
+        pdf.extend(b"\nendobj\n")
+    xref_offset = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode())
+    pdf.extend((f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").encode())
+    return bytes(pdf)
+
+
+def _build_pdf_with_form_xobject(*, page_lines: list[str], form_lines: list[str]) -> bytes:
+    """Build a PDF whose Form XObject text is invisible to layout mode."""
+
+    def _text_stream(lines: list[str], *, start_y: int = 748) -> bytes:
+        escaped = [line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") for line in lines]
+        ops = ["BT", "/F1 10 Tf", f"48 {start_y} Td"]
+        for index, line in enumerate(escaped):
+            if index:
+                ops.append("0 -14 Td")
+            ops.append(f"({line}) Tj")
+        ops.append("ET")
+        return "\n".join(ops).encode("ascii")
+
+    page_stream = _text_stream(page_lines)
+    form_stream = _text_stream(form_lines, start_y=700)
+    # Page paints the Form XObject after its own text.
+    page_contents = page_stream + b"\n/Fm1 Do\n"
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 4 0 R >> /XObject << /Fm1 6 0 R >> >> "
+            b"/Contents 5 0 R >>"
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(page_contents)).encode("ascii") + b" >>\nstream\n" + page_contents + b"\nendstream",
+        (
+            b"<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Length "
+            + str(len(form_stream)).encode("ascii")
+            + b" >>\nstream\n"
+            + form_stream
+            + b"\nendstream"
+        ),
     ]
     pdf = bytearray(b"%PDF-1.4\n")
     offsets = [0]
@@ -146,6 +203,47 @@ class TestPDFTextExtraction:
 
         assert "Due date 3/5/25" in extracted.text
         assert "790 kWh this month" in extracted.text
+
+    def test_layout_variant_retains_rotated_stub_text(self):
+        data = _build_text_pdf(
+            ["Portland General Electric", "Amount due $169.50"],
+            rotated_lines=["STUB Due date 3/5/25", "STUB 790 kWh"],
+        )
+
+        extracted = extract_pdf_text(data)
+        layout_part = extracted.text.split(_TEXT_VARIANT_SEPARATOR)[0]
+
+        assert "STUB Due date 3/5/25" in layout_part
+        assert "STUB 790 kWh" in layout_part
+
+    def test_rotated_text_discovery_warnings_are_silenced(self, caplog: pytest.LogCaptureFixture):
+        data = _build_text_pdf(
+            ["Portland General Electric", "Amount due $169.50"],
+            rotated_lines=["STUB Due date 3/5/25"],
+        )
+
+        with caplog.at_level(logging.WARNING, logger=_PYPDF_FIXED_WIDTH_LOGGER):
+            extract_pdf_text(data)
+
+        rotated_messages = [record.getMessage() for record in caplog.records if "Rotated text discovered" in record.getMessage()]
+        assert rotated_messages == []
+
+    def test_plain_variant_carries_form_xobject_text(self):
+        data = _build_pdf_with_form_xobject(
+            page_lines=["Portland General Electric", "Amount due $169.50"],
+            form_lines=["FORM XObject total use 790 kWh"],
+        )
+
+        extracted = extract_pdf_text(data)
+        parts = extracted.text.split(_TEXT_VARIANT_SEPARATOR)
+        layout_part = parts[0]
+        plain_part = parts[1] if len(parts) > 1 else ""
+
+        assert "Portland General Electric" in extracted.text
+        assert "FORM XObject total use 790 kWh" in extracted.text
+        # Layout mode does not recurse Form XObjects; plain fallback must.
+        assert "FORM XObject total use 790 kWh" not in layout_part
+        assert "FORM XObject total use 790 kWh" in plain_part
 
 
 class TestBillNormalization:

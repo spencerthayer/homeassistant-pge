@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import logging
 import re
 import unicodedata
-import warnings
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
@@ -26,6 +26,28 @@ _AMOUNT = r"-?\$?\s*\(?\d[\d,]*\.\d{2}\)?"
 _NUMBER = r"\d[\d,]*(?:\.\d+)?"
 _FOR_DAYS = r"(?:\s*for\s*\d+\s*days)?"
 _TEXT_VARIANT_SEPARATOR = "\n<<<PGE_PLAIN_TEXT_FALLBACK>>>\n"
+
+_PYPDF_FIXED_WIDTH_LOGGER = logging.getLogger(
+    "pypdf._text_extraction._layout_mode._fixed_width_page"
+)
+_ACCOUNTED_FOR_PYPDF_WARNINGS = {
+    "Rotated text discovered. Output will be incomplete.",
+    "Rotated text discovered. Layout will be degraded.",
+}
+
+
+class _AccountedForPypdfRotationWarning(logging.Filter):
+    """Rotated text is intentionally retained; these pypdf warnings are handled."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.getMessage() not in _ACCOUNTED_FOR_PYPDF_WARNINGS
+
+
+def _ensure_pypdf_rotation_warning_filter() -> None:
+    """Install the accounted-for rotation filter once per process."""
+    if any(isinstance(item, _AccountedForPypdfRotationWarning) for item in _PYPDF_FIXED_WIDTH_LOGGER.filters):
+        return
+    _PYPDF_FIXED_WIDTH_LOGGER.addFilter(_AccountedForPypdfRotationWarning())
 
 
 class BillPdfTextExtractionError(ValueError):
@@ -51,6 +73,7 @@ def sha256_pdf(data: bytes) -> str:
 def extract_pdf_text(data: bytes) -> ExtractedBillPdfText:
     """Extract layout and plain variants from an in-memory, text-backed PDF."""
     validate_pdf_bytes(data)
+    _ensure_pypdf_rotation_warning_filter()
 
     try:
         from pypdf import PdfReader
@@ -67,19 +90,14 @@ def extract_pdf_text(data: bytes) -> ExtractedBillPdfText:
         layout_pages: list[str] = []
         plain_pages: list[str] = []
         for page in reader.pages:
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore",
-                    message="Rotated text discovered. Output will be incomplete.",
-                    category=UserWarning,
+            try:
+                layout_text = page.extract_text(
+                    extraction_mode="layout",
+                    layout_mode_space_vertically=False,
+                    layout_mode_strip_rotated=False,
                 )
-                try:
-                    layout_text = page.extract_text(
-                        extraction_mode="layout",
-                        layout_mode_space_vertically=False,
-                    )
-                except TypeError:  # pragma: no cover
-                    layout_text = page.extract_text()
+            except TypeError:  # pragma: no cover
+                layout_text = page.extract_text()
             plain_text = page.extract_text() or ""
             layout_pages.append(layout_text or "")
             plain_pages.append(plain_text)

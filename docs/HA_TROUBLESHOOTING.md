@@ -2,16 +2,15 @@
 
 ## Quiet expected log warnings
 
-`pypdf` emits layout-extraction warnings (`Limiting excessive whitespace…`, `Rotated text discovered…`) from `pypdf._text_extraction._layout_mode._fixed_width_page` on every bill-PDF parse. The integration already handles those conditions (it merges a plain-text extraction variant), so they are informational, not actionable. The integration also logs some caught-and-retried soft-failures at warning level that resolve on the next poll.
+`pypdf` may emit layout-extraction warnings from `pypdf._text_extraction._layout_mode._fixed_width_page` during bill-PDF parse. Since 0.8.2 the integration retains rotated stub text (`layout_mode_strip_rotated=False`) and installs a targeted `logging.Filter` for the two accounted-for `Rotated text discovered…` messages (exact strings only — other `pypdf` warnings still surface). `Limiting excessive whitespace…` can still appear and remains informational. The integration also logs some caught-and-retried soft-failures at warning level that resolve on the next poll.
 
-To keep Settings → System → Logs focused on actionable entries, filter these with HA's native `logger` integration in `configuration.yaml` (config-only — survives HACS updates and is easily reversible):
+To keep Settings → System → Logs focused on actionable entries, filter remaining noise with HA's native `logger` integration in `configuration.yaml` (config-only — survives HACS updates and is easily reversible):
 
 ```yaml
 logger:
   filters:
     pypdf._text_extraction._layout_mode._fixed_width_page:
       - "Limiting excessive whitespace.*"
-      - "Rotated text discovered.*"
     custom_components.pge_energy.billing_sync:
       - "soft-failed.*"
     custom_components.pge_energy.bill_pdf_sync:
