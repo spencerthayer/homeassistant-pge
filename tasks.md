@@ -10,7 +10,7 @@
 - [x] Add return/compensation sensors, websocket IDs, `/pge` export charting, and HA Energy verification
 - [x] Live HA UAT on `/pge`: sync complete, KPIs populated, frontend `?v=0.8.0`, export KPI hidden on non-generating account
 - [x] Address [#10](https://github.com/spencerthayer/homeassistant-pge/issues/10): Energy dashboard docs, stable `account_key`, clear external stats on entry remove
-- [ ] Ship MINOR HACS release `v0.8.0` only after explicit approval (release+tag for v0.8.0 withdrawn; Latest remains v0.7.5)
+- [x] Ship PATCH HACS release `v0.8.1` (includes signed import/export + Copilot follow-up; v0.8.0 tag was withdrawn)
 - [x] Address Copilot suppressed feedback: return/compensation day sums report `0` (not unavailable) when published intervals have no export; fix `DirectionalUsage` field docstring
 
 ## Active agents
