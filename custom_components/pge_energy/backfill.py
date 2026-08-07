@@ -27,6 +27,7 @@ from .const import (
 )
 from .coordinator import PGECoordinator
 from .day_validation import clip_hourly_to_local_day, is_invalid_closed_day, validate_hourly_day
+from .usage_direction import explicit_gap_intervals, importable_energy_intervals
 from .models import UsageInterval, UsageResolution
 from .options import (
     compute_hourly_date_range,
@@ -119,9 +120,10 @@ def _merge_by_month_start(intervals: list[UsageInterval]) -> list[UsageInterval]
             merged[iv.start] = iv
             continue
         amounts = [a for a in (prior.amount, iv.amount) if a is not None]
+        kwh_parts = [k for k in (prior.kwh, iv.kwh) if k is not None]
         merged[iv.start] = replace(
             prior,
-            kwh=prior.kwh + iv.kwh,
+            kwh=sum(kwh_parts) if kwh_parts else None,
             amount=sum(amounts) if amounts else None,
         )
     return list(merged.values())
@@ -295,6 +297,18 @@ async def _async_backfill_hourly(
                 await _async_note_failed(coordinator, iso, f"{iso}:{reason}")
                 continue
 
+            gap_rows = explicit_gap_intervals(clipped)
+            if gap_rows:
+                _LOGGER.warning(
+                    "Hourly backfill day %s %s — %s explicit null interval(s); "
+                    "importing %s energy sample(s) and not retrying coarse tiers",
+                    iso,
+                    reason,
+                    len(gap_rows),
+                    len(importable_energy_intervals(clipped)),
+                )
+            # Keep unavailable rows so temperature overlay can still import °F;
+            # statistics skips null-kWh for energy/cost series.
             if clipped:
                 batch_intervals.extend(clipped)
             if ok_complete:

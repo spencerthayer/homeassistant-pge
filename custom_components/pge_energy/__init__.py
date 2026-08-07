@@ -60,7 +60,11 @@ from .options import (
     resolve_history_bounds,
 )
 from .panel import async_setup_panel, async_teardown_panel
-from .statistics import async_import_with_baseline, setup_statistics_sensors
+from .statistics import (
+    async_import_with_baseline,
+    async_migrate_signed_usage_split,
+    setup_statistics_sensors,
+)
 from .store import async_save_import_state, discard_store_cache
 from .time_util import iter_local_days, today_local
 from .websocket import async_setup_websocket
@@ -204,6 +208,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
             account_key=coordinator.account_key,
             store=coordinator.import_store,
         )
+        await async_migrate_signed_usage_split(
+            hass,
+            coordinator.account_key,
+            coordinator.import_store,
+            account_id=coordinator.account_id,
+            entry_id=entry.entry_id,
+        )
+        await coordinator.async_refresh_lifetime_totals()
         if (
             coordinator.import_store.target_start
             and coordinator.import_store.target_end

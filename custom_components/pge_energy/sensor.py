@@ -43,6 +43,7 @@ from .const import (
     ENTITY_UNIQUE_BILLING_CYCLE_DAY,
     ENTITY_UNIQUE_BILLING_CYCLE_TOTAL_DAYS,
     ENTITY_UNIQUE_BILLING_LAST_SYNC,
+    ENTITY_UNIQUE_COMPENSATION,
     ENTITY_UNIQUE_COST,
     ENTITY_UNIQUE_CURRENT_BILL_AMOUNT,
     ENTITY_UNIQUE_CURRENT_BILL_END,
@@ -53,12 +54,15 @@ from .const import (
     ENTITY_UNIQUE_EST_CURRENT_CHARGES,
     ENTITY_UNIQUE_EST_NEXT_BILL_MAX,
     ENTITY_UNIQUE_EST_NEXT_BILL_MIN,
+    ENTITY_UNIQUE_HOURLY_COMPENSATION,
     ENTITY_UNIQUE_HOURLY_COST,
     ENTITY_UNIQUE_HOURLY_ENERGY,
+    ENTITY_UNIQUE_HOURLY_RETURN,
     ENTITY_UNIQUE_LAST_PAYMENT_AMOUNT,
     ENTITY_UNIQUE_LAST_PAYMENT_DATE,
     ENTITY_UNIQUE_LIFETIME_BILLED,
     ENTITY_UNIQUE_LIFETIME_PAYMENTS,
+    ENTITY_UNIQUE_RETURN,
     ENTITY_UNIQUE_SYNC_DETAIL,
     ENTITY_UNIQUE_SYNC_ERROR,
     ENTITY_UNIQUE_SYNC_ETA,
@@ -66,17 +70,21 @@ from .const import (
     ENTITY_UNIQUE_SYNC_PROGRESS,
     ENTITY_UNIQUE_SYNC_STATUS,
     ENTITY_UNIQUE_TEMPERATURE,
+    ENTITY_UNIQUE_YESTERDAY_COMPENSATION,
     ENTITY_UNIQUE_YESTERDAY_COST,
     ENTITY_UNIQUE_YESTERDAY_ENERGY,
+    ENTITY_UNIQUE_YESTERDAY_RETURN,
     ENTITY_UNIQUE_YTD_PROGRAM_SAVINGS,
     STATISTIC_ID_SUFFIX_ACCOUNT_BALANCE,
     STATISTIC_ID_SUFFIX_AMOUNT_DUE,
     STATISTIC_ID_SUFFIX_BILL_AMOUNT,
     STATISTIC_ID_SUFFIX_BILL_AVG_TEMPERATURE,
+    STATISTIC_ID_SUFFIX_COMPENSATION,
     STATISTIC_ID_SUFFIX_CONSUMPTION,
     STATISTIC_ID_SUFFIX_COST,
     STATISTIC_ID_SUFFIX_LAST_PAYMENT_AMOUNT,
     STATISTIC_ID_SUFFIX_PAYMENT_AMOUNT,
+    STATISTIC_ID_SUFFIX_RETURN,
     STATISTIC_ID_SUFFIX_TEMPERATURE,
     STATISTIC_ID_SUFFIX_YTD_PROGRAM_SAVINGS,
 )
@@ -85,6 +93,7 @@ from .entity import PGEBaseEntity
 from .models import UsageInterval
 from .options import get_entry_option
 from .statistics import _get_statistic_id
+from .usage_direction import split_signed_usage
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -108,16 +117,58 @@ def _intervals_in_range(
 
 
 def _sum_kwh(intervals: list[UsageInterval]) -> float | None:
-    if not intervals:
-        return None
-    return float(sum(iv.kwh for iv in intervals))
+    """Sum non-negative grid-import kWh from signed intervals."""
+    total = 0.0
+    any_value = False
+    for iv in intervals:
+        if iv.kwh is None:
+            continue
+        any_value = True
+        total += float(split_signed_usage(iv.kwh, iv.amount, resolution=iv.resolution).consumption)
+    return total if any_value else None
+
+
+def _sum_return_kwh(intervals: list[UsageInterval]) -> float | None:
+    """Sum non-negative grid-export kWh from signed hourly intervals."""
+    total = 0.0
+    any_value = False
+    for iv in intervals:
+        if iv.kwh is None:
+            continue
+        split = split_signed_usage(iv.kwh, iv.amount, resolution=iv.resolution)
+        if split.return_kwh <= 0:
+            continue
+        any_value = True
+        total += float(split.return_kwh)
+    return total if any_value else None
 
 
 def _sum_cost(intervals: list[UsageInterval]) -> float | None:
-    costs = [iv.amount for iv in intervals if iv.amount is not None]
-    if not costs:
-        return None
-    return float(sum(costs))
+    total = 0.0
+    any_value = False
+    for iv in intervals:
+        if iv.kwh is None or iv.amount is None:
+            continue
+        split = split_signed_usage(iv.kwh, iv.amount, resolution=iv.resolution)
+        if split.cost is None:
+            continue
+        any_value = True
+        total += float(split.cost)
+    return total if any_value else None
+
+
+def _sum_compensation(intervals: list[UsageInterval]) -> float | None:
+    total = 0.0
+    any_value = False
+    for iv in intervals:
+        if iv.kwh is None or iv.amount is None:
+            continue
+        split = split_signed_usage(iv.kwh, iv.amount, resolution=iv.resolution)
+        if split.compensation is None or split.compensation <= 0:
+            continue
+        any_value = True
+        total += float(split.compensation)
+    return total if any_value else None
 
 
 async def async_setup_entry(
@@ -130,14 +181,20 @@ async def async_setup_entry(
 
     entities: list[PGEBaseEntity] = [
         PGEEnergySensor(coordinator, account_key),
+        PGEReturnSensor(coordinator, account_key),
         PGECostSensor(coordinator, account_key),
+        PGECompensationSensor(coordinator, account_key),
         PGEOutdoorTemperatureSensor(coordinator, account_key),
         PGEHourlyEnergySensor(coordinator, account_key),
+        PGEHourlyReturnSensor(coordinator, account_key),
         PGEHourlyCostSensor(coordinator, account_key),
+        PGEHourlyCompensationSensor(coordinator, account_key),
         PGECurrentDayEnergySensor(coordinator, account_key),
         PGECurrentDayCostSensor(coordinator, account_key),
         PGEYesterdayEnergySensor(coordinator, account_key),
+        PGEYesterdayReturnSensor(coordinator, account_key),
         PGEYesterdayCostSensor(coordinator, account_key),
+        PGEYesterdayCompensationSensor(coordinator, account_key),
         PGELastUpdateSensor(coordinator, account_key),
         PGELatestIntervalSensor(coordinator, account_key),
         PGEDataAgeSensor(coordinator, account_key),
@@ -249,7 +306,7 @@ class _StatisticLinkedSensor(PGEBaseEntity, SensorEntity):
 
 
 class PGEEnergySensor(_StatisticLinkedSensor):
-    """Lifetime imported energy (kWh). State is lifetime cumulative sum."""
+    """Lifetime grid-imported energy (kWh). State is lifetime cumulative sum."""
 
     _attr_name = "Energy"
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -263,6 +320,23 @@ class PGEEnergySensor(_StatisticLinkedSensor):
     @property
     def native_value(self) -> float | None:
         return self.coordinator.lifetime_energy_kwh
+
+
+class PGEReturnSensor(_StatisticLinkedSensor):
+    """Lifetime grid-exported energy (kWh). State is lifetime cumulative sum."""
+
+    _attr_name = "Return"
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _statistic_suffix = STATISTIC_ID_SUFFIX_RETURN
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator, account_key, ENTITY_UNIQUE_RETURN)
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.lifetime_return_kwh
 
 
 class PGECostSensor(_StatisticLinkedSensor):
@@ -280,6 +354,24 @@ class PGECostSensor(_StatisticLinkedSensor):
     @property
     def native_value(self) -> float | None:
         return self.coordinator.lifetime_cost_usd
+
+
+class PGECompensationSensor(_StatisticLinkedSensor):
+    """Lifetime export compensation (USD). State is lifetime cumulative sum."""
+
+    _attr_name = "Compensation"
+    _attr_native_unit_of_measurement = "USD"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+    _statistic_suffix = STATISTIC_ID_SUFFIX_COMPENSATION
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator, account_key, ENTITY_UNIQUE_COMPENSATION)
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.lifetime_compensation_usd
 
 
 class PGEOutdoorTemperatureSensor(_StatisticLinkedSensor):
@@ -324,11 +416,12 @@ class PGEHourlyEnergySensor(PGEBaseEntity, SensorEntity):
 
     @property
     def native_value(self) -> float | None:
-        intervals = self.coordinator.recent_intervals
+        intervals = [iv for iv in self.coordinator.recent_intervals if iv.kwh is not None]
         if not intervals:
             return None
         latest = max(intervals, key=lambda x: x.end)
-        return float(latest.kwh)
+        assert latest.kwh is not None
+        return float(split_signed_usage(latest.kwh, latest.amount, resolution=latest.resolution).consumption)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -336,6 +429,38 @@ class PGEHourlyEnergySensor(PGEBaseEntity, SensorEntity):
             "account_key": self._account_key,
             "external_statistic_id": _get_statistic_id(self._account_key, STATISTIC_ID_SUFFIX_CONSUMPTION),
             "note": "Point value for the latest hour; full history is on Energy / external stats",
+        }
+
+
+class PGEHourlyReturnSensor(PGEBaseEntity, SensorEntity):
+    """Most recent hourly interval grid export (kWh for that hour)."""
+
+    _attr_name = "Hourly return"
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_device_class = None
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_unique_id: str
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator)
+        self._account_key = account_key
+        self._attr_unique_id = f"{account_key}_{ENTITY_UNIQUE_HOURLY_RETURN}"
+
+    @property
+    def native_value(self) -> float | None:
+        intervals = [iv for iv in self.coordinator.recent_intervals if iv.kwh is not None]
+        if not intervals:
+            return None
+        latest = max(intervals, key=lambda x: x.end)
+        assert latest.kwh is not None
+        return float(split_signed_usage(latest.kwh, latest.amount, resolution=latest.resolution).return_kwh)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "account_key": self._account_key,
+            "external_statistic_id": _get_statistic_id(self._account_key, STATISTIC_ID_SUFFIX_RETURN),
+            "note": "Point value for the latest hour; full history is on Return / external stats",
         }
 
 
@@ -357,13 +482,13 @@ class PGEHourlyCostSensor(PGEBaseEntity, SensorEntity):
 
     @property
     def native_value(self) -> float | None:
-        intervals = self.coordinator.recent_intervals
-        with_cost = [iv for iv in intervals if iv.amount is not None]
-        if not with_cost:
+        intervals = [iv for iv in self.coordinator.recent_intervals if iv.kwh is not None and iv.amount is not None]
+        if not intervals:
             return None
-        latest = max(with_cost, key=lambda x: x.end)
-        assert latest.amount is not None
-        return float(latest.amount)
+        latest = max(intervals, key=lambda x: x.end)
+        assert latest.kwh is not None
+        split = split_signed_usage(latest.kwh, latest.amount, resolution=latest.resolution)
+        return float(split.cost) if split.cost is not None else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -371,6 +496,42 @@ class PGEHourlyCostSensor(PGEBaseEntity, SensorEntity):
             "account_key": self._account_key,
             "external_statistic_id": _get_statistic_id(self._account_key, STATISTIC_ID_SUFFIX_COST),
             "note": "Point value for the latest hour; full history is on Cost / external stats",
+        }
+
+
+class PGEHourlyCompensationSensor(PGEBaseEntity, SensorEntity):
+    """Most recent hourly export compensation (USD for that hour)."""
+
+    _attr_name = "Hourly compensation"
+    _attr_native_unit_of_measurement = "USD"
+    _attr_device_class = None
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_unique_id: str
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator)
+        self._account_key = account_key
+        self._attr_unique_id = f"{account_key}_{ENTITY_UNIQUE_HOURLY_COMPENSATION}"
+
+    @property
+    def native_value(self) -> float | None:
+        intervals = [iv for iv in self.coordinator.recent_intervals if iv.kwh is not None and iv.amount is not None]
+        if not intervals:
+            return None
+        latest = max(intervals, key=lambda x: x.end)
+        assert latest.kwh is not None
+        split = split_signed_usage(latest.kwh, latest.amount, resolution=latest.resolution)
+        if split.compensation is None:
+            return 0.0
+        return float(split.compensation)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "account_key": self._account_key,
+            "external_statistic_id": _get_statistic_id(self._account_key, STATISTIC_ID_SUFFIX_COMPENSATION),
+            "note": "Point value for the latest hour; full history is on Compensation / external stats",
         }
 
 
@@ -425,6 +586,23 @@ class PGEYesterdayEnergySensor(PGEBaseEntity, SensorEntity):
         return _sum_kwh(_intervals_in_range(self.coordinator.recent_intervals, start, end))
 
 
+class PGEYesterdayReturnSensor(PGEBaseEntity, SensorEntity):
+    _attr_name = "Yesterday return"
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_unique_id: str
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{account_key}_{ENTITY_UNIQUE_YESTERDAY_RETURN}"
+
+    @property
+    def native_value(self) -> float | None:
+        start, end = _pacific_day_bounds_utc(1)
+        return _sum_return_kwh(_intervals_in_range(self.coordinator.recent_intervals, start, end))
+
+
 class PGEYesterdayCostSensor(PGEBaseEntity, SensorEntity):
     _attr_name = "Yesterday cost"
     _attr_native_unit_of_measurement = "USD"
@@ -440,6 +618,24 @@ class PGEYesterdayCostSensor(PGEBaseEntity, SensorEntity):
     def native_value(self) -> float | None:
         start, end = _pacific_day_bounds_utc(1)
         return _sum_cost(_intervals_in_range(self.coordinator.recent_intervals, start, end))
+
+
+class PGEYesterdayCompensationSensor(PGEBaseEntity, SensorEntity):
+    _attr_name = "Yesterday compensation"
+    _attr_native_unit_of_measurement = "USD"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_unique_id: str
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{account_key}_{ENTITY_UNIQUE_YESTERDAY_COMPENSATION}"
+
+    @property
+    def native_value(self) -> float | None:
+        start, end = _pacific_day_bounds_utc(1)
+        return _sum_compensation(_intervals_in_range(self.coordinator.recent_intervals, start, end))
 
 
 class PGELastUpdateSensor(PGEBaseEntity, SensorEntity):

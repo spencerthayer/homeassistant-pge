@@ -18,7 +18,9 @@ class UsageInterval:
     resolution: UsageResolution
     start: datetime
     end: datetime
-    kwh: Decimal
+    # None means PGE returned an explicit null kWh sample for this start
+    # (unavailable energy — not zero and not a missing timestamp).
+    kwh: Decimal | None
     amount: Decimal | None
     temperature: Decimal | None
     usage_status: str | None

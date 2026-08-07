@@ -101,6 +101,11 @@ export function seriesColors(el = null) {
   const root = el || document.documentElement;
   return {
     kwh: cssVar("--pge-series-kwh", cssVar("--info-color", cssVar("--primary-color", "#2a78d6", root), root), root),
+    export: cssVar(
+      "--pge-series-export",
+      cssVar("--purple-color", cssVar("--accent-color", "#7b61ff", root), root),
+      root
+    ),
     cost: cssVar(
       "--pge-series-cost",
       cssVar("--accent-color", cssVar("--warning-color", "#eb6834", root), root),

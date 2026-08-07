@@ -270,9 +270,15 @@ def _parse_interval(
     resolution: UsageResolution,
     account_key: str,
 ) -> UsageInterval:
-    kwh = _safe_decimal(raw.get("kwh"))
-    if kwh is None:
-        raise PGESchemaError("Interval missing kwh")
+    # Explicit null kWh is a valid unavailable sample (keep the timestamp).
+    # Non-null unparsable values remain a schema error.
+    raw_kwh = raw.get("kwh")
+    if raw_kwh is None:
+        kwh: Decimal | None = None
+    else:
+        kwh = _safe_decimal(raw_kwh)
+        if kwh is None:
+            raise PGESchemaError("Interval missing kwh")
 
     if resolution == UsageResolution.HOURLY:
         interval_time = raw.get("intervalTime")

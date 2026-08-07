@@ -84,6 +84,28 @@ class TestValidateHourlyDay:
         assert ok is False
         assert reason == "gap"
 
+    def test_complete_with_explicit_null_gap(self):
+        day = today_local() - timedelta(days=7)
+        day_start, _ = local_day_bounds(day)
+        intervals = [_iv(day_start + timedelta(hours=h)) for h in range(24)]
+        # Explicit PGE null occupies hour 7 (covers the July-27 generating-account shape).
+        null_hour = intervals[7]
+        intervals[7] = UsageInterval(
+            account_key=null_hour.account_key,
+            resolution=null_hour.resolution,
+            start=null_hour.start,
+            end=null_hour.end,
+            kwh=None,
+            amount=None,
+            temperature=Decimal("60"),
+            usage_status="kWh-Delivered",
+            interval_size=900,
+            source_timestamp=None,
+        )
+        ok, reason = validate_hourly_day(day, intervals)
+        assert ok is True
+        assert reason == "complete_with_gap"
+
     def test_live_25_row_boundary_fixture_completes(self):
         day, intervals = _intervals_from_fixture(FIXTURES / "hourly_day_with_boundary.json")
         assert len(intervals) == 25

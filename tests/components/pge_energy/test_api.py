@@ -135,10 +135,23 @@ class TestIntervalParsing:
         assert iv.start is not None
         assert iv.end is not None
 
-    def test_interval_missing_kwh(self):
-        raw = {**MOCK_HOURLY_INTERVAL, "kwh": None}
+    def test_interval_null_kwh_is_unavailable_sample(self):
+        raw = {**MOCK_HOURLY_INTERVAL, "kwh": None, "amount": None}
+        iv = _parse_interval(raw, UsageResolution.HOURLY, "key1")
+        assert iv.kwh is None
+        assert iv.amount is None
+        assert iv.start is not None
+
+    def test_interval_unparsable_kwh_still_errors(self):
+        raw = {**MOCK_HOURLY_INTERVAL, "kwh": "not-a-number"}
         with pytest.raises(PGESchemaError):
             _parse_interval(raw, UsageResolution.HOURLY, "key1")
+
+    def test_signed_export_interval(self):
+        raw = {**MOCK_HOURLY_INTERVAL, "kwh": "-2.26", "amount": -0.42}
+        iv = _parse_interval(raw, UsageResolution.HOURLY, "key1")
+        assert iv.kwh == Decimal("-2.26")
+        assert iv.amount == Decimal("-0.42")
 
     def test_interval_none_temperature(self):
         raw = {**MOCK_HOURLY_INTERVAL, "temperature": None}
@@ -471,7 +484,7 @@ class TestApiClient:
         assert "private@example.com" not in caplog.text
 
     @pytest.mark.asyncio
-    async def test_unknown_usage_shape_is_captured_before_parse_failure(self, caplog):
+    async def test_null_kwh_is_captured_and_parsed_as_unavailable(self, caplog):
         usage_data = {
             "data": {
                 "getUsageCompare": {
@@ -490,15 +503,14 @@ class TestApiClient:
         )
         client = PGEApiClient(session, "token", "person", "account", capture_graphql_diagnostics=True)
         now = datetime.now(UTC)
-        with (
-            caplog.at_level("INFO", logger="custom_components.pge_energy.api"),
-            pytest.raises(PGESchemaError),
-        ):
-            await client.get_usage(UsageResolution.HOURLY, now - timedelta(days=1), now, "key")
+        with caplog.at_level("INFO", logger="custom_components.pge_energy.api"):
+            resp = await client.get_usage(UsageResolution.HOURLY, now - timedelta(days=1), now, "key")
 
         assert session.post.call_count == 2
         assert client.introspection_attempted is True
         assert '"usageStatus":"kWh-Received"' in caplog.text
+        assert len(resp.intervals) == 1
+        assert resp.intervals[0].kwh is None
 
     @pytest.mark.asyncio
     async def test_get_usage_401(self):

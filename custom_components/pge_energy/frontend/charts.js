@@ -10,7 +10,7 @@ import {
   seriesColors,
   tooltipTheme,
   withAlpha,
-} from "./theme.js?v=0.7.5";
+} from "./theme.js?v=0.8.0";
 
 export { seriesColors };
 
@@ -616,27 +616,39 @@ function _categoryLabel(ms) {
   }).format(new Date(ms));
 }
 
-/** Single Usage chart: kWh + cost bars, outdoor temperature line. */
-export async function createUsageComboChart(host, { kwh, cost, temp, colors }) {
+/** Single Usage chart: import/export kWh bars, cost + outdoor temperature lines. */
+export async function createUsageComboChart(host, { kwh, returned, cost, temp, colors }) {
   const root = resolveRoot(host);
   const theme = themeColors(root);
   const tip = tooltipTheme(root);
   const c = colors || seriesColors(root);
   const kwhMap = _pairMap(kwh?.xs || [], kwh?.ys || []);
+  const returnMap = _pairMap(returned?.xs || [], returned?.ys || []);
   const costMap = _pairMap(cost?.xs || [], cost?.ys || []);
   const tempMap = _pairMap(temp?.xs || [], temp?.ys || []);
-  const starts = [...new Set([...kwhMap.keys(), ...costMap.keys(), ...tempMap.keys()])].sort(
-    (a, b) => a - b
-  );
+  const hasReturn = [...returnMap.values()].some((v) => Number(v) > 0);
+  const starts = [
+    ...new Set([...kwhMap.keys(), ...returnMap.keys(), ...costMap.keys(), ...tempMap.keys()]),
+  ].sort((a, b) => a - b);
   // Category axis fills each slot; time axis leaves sparse hairline bars.
   const useCategory = starts.length > 0 && starts.length <= 96;
   const categories = useCategory ? starts.map(_categoryLabel) : null;
   const kwhVals = useCategory ? starts.map((t) => kwhMap.get(t) ?? null) : toMsPairs(kwh?.xs || [], kwh?.ys || []);
+  const returnVals = useCategory
+    ? starts.map((t) => {
+        const v = returnMap.get(t);
+        return v != null && Number(v) > 0 ? v : null;
+      })
+    : toMsPairs(
+        (returned?.xs || []).filter((_, i) => Number(returned?.ys?.[i]) > 0),
+        (returned?.ys || []).filter((v) => Number(v) > 0)
+      );
   const costVals = useCategory ? starts.map((t) => costMap.get(t) ?? null) : toMsPairs(cost?.xs || [], cost?.ys || []);
   // ECharts breaks category lines on '-' (null can render as a zero dip).
   const tempVals = useCategory
     ? starts.map((t) => (tempMap.has(t) ? tempMap.get(t) : "-"))
     : toMsPairs(temp?.xs || [], temp?.ys || []);
+  const legendData = hasReturn ? ["Grid import", "Grid export", "Cost", "°F"] : ["kWh", "Cost", "°F"];
   const option = {
     ...chartMotion(),
     backgroundColor: theme.bg,
@@ -644,7 +656,7 @@ export async function createUsageComboChart(host, { kwh, cost, temp, colors }) {
     legend: {
       show: true,
       top: 0,
-      data: ["kWh", "Cost", "°F"],
+      data: legendData,
       textStyle: { color: theme.text },
     },
     tooltip: {
@@ -666,8 +678,13 @@ export async function createUsageComboChart(host, { kwh, cost, temp, colors }) {
           let label = "—";
           if (p.seriesName === "Cost") label = formatCostLabel(raw);
           else if (p.seriesName === "°F") label = formatTempLabel(raw);
-          else if (p.seriesName === "kWh") label = formatKwhLabel(raw);
-          else if (raw != null && raw !== "-") label = String(raw);
+          else if (
+            p.seriesName === "kWh" ||
+            p.seriesName === "Grid import" ||
+            p.seriesName === "Grid export"
+          ) {
+            label = formatKwhLabel(raw);
+          } else if (raw != null && raw !== "-") label = String(raw);
           return `${p.marker}${p.seriesName}&nbsp;&nbsp;<b>${label}</b>`;
         });
         return `${title}<br/>${lines.join("<br/>")}`;
@@ -748,7 +765,7 @@ export async function createUsageComboChart(host, { kwh, cost, temp, colors }) {
     ],
     series: [
       {
-        name: "kWh",
+        name: hasReturn ? "Grid import" : "kWh",
         type: "bar",
         yAxisIndex: 0,
         data: kwhVals,
@@ -761,6 +778,24 @@ export async function createUsageComboChart(host, { kwh, cost, temp, colors }) {
         },
         emphasis: barEmphasis(c.kwh),
       },
+      ...(hasReturn
+        ? [
+            {
+              name: "Grid export",
+              type: "bar",
+              yAxisIndex: 0,
+              data: returnVals,
+              barWidth: useCategory ? "70%" : undefined,
+              barMaxWidth: useCategory ? 120 : 40,
+              barCategoryGap: useCategory ? "10%" : "25%",
+              itemStyle: {
+                color: c.export,
+                borderRadius: [5, 5, 0, 0],
+              },
+              emphasis: barEmphasis(c.export),
+            },
+          ]
+        : []),
       {
         // Line (not a second bar series) so kWh columns can fill each slot.
         name: "Cost",

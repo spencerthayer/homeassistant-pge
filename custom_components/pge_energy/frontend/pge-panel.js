@@ -27,7 +27,7 @@ import {
   stateDisplay,
   stateNumber,
   sumStatisticChange,
-} from "./data.js?v=0.7.5";
+} from "./data.js?v=0.8.0";
 import {
   createBarChart,
   createLineChart,
@@ -37,9 +37,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.7.5";
-import { sparklineSvg } from "./svg-helpers.js?v=0.7.5";
-import { applyPanelTheme } from "./theme.js?v=0.7.5";
+} from "./charts.js?v=0.8.0";
+import { sparklineSvg } from "./svg-helpers.js?v=0.8.0";
+import { applyPanelTheme } from "./theme.js?v=0.8.0";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -1292,6 +1292,7 @@ class PgeEnergyPanel extends HTMLElement {
     // PGE publishes overnight (~24h lag) and the tip interval is often incomplete.
     // KPIs use closed days / billing-period totals only — never "today" or tip samples.
     const yesterdayKwh = stateNumber(this._hass, e.yesterday_energy);
+    const yesterdayReturn = stateNumber(this._hass, e.yesterday_return);
     const yesterdayCost = stateNumber(this._hass, e.yesterday_cost);
     // Same PGE billDetails period as current_bill_kwh (billingPeriodStartDate→EndDate).
     const cycleKwh = stateNumber(this._hass, e.current_bill_kwh);
@@ -1478,7 +1479,12 @@ class PgeEnergyPanel extends HTMLElement {
       <h2>At a glance</h2>
       <p class="muted" style="margin:0 0 12px">Yesterday and week use imported intervals through yesterday (Pacific week starts Sunday; no complete today). Statement = PGE billDetails. Usage cycle = imported hourly sum over that period. Since statement = usage after the statement end through yesterday. PGE estimate = PGE's own open-cycle projection, which does not reconcile with the interval sums.</p>
       <div class="kpi-row">
-        <div class="kpi"><div class="label">Yesterday kWh</div><div class="value">${this._fmt(yesterdayKwh, " kWh")}</div>${spark(sparkKwh, "var(--pge-series-kwh)")}</div>
+        <div class="kpi"><div class="label">Yesterday import</div><div class="value">${this._fmt(yesterdayKwh, " kWh")}</div>${spark(sparkKwh, "var(--pge-series-kwh)")}</div>
+        ${
+          yesterdayReturn != null && yesterdayReturn > 0
+            ? `<div class="kpi"><div class="label">Yesterday export</div><div class="value">${this._fmt(yesterdayReturn, " kWh")}</div></div>`
+            : ""
+        }
         <div class="kpi"><div class="label">Yesterday cost</div><div class="value">${this._fmt(yesterdayCost, "", true)}</div>${spark(sparkCost, "var(--pge-series-cost)")}</div>
         <div class="kpi"><div class="label">Week kWh</div><div class="value">${this._fmt(weekKwh, " kWh")}</div><div class="delta">${this._escape(weekRange)}</div>${spark(sparkWeekKwh, "var(--pge-series-kwh)")}</div>
         <div class="kpi"><div class="label">Week cost</div><div class="value">${this._fmt(weekCost, "", true)}</div><div class="delta">${this._escape(weekRange)}</div>${spark(sparkWeekCost, "var(--pge-series-cost)")}</div>
@@ -1540,13 +1546,21 @@ class PgeEnergyPanel extends HTMLElement {
     // High ceiling so range accounting is not LTTB-downsampled away.
     const maxPoints = 20000;
 
-    const [kwh, cost, temp] = await Promise.all([
+    const [kwh, returned, cost, temp] = await Promise.all([
       fetchStatisticSeries(this._hass, ids.consumption, {
         start: range.start,
         end: range.end,
         period,
         maxPoints,
       }),
+      ids.return
+        ? fetchStatisticSeries(this._hass, ids.return, {
+            start: range.start,
+            end: range.end,
+            period,
+            maxPoints,
+          })
+        : Promise.resolve({ xs: [], values: [] }),
       fetchStatisticSeries(this._hass, ids.cost, {
         start: range.start,
         end: range.end,
@@ -1560,13 +1574,14 @@ class PgeEnergyPanel extends HTMLElement {
         maxPoints,
       }),
     ]);
-    this._lastSeries = { kwh, cost, temp, range, period };
+    this._lastSeries = { kwh, returned, cost, temp, range, period };
 
     const usageHost = this.shadowRoot.getElementById("chart-usage");
     if (usageHost) {
       this._disposeHostCharts(usageHost);
       const chart = await createUsageComboChart(usageHost, {
         kwh: { xs: kwh.xs, ys: kwh.values },
+        returned: { xs: returned.xs, ys: returned.values },
         cost: { xs: cost.xs, ys: cost.values },
         temp: { xs: temp.xs, ys: temp.means },
         colors,
@@ -1643,12 +1658,15 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   async _fetchTriple(ids, start, end, period, maxPoints) {
-    const [kwh, cost, temp] = await Promise.all([
+    const [kwh, returned, cost, temp] = await Promise.all([
       fetchStatisticSeries(this._hass, ids.consumption, { start, end, period, maxPoints }),
+      ids.return
+        ? fetchStatisticSeries(this._hass, ids.return, { start, end, period, maxPoints })
+        : Promise.resolve({ xs: [], values: [] }),
       fetchStatisticSeries(this._hass, ids.cost, { start, end, period, maxPoints }),
       fetchStatisticSeries(this._hass, ids.temperature, { start, end, period, maxPoints }),
     ]);
-    return { kwh, cost, temp };
+    return { kwh, returned, cost, temp };
   }
 
   /** Drop empty rollup rows (no kWh/cost/temp — lack of data, not a real zero day). */

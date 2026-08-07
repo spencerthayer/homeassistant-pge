@@ -53,7 +53,7 @@ PGE publishes usage **once overnight**, so a "stuck" latest interval near `01:00
 ### HACS (recommended)
 
 1. HACS → **⋯** → **Custom repositories**, add `https://github.com/spencerthayer/homeassistant-pge` with category **Integration**.
-2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.7.5`).
+2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.8.0`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -77,7 +77,7 @@ Setup validates connectivity with an hourly request for yesterday, then the firs
 ### Energy Dashboard
 
 1. Settings → Dashboards → Energy.
-2. Add electricity consumption — pick `pge_energy:<account>_consumption` (or the `sensor.pge_<account>_energy` statistic), and cost if you want it.
+2. Add electricity consumption — pick `pge_energy:<account>_consumption` (or the `sensor.pge_<account>_energy` statistic) for **Energy imported from grid**. For solar/generator accounts, also add `pge_energy:<account>_return` (or `sensor.pge_<account>_return`) for **Energy exported to grid**. Add cost/compensation series if wanted.
 
 ### PGE panel `/pge`
 
@@ -129,7 +129,7 @@ Details: [`docs/HA_SETTINGS_HISTORY.md`](docs/HA_SETTINGS_HISTORY.md).
 
 ### Grid import/export diagnostic capture (v0.7.3 alpha)
 
-Separate grid-return energy for generating customers is still under PGE GraphQL discovery ([#5](https://github.com/spencerthayer/homeassistant-pge/issues/5)). An off-by-default **Enable diagnostic capture (alpha)** switch logs a bounded allowlist of interval values under `PGE_ALPHA_GRID_CAPTURE` for requested captures. It never logs credentials, tokens, or identifiers. Enable only for a requested capture, review logs before sharing, and turn it off afterward.
+Generating / net-metered accounts publish signed HOURLY usage: positive kWh is grid import, negative kWh is grid export ([#5](https://github.com/spencerthayer/homeassistant-pge/issues/5)). The integration splits those into non-negative `_consumption` / `_return` (and `_cost` / `_compensation`) statistics for the Energy dashboard and `/pge` panel. An off-by-default **Enable diagnostic capture (alpha)** switch remains available for follow-up GraphQL captures (`PGE_ALPHA_GRID_CAPTURE`); it never logs credentials, tokens, or identifiers.
 
 ---
 
@@ -140,7 +140,7 @@ Every usage series is available in **both** forms:
 | Use case                                    | Pick                                                              |
 | ------------------------------------------- | ----------------------------------------------------------------- |
 | Entity picker, History, most Lovelace cards | `sensor.pge_<account>_energy` / `_cost` / `_outdoor_temperature`  |
-| Energy dashboard / statistics graphs        | `pge_energy:<account_key>_consumption` / `_cost` / `_temperature` |
+| Energy dashboard / statistics graphs        | `pge_energy:<account_key>_consumption` / `_return` / `_cost` / `_compensation` / `_temperature` |
 
 | Sensor                                     | Description                                               |
 | ------------------------------------------ | --------------------------------------------------------- |
@@ -165,7 +165,7 @@ Billing sensors expose `external_statistic_id` and `entity_statistic_id` for aut
 - Full history uses daily/monthly tiers once hourly retention ends (~1 year).
 - DAILY windows under ~31 days may hard-error; prefer HOURLY or ≥31-day DAILY.
 - MONTHLY returns the latest ~12 billing periods per call; older history requires paging backwards.
-- Separate grid-return energy is under GraphQL discovery (v0.7.3); the integration does not publish return values yet.
+- Grid export uses signed HOURLY rows only; DAILY/MONTHLY net totals are not split into gross import/export.
 - PGE may return transient 502s (retried). PGE's API is unofficial and may change without notice.
 
 ## Troubleshooting

@@ -95,30 +95,31 @@ The returned usage list field depends on the `displayMode` parameter:
 | `efficientSimilarHomesKwh` | string or null   |
 | `rank`                     | null             |
 
-### Grid return discovery (v0.7.3 alpha)
+### Grid import / export (signed HOURLY usage, v0.8.0)
 
-The confirmed contract above is from a non-generating account and only demonstrates `usageStatus = "kWh-Delivered"`. It does **not** establish whether a generating/net-metered account returns signed `kwh`, duplicate delivered/received rows, a separate field, or a separate PGE GraphQL operation. The integration therefore does not publish grid-return or compensation statistics yet.
+Generating-account capture ([#5](https://github.com/spencerthayer/homeassistant-pge/issues/5)) established that HOURLY `getUsageCompare` is a **signed net-flow** series:
 
-The default-off `capture_graphql_diagnostics` option records bounded, allowlisted HOURLY/DAILY/MONTHLY rows and derived direction clues (`usageStatus` values, negative kWh/amount counts, and duplicate interval starts). It also attempts one best-effort GraphQL schema discovery request per client load. Capture and introspection use only `https://apix.portlandgeneral.com/pge-graphql`, never change normal parsing/import output, and soft-fail independently of sync. Logs omit headers, credentials, identity variables, and complete response envelopes; interval timestamps and values remain private.
+- Positive `kwh` / `amount` → grid import / import cost
+- Negative `kwh` / `amount` → grid export / export compensation
+- `usageStatus` remains `"kWh-Delivered"` for both signs (not a direction discriminator)
+- One row per interval start (`max_rows_per_start = 1`); no separate delivered/received rows
+- Explicit `kwh: null` (with timestamp) is an unavailable sample — keep the start for day contiguity, skip energy/cost writes, preserve temperature when present, and mark the closed day `complete_with_gap` so backfill does not loop through failing DAILY/MONTHLY tiers
+- DAILY/MONTHLY net totals must **not** fabricate gross `_return` / `_compensation` (offsetting import+export inside the period is lost). MONTHLY rows with `kwh=0` and positive `amount` are fixed/base charges into `_cost` only
 
-Production direction handling is blocked until a sanitized generating-account capture establishes one of these PGE GraphQL-only contracts:
+Published statistics:
 
-1. signed usage/cost values;
-2. separate directional rows;
-3. a separate field or operation;
-4. net-only data, in which case gross return cannot be reconstructed reliably.
+| Direction | External statistic | Notes |
+| --- | --- | --- |
+| Grid import | `pge_energy:<account_key>_consumption` | non-negative; HA Energy “imported from grid” |
+| Grid export | `pge_energy:<account_key>_return` | non-negative; HOURLY signed rows only |
+| Import cost | `pge_energy:<account_key>_cost` | `max(0, amount)` |
+| Export compensation | `pge_energy:<account_key>_compensation` | only when hourly `kwh < 0` and `amount < 0` |
 
-Live schema discovery on 2026-08-02 confirmed a separate PGE GraphQL root operation:
+A one-time Store-gated migration (`signed_usage_split_migration_done`) rewrites proven fine-grained negative `_consumption` / `_cost` states into `_return` / `_compensation`. Coarse monthly lumps are left alone when source grain cannot be proven.
 
-```graphql
-getNetMeteringDetails(params: NetMeteringDetailsParams): NetMeteringDetails
-```
+`getNetMeteringDetails(...).monthlyBill.excessGeneration` remains deferred — units/period boundaries are not reconciled against interval data.
 
-- `NetMeteringDetailsParams`: `encryptedAccountId`, `encryptedPremiseId`
-- `NetMeteringDetails`: `isFirstBillGenerated`, `application`, `monthlyBill`
-- `MonthlyBill`: includes `excessGeneration`
-
-This was introspected with a non-generating account, so field availability and the units/time grain of `excessGeneration` remain unverified. It may be monthly billing information rather than the interval return series required by Home Assistant. Do not publish it as grid return until NinjaNife's generating-account capture establishes the response semantics and reconciliation against `getUsageCompare`.
+The default-off `capture_graphql_diagnostics` alpha switch remains available for follow-up captures; it does not change production import.
 
 ---
 

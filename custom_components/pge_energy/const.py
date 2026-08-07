@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
-VERSION = "0.7.5"
+VERSION = "0.8.0"
 PLATFORMS = ["sensor", "binary_sensor"]
 
 # Custom panel (registered once per HA instance, not per entry).
@@ -115,7 +115,9 @@ IMPORT_STATE_SAVE_TIMEOUT = 30.0
 # Recorder ack: verify, then re-issue the write on mismatch (dropped import jobs).
 STATISTICS_ACK_WRITE_ATTEMPTS = 3
 STATISTIC_ID_SUFFIX_CONSUMPTION = "_consumption"
+STATISTIC_ID_SUFFIX_RETURN = "_return"
 STATISTIC_ID_SUFFIX_COST = "_cost"
+STATISTIC_ID_SUFFIX_COMPENSATION = "_compensation"
 STATISTIC_ID_SUFFIX_TEMPERATURE = "_temperature"
 
 # Billing / programs long-term statistic id suffixes (external + mirrored).
@@ -132,12 +134,18 @@ STATISTIC_ID_SUFFIX_LAST_PAYMENT_AMOUNT = "_last_payment_amount"
 # Long-term history for energy/cost/temperature is mirrored onto these entity
 # statistic_ids in addition to external pge_energy:… statistics.
 ENTITY_UNIQUE_ENERGY = "energy"
+ENTITY_UNIQUE_RETURN = "return"
 ENTITY_UNIQUE_COST = "cost"
+ENTITY_UNIQUE_COMPENSATION = "compensation"
 ENTITY_UNIQUE_TEMPERATURE = "latest_temperature"
 ENTITY_UNIQUE_HOURLY_ENERGY = "latest_hourly_energy"
+ENTITY_UNIQUE_HOURLY_RETURN = "hourly_return"
 ENTITY_UNIQUE_HOURLY_COST = "hourly_cost"
+ENTITY_UNIQUE_HOURLY_COMPENSATION = "hourly_compensation"
 ENTITY_UNIQUE_YESTERDAY_ENERGY = "yesterday_energy"
+ENTITY_UNIQUE_YESTERDAY_RETURN = "yesterday_return"
 ENTITY_UNIQUE_YESTERDAY_COST = "yesterday_cost"
+ENTITY_UNIQUE_YESTERDAY_COMPENSATION = "yesterday_compensation"
 ENTITY_UNIQUE_SYNC_STATUS = "sync_status"
 ENTITY_UNIQUE_SYNC_PHASE = "sync_phase"
 ENTITY_UNIQUE_SYNC_PROGRESS = "sync_progress"
