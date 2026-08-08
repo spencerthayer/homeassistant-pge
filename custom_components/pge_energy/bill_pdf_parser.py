@@ -27,9 +27,7 @@ _NUMBER = r"\d[\d,]*(?:\.\d+)?"
 _FOR_DAYS = r"(?:\s*for\s*\d+\s*days)?"
 _TEXT_VARIANT_SEPARATOR = "\n<<<PGE_PLAIN_TEXT_FALLBACK>>>\n"
 
-_PYPDF_FIXED_WIDTH_LOGGER = logging.getLogger(
-    "pypdf._text_extraction._layout_mode._fixed_width_page"
-)
+_PYPDF_FIXED_WIDTH_LOGGER = logging.getLogger("pypdf._text_extraction._layout_mode._fixed_width_page")
 _ACCOUNTED_FOR_PYPDF_WARNINGS = {
     "Rotated text discovered. Output will be incomplete.",
     "Rotated text discovered. Layout will be degraded.",

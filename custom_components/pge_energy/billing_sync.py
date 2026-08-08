@@ -16,7 +16,7 @@ from homeassistant.helpers import aiohttp_client
 
 from .bill_pdf_sync import async_sync_bill_pdfs, index_bill_from_ledger_event, index_bill_from_snapshot
 from .billing_api import PGEBillingApiClient
-from .billing_models import BillingFreshness, EnergyTrackerEstimates, LedgerEvent
+from .billing_models import BillingFreshness, EnergyTrackerEstimates, LedgerEvent, TodSnapshot
 from .billing_statistics import (
     async_import_billing_snapshot,
     async_import_ledger_events,
@@ -134,12 +134,26 @@ async def async_run_billing_sync(
         else:
             _LOGGER.debug("Skipping programs — encrypted premise/SA id missing")
 
-        # 5) Lifetime totals + freshness ----------------------------------
+        # 5) Time of Day pricing snapshot (soft-fail; keeps last good) -------
+        if encrypted_account_number and encrypted_sa_id:
+            tod_snapshot = await _async_fetch_tod_snapshot(
+                client,
+                encrypted_account_number=encrypted_account_number,
+                encrypted_premise_id=encrypted_premise_id or "",
+                encrypted_sa_id=encrypted_sa_id,
+                previous=coordinator.tod_snapshot,
+            )
+            if tod_snapshot is not None:
+                await coordinator.async_set_tod_snapshot(tod_snapshot)
+        else:
+            _LOGGER.debug("Skipping TOD pricing — encrypted account/SA id missing")
+
+        # 6) Lifetime totals + freshness ----------------------------------
         payments, billed = await async_refresh_billing_lifetime_totals(hass, account_key)
         coordinator.lifetime_payments_usd = payments
         coordinator.lifetime_billed_usd = billed
 
-        # 6) Optional bill PDF download / parse / statistics ---------------
+        # 7) Optional bill PDF download / parse / statistics ---------------
         await async_sync_bill_pdfs(hass, coordinator)
 
         success = datetime.now(UTC)
@@ -187,6 +201,42 @@ async def _async_fetch_tracker_estimates(
     ) as exc:
         _LOGGER.debug("Open-cycle estimates unavailable: %s", exc)
         return previous
+
+
+async def _async_fetch_tod_snapshot(
+    client: PGEBillingApiClient,
+    *,
+    encrypted_account_number: str,
+    encrypted_premise_id: str,
+    encrypted_sa_id: str,
+    previous: TodSnapshot | None,
+) -> TodSnapshot | None:
+    """Best-effort portal TOD rates; keep the last-good snapshot on failure.
+
+    The op is speculative (discovery), so any failure here must never abort the
+    rest of billing sync nor blank already-cached rates.
+    """
+    try:
+        fetched = await client.get_tod_pricing(
+            encrypted_account_number,
+            encrypted_premise_id,
+            encrypted_sa_id,
+        )
+    except (
+        PGEGraphQLError,
+        PGESchemaError,
+        PGEConnectionError,
+        PGERateLimitError,
+        PGEAuthorizationError,
+    ) as exc:
+        _LOGGER.debug("TOD pricing unavailable: %s", exc)
+        return previous
+    except Exception as exc:  # noqa: BLE001 - speculative op must never abort billing sync
+        _LOGGER.debug("TOD pricing fetch failed unexpectedly: %s", exc)
+        return previous
+    if not fetched.rates and fetched.basic_rate is None and fetched.savings_total is None:
+        return previous
+    return fetched
 
 
 async def _async_page_ledger(

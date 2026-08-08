@@ -12,6 +12,7 @@ def test_panel_section_anchors_and_resolver_present():
     assert 'glance: "#kpis"' in source
     assert 'usage: "#hero"' in source
     assert 'analytics: "#insights-weather"' in source
+    assert 'tod: "#tod"' in source
     assert 'billing: "#billing"' in source
     assert "export function resolveLandingSelector" in source
     assert "_scheduleDefaultLandingScroll" in source

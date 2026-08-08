@@ -53,7 +53,7 @@ PGE publishes usage **once overnight**, so a "stuck" latest interval near `01:00
 ### HACS (recommended)
 
 1. HACS → **⋯** → **Custom repositories**, add `https://github.com/spencerthayer/homeassistant-pge` with category **Integration**.
-2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.8.2`).
+2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.9.0`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -100,7 +100,8 @@ The integration registers `/pge` and (for admin users, by default) a sidebar ite
 - **Usage** — combined multi-series chart (kWh bars + cost + temperature). Ranges end at Pacific midnight of the current day, so only complete published days appear. Fast-select: **24h / This cycle / Last cycle / 7 days / Month**, with **More…** for `6h`/`12h`/`3mo`/`6mo`/`12mo`/YTD. **Range accounting** scales with the window: totals, averages, `$/kWh`, median/min/max/stdev, and adaptive hour/day/month/year breakdown tables.
 - **Analytics** — weather vs usage (daily kWh vs outdoor °F) and cost intelligence (monthly average rate, billed vs payments).
 - **Billing** — balance, statements, lifetime totals, and programs; when bill PDFs are enabled, **View bill PDF** + **Statement details (PDF)**.
-- Configure → **Panel** customizes the sidebar link (show/hide, title, icon), the admin gate, and the default landing section. Hiding the link does **not** unregister `/pge` — it stays reachable by URL.
+- **Time of Day** — current E-TOU period/rate KPIs with a next-transition countdown, an enrollment badge, and the week schedule grid (Sun–Sat × 24h Pacific) highlighting the current hour. Usage is bucketed by period (energy, cost, share, avg rate) with a **TOD vs Basic** local estimate computed from imported energy × effective rates (labeled estimate unless PGE provides the official savings total). Holiday/off-peak days for the current year are listed in a collapsed note.
+- Configure → **Panel** customizes the sidebar link (show/hide, title, icon), the admin gate, and the default landing section (including **Time of Day**). Hiding the link does **not** unregister `/pge` — it stays reachable by URL.
 
 ### Billing & programs
 
@@ -133,7 +134,7 @@ All long-running services require `entry_id`:
 
 Settings → Devices & Services → PGE Energy → **Configure** (from any account entry):
 
-- **Sync settings** — polling (value + minutes/hours/days unit, default **every 4 hours**), **Sync clock** (Pacific, default **12:00 AM**), correction window, history mode/start, hourly history days, auto backfill, cost/diagnostics, **Import billing & programs** (default on), **Download bill PDFs** (default off), concurrency, and the default-off diagnostic capture below.
+- **Sync settings** — polling (value + minutes/hours/days unit, default **every 4 hours**), **Sync clock** (Pacific, default **12:00 AM**), correction window, history mode/start, hourly history days, auto backfill, cost/diagnostics, **Import billing & programs** (default on), **Download bill PDFs** (default off), **Time of Day rates** (optional overrides for the portal/`basic_service` rate card), concurrency, and the default-off diagnostic capture below.
 - **Panel** — integration-wide chrome for `/pge`: show in sidebar (default on), sidebar title (default `PGE`), icon (default `mdi:transmission-tower`), admin-only (default on), default landing section. Sidebar _order_ stays with Home Assistant's sidebar editor / [Browser Mod](https://github.com/thomasloven/hass-browser_mod).
 - **Update credentials** — email/password only; the account number is read-only and statistic IDs are unchanged.
 - **Manual sync** — force **Refresh now** or **Backfill missing history** (uses your Sync settings). Stays available when the sidebar link is hidden.
@@ -163,9 +164,13 @@ Every usage series is available in **both** forms:
 | Current day / Yesterday energy & cost      | Pacific-local day totals                                  |
 | Last successful update / Data age          | Sync freshness                                            |
 | Latest available interval                  | Newest PGE interval end                                   |
+| Time of Day period / rate                  | Current E-TOU period (`off_peak`/`mid_peak`/`on_peak`) + ¢/kWh rate (v0.9.0+) |
+| TOD vs Basic savings                      | Cumulative $ saved vs basic rate (v0.9.0+)                |
 | Authentication expiration / Last API error | Diagnostics (disabled by default)                         |
 
 Billing sensors expose `external_statistic_id` and `entity_statistic_id` for automations and custom cards. Full billing/programs sensor and PDF-statistics catalogs: [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md).
+
+Time-of-Day rates are resolved per poll: account-specific overrides → last portal rate card (best-effort GraphQL) → built-in defaults. Set overrides under Configure → **Sync settings** → **Time of Day rates** (`tod_rate_off_peak` / `_mid_peak` / `_on_peak` / `_basic_service`).
 
 ---
 

@@ -225,7 +225,9 @@ class TestPDFTextExtraction:
         with caplog.at_level(logging.WARNING, logger=_PYPDF_FIXED_WIDTH_LOGGER):
             extract_pdf_text(data)
 
-        rotated_messages = [record.getMessage() for record in caplog.records if "Rotated text discovered" in record.getMessage()]
+        rotated_messages = [
+            record.getMessage() for record in caplog.records if "Rotated text discovered" in record.getMessage()
+        ]
         assert rotated_messages == []
 
     def test_plain_variant_carries_form_xobject_text(self):

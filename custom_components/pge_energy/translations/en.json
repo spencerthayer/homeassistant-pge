@@ -97,7 +97,11 @@
           "bill_pdf_form": "Bill PDF form",
           "bill_pdf_retention": "Bill PDF file retention",
           "bill_pdf_rolling_count": "Bill PDF rolling count",
-          "backfill_concurrency": "Backfill concurrency"
+          "backfill_concurrency": "Backfill concurrency",
+          "tod_rate_off_peak": "TOD off-peak rate (USD/kWh)",
+          "tod_rate_mid_peak": "TOD mid-peak rate (USD/kWh)",
+          "tod_rate_on_peak": "TOD on-peak rate (USD/kWh)",
+          "tod_rate_basic_service": "Basic service rate (USD/kWh)"
         },
         "data_description": {
           "polling_interval": "How often to refresh recent usage. Default is every 4 hours on the Pacific clock grid.",
@@ -116,7 +120,11 @@
           "bill_pdf_form": "Portal PDF layout: detailed (itemized) or simplified.",
           "bill_pdf_retention": "Which downloaded PDF files to keep on disk. Normalized records and recorder history are kept independently.",
           "bill_pdf_rolling_count": "When retention is Rolling count, keep this many newest statement PDF files.",
-          "backfill_concurrency": "Parallel day fetches for the hourly tier (1–4)."
+          "backfill_concurrency": "Parallel day fetches for the hourly tier (1–4).",
+          "tod_rate_off_peak": "Leave blank to use the last portal rate, then the built-in default (0.0893).",
+          "tod_rate_mid_peak": "Leave blank to use the last portal rate, then the built-in default (0.1670).",
+          "tod_rate_on_peak": "Leave blank to use the last portal rate, then the built-in default (0.4313).",
+          "tod_rate_basic_service": "Flat Basic (Schedule 32/34) rate used for the counterfactual. Leave blank to use portal/fallback."
         }
       },
       "credentials": {
@@ -193,7 +201,10 @@
       "bill_pdf_green_future_charge": { "name": "Bill PDF Green Future charge" },
       "bill_pdf_taxes_and_investments": { "name": "Bill PDF taxes and investments" },
       "bill_pdf_local_tax": { "name": "Bill PDF local tax" },
-      "bill_pdf_public_purpose_charge": { "name": "Bill PDF public purpose charge" }
+      "bill_pdf_public_purpose_charge": { "name": "Bill PDF public purpose charge" },
+      "tod_period": { "name": "Time of Day period" },
+      "tod_price": { "name": "Time of Day rate" },
+      "tod_vs_basic_savings": { "name": "TOD vs Basic savings" }
     },
     "binary_sensor": {
       "autopay": { "name": "Auto Pay" },

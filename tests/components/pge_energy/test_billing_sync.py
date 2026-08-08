@@ -14,6 +14,7 @@ from custom_components.pge_energy.billing_models import (
     LedgerEvent,
     LedgerEventType,
     ProgramsSnapshot,
+    TodSnapshot,
 )
 from custom_components.pge_energy.billing_sync import async_run_billing_sync
 from custom_components.pge_energy.const import CONF_INCLUDE_BILLING
@@ -46,6 +47,8 @@ def _coordinator(*, include_billing: bool = True) -> MagicMock:
     coord.account_snapshot = None
     coord.programs_snapshot = None
     coord.tracker_estimates = None
+    coord.tod_snapshot = None
+    coord.async_set_tod_snapshot = AsyncMock()
     coord.lifetime_payments_usd = None
     coord.lifetime_billed_usd = None
     return coord
@@ -92,11 +95,17 @@ async def test_happy_path_persists_ids_and_checkpoints():
         projected_min_amount=186.3,
         projected_max_amount=227.7,
     )
+    tod = TodSnapshot(
+        rates={"off_peak": 0.0893, "mid_peak": 0.1670, "on_peak": 0.4313},
+        basic_rate=0.10,
+        fetched_at=datetime(2026, 7, 13, 7, tzinfo=UTC),
+    )
     client = MagicMock()
     client.get_account_detail = AsyncMock(return_value=snap)
     client.get_payment_history_page = AsyncMock(return_value=(events, 1))
     client.get_programs = AsyncMock(return_value=programs)
     client.get_energy_tracker_estimates = AsyncMock(return_value=estimates)
+    client.get_tod_pricing = AsyncMock(return_value=tod)
 
     with (
         patch(
@@ -139,6 +148,8 @@ async def test_happy_path_persists_ids_and_checkpoints():
     assert coord.import_store.billing_history_complete is True
     assert coord.billing_freshness.last_error is None
     assert coord.billing_freshness.last_success is not None
+    client.get_tod_pricing.assert_awaited_once()
+    coord.async_set_tod_snapshot.assert_awaited_once_with(tod)
     client.get_payment_history_page.assert_awaited()
     assert client.get_payment_history_page.await_args.kwargs["account_number"] == "0000000000"
     import_ledger.assert_awaited_once()
@@ -151,6 +162,11 @@ async def test_tracker_failure_keeps_previous_and_continues():
     hass = MagicMock()
     previous = EnergyTrackerEstimates(details_available=True, billing_cycle_day=16)
     coord.tracker_estimates = previous
+    previous_tod = TodSnapshot(
+        rates={"off_peak": 0.09, "mid_peak": 0.16, "on_peak": 0.42},
+        basic_rate=0.10,
+    )
+    coord.tod_snapshot = previous_tod
     snap = AccountSnapshot(
         account_number="0000000000",
         encrypted_account_number="enc-a",
@@ -163,6 +179,7 @@ async def test_tracker_failure_keeps_previous_and_continues():
     client.get_payment_history_page = AsyncMock(return_value=([], 0))
     client.get_programs = AsyncMock(return_value=ProgramsSnapshot())
     client.get_energy_tracker_estimates = AsyncMock(side_effect=PGEGraphQLError("nope"))
+    client.get_tod_pricing = AsyncMock(side_effect=PGEGraphQLError("nope"))
 
     with (
         patch(
@@ -195,6 +212,60 @@ async def test_tracker_failure_keeps_previous_and_continues():
     assert coord.tracker_estimates is previous
     assert coord.billing_freshness.last_error is None
     client.get_programs.assert_awaited()
+    client.get_tod_pricing.assert_awaited_once()
+    coord.async_set_tod_snapshot.assert_awaited_once_with(previous_tod)
+
+
+@pytest.mark.asyncio
+async def test_empty_tod_snapshot_keeps_previous():
+    coord = _coordinator()
+    hass = MagicMock()
+    previous_tod = TodSnapshot(rates={"off_peak": 0.09}, basic_rate=0.10)
+    coord.tod_snapshot = previous_tod
+    snap = AccountSnapshot(
+        account_number="0000000000",
+        encrypted_account_number="enc-a",
+        encrypted_person_id="enc-p",
+        encrypted_premise_id="enc-prem",
+        encrypted_sa_id="enc-sa",
+    )
+    client = MagicMock()
+    client.get_account_detail = AsyncMock(return_value=snap)
+    client.get_payment_history_page = AsyncMock(return_value=([], 0))
+    client.get_programs = AsyncMock(return_value=ProgramsSnapshot())
+    client.get_energy_tracker_estimates = AsyncMock(return_value=EnergyTrackerEstimates())
+    client.get_tod_pricing = AsyncMock(return_value=TodSnapshot())
+
+    with (
+        patch(
+            "custom_components.pge_energy.billing_sync.aiohttp_client.async_get_clientsession",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.pge_energy.billing_sync.PGEBillingApiClient",
+            return_value=client,
+        ),
+        patch(
+            "custom_components.pge_energy.billing_sync.async_import_billing_snapshot",
+            new=AsyncMock(),
+        ),
+        patch(
+            "custom_components.pge_energy.billing_sync.async_import_programs_metrics",
+            new=AsyncMock(),
+        ),
+        patch(
+            "custom_components.pge_energy.billing_sync.async_refresh_billing_lifetime_totals",
+            new=AsyncMock(return_value=(1.0, 2.0)),
+        ),
+        patch(
+            "custom_components.pge_energy.billing_sync.async_save_import_state",
+            new=AsyncMock(),
+        ),
+    ):
+        await async_run_billing_sync(hass, coord)
+
+    client.get_tod_pricing.assert_awaited_once()
+    coord.async_set_tod_snapshot.assert_awaited_once_with(previous_tod)
 
 
 @pytest.mark.asyncio

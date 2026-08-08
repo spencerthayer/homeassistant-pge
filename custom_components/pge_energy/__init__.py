@@ -187,6 +187,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
     # that deadlocks HA bootstrap (entry waits on I/O; bootstrap waits on entry).
     async def _async_post_setup() -> None:
         try:
+            await coordinator.async_start_tod()
             await coordinator.async_config_entry_first_refresh()
         except ConfigEntryAuthFailed:
             _LOGGER.error("PGE authentication failed during initial refresh — update credentials")
@@ -680,6 +681,7 @@ async def _async_retry_failed_ranges(
 async def async_unload_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
     coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if coordinator is not None:
+        await coordinator.async_stop_tod()
         await coordinator.async_cancel_backfill()
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

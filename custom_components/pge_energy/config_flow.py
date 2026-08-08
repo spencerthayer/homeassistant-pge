@@ -60,6 +60,10 @@ from .const import (
     CONF_POLLING_INTERVAL_UNIT,
     CONF_REFRESH_CREDENTIAL,
     CONF_SYNC_LOCAL_TIME,
+    CONF_TOD_RATE_BASIC_SERVICE,
+    CONF_TOD_RATE_MID_PEAK,
+    CONF_TOD_RATE_OFF_PEAK,
+    CONF_TOD_RATE_ON_PEAK,
     CONF_TOKEN_EXPIRES_AT,
     DEFAULT_AUTO_BACKFILL,
     DEFAULT_BACKFILL_CONCURRENCY,
@@ -446,6 +450,23 @@ class PGEConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
 
+def _clean_tod_rate(raw: Any) -> float | None:
+    """Coerce an optional TOD rate override; empty/unset/None → None."""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return None
+        try:
+            raw = float(raw)
+        except ValueError:
+            return None
+    if isinstance(raw, (int, float)) and raw > 0:
+        return float(raw)
+    return None
+
+
 def _options_schema(entry: config_entries.ConfigEntry) -> vol.Schema:
     history_mode = get_entry_option(entry, CONF_HISTORY_MODE, DEFAULT_HISTORY_MODE)
     history_mode_value = history_mode.value if isinstance(history_mode, HistoryMode) else str(history_mode)
@@ -591,6 +612,52 @@ def _options_schema(entry: config_entries.ConfigEntry) -> vol.Schema:
                     min=1,
                     max=MAX_BACKFILL_CONCURRENCY,
                     mode=NumberSelectorMode.BOX,
+                )
+            ),
+            # Optional Time of Day manual rate overrides. Blank = use portal
+            # cache, then offline defaults (never blank on a sync failure).
+            vol.Optional(
+                CONF_TOD_RATE_OFF_PEAK,
+                default=get_entry_option(entry, CONF_TOD_RATE_OFF_PEAK, None),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0.01,
+                    max=10.0,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="USD/kWh",
+                )
+            ),
+            vol.Optional(
+                CONF_TOD_RATE_MID_PEAK,
+                default=get_entry_option(entry, CONF_TOD_RATE_MID_PEAK, None),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0.01,
+                    max=10.0,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="USD/kWh",
+                )
+            ),
+            vol.Optional(
+                CONF_TOD_RATE_ON_PEAK,
+                default=get_entry_option(entry, CONF_TOD_RATE_ON_PEAK, None),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0.01,
+                    max=10.0,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="USD/kWh",
+                )
+            ),
+            vol.Optional(
+                CONF_TOD_RATE_BASIC_SERVICE,
+                default=get_entry_option(entry, CONF_TOD_RATE_BASIC_SERVICE, None),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0.01,
+                    max=10.0,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="USD/kWh",
                 )
             ),
         }
@@ -790,6 +857,10 @@ class PGEOptionsFlow(config_entries.OptionsFlow):
                         user_input.get(CONF_BILL_PDF_ROLLING_COUNT, DEFAULT_BILL_PDF_ROLLING_COUNT)
                     ),
                     CONF_BACKFILL_CONCURRENCY: int(user_input[CONF_BACKFILL_CONCURRENCY]),
+                    CONF_TOD_RATE_OFF_PEAK: _clean_tod_rate(user_input.get(CONF_TOD_RATE_OFF_PEAK)),
+                    CONF_TOD_RATE_MID_PEAK: _clean_tod_rate(user_input.get(CONF_TOD_RATE_MID_PEAK)),
+                    CONF_TOD_RATE_ON_PEAK: _clean_tod_rate(user_input.get(CONF_TOD_RATE_ON_PEAK)),
+                    CONF_TOD_RATE_BASIC_SERVICE: _clean_tod_rate(user_input.get(CONF_TOD_RATE_BASIC_SERVICE)),
                 }
                 return self.async_create_entry(title="", data=options)
 
