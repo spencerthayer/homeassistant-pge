@@ -25,6 +25,20 @@
 
 - [x] Add always-on Cursor rule: HITL required to merge any PR (no auto-merge without permission)
 
+## TOD Pricing Hub — issue #11 (branch `issue-11` → PR)
+
+- [x] `tod_schedule.py`: offline E-TOU engine — 3 periods, weekday Pacific windows (off 21-7, mid 7-17, on 17-21), observed/fixed holidays
+- [x] `tod_pricing.py`: default rate card (MIT-attributed), override → portal snapshot → defaults resolution, transition coordinator
+- [x] Coordinator TOD transition watchdog + additive `tod_snapshot` store persistence (no storage version bump)
+- [x] `billing_sync` step 5 `_async_fetch_tod_snapshot`: speculative `getTimeOfDayPricingDetails`, soft-fail on any exception, re-persist last-good
+- [x] Sensors `tod_period` / `tod_price` / `tod_vs_basic_savings` + WS `tod` payload roles; options override fields
+- [x] Panel `#tod` section (schedule grid, per-period usage, local TOD vs Basic estimate + official savings) + `tod` landing section
+- [x] Unit + source-assertion tests; full suite green; live HA UAT `/pge#tod` populated (offline defaults when portal TOD op soft-fails)
+- [x] Panel harden: `TOD_PERIODS` import, ISO `next_transition_at` Date coerce, `_asDate` for pacific helpers, `_renderTod` error boundary, avg rate USD→¢
+- [x] Docs/README (DATA_CONTRACT resolution chain, ARCHITECTURE modules, README panel/sensors/options); VERSION `0.9.0` + frontend `?v=0.9.0`
+- [x] Open PR [#18](https://github.com/spencerthayer/homeassistant-pge/pull/18) from `issue-11`; CoPilot-PR-Loop clean review (iteration 9, review 4888386887)
+- [ ] HITL merge PR #18; then HACS release `v0.9.0` after green CI on merge SHA
+
 ## Active agents
 
 - None

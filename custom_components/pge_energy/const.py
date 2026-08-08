@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
-VERSION = "0.8.2"
+VERSION = "0.9.0"
 PLATFORMS = ["sensor", "binary_sensor"]
 
 # Custom panel (registered once per HA instance, not per entry).
@@ -59,6 +59,79 @@ class PollingIntervalUnit(StrEnum):
     MINUTES = "minutes"
     HOURS = "hours"
     DAYS = "days"
+
+
+class TodPeriod(StrEnum):
+    """Named Time of Day periods.
+
+    ``E_TOU_PERIODS`` are the three periods PGE's Oregon E-TOU tariff uses
+    (off-peak / mid-peak / on-peak). Other rate plans may expose additional
+    named periods via the portal (reserved below); they are never produced by
+    the offline schedule.
+    """
+
+    OFF_PEAK = "off_peak"
+    MID_PEAK = "mid_peak"
+    ON_PEAK = "on_peak"
+    PEAK = "peak"
+    HIGH_PEAK = "high_peak"
+    SUMMER_PEAK = "summer_peak"
+    WINTER_PEAK = "winter_peak"
+    CRITICAL_PEAK = "critical_peak"
+
+
+# The three E-TOU periods the offline schedule engine can produce.
+E_TOU_PERIODS: tuple[str, ...] = (
+    TodPeriod.OFF_PEAK.value,
+    TodPeriod.MID_PEAK.value,
+    TodPeriod.ON_PEAK.value,
+)
+
+# ---------------------------------------------------------------
+# Time of Day feature flags + entity unique IDs
+# ---------------------------------------------------------------
+ENABLE_TOD_SENSORS = True
+
+# TOD sensors live on the same per-account device as usage/billing.
+ENTITY_UNIQUE_TOD_PERIOD = "tod_period"
+ENTITY_UNIQUE_TOD_PRICE = "tod_price"
+ENTITY_UNIQUE_TOD_VS_BASIC_SAVINGS = "tod_vs_basic_savings"
+
+# Per-entry TOD configuration (options flow / WS save). Blank/unset overrides
+# fall through to portal cache then defaults.
+CONF_TOD_RATE_OFF_PEAK = "tod_rate_off_peak"
+CONF_TOD_RATE_MID_PEAK = "tod_rate_mid_peak"
+CONF_TOD_RATE_ON_PEAK = "tod_rate_on_peak"
+CONF_TOD_RATE_BASIC_SERVICE = "tod_rate_basic_service"
+
+# rate_source attribute values on the TOD sensors.
+RATE_SOURCE_OVERRIDE = "override"
+RATE_SOURCE_PORTAL = "portal"
+RATE_SOURCE_DEFAULT = "default"
+
+# ---------------------------------------------------------------
+# Time of Day default rates (offline fallback).
+#
+# The E-TOU calendar (weekday windows, weekend/holiday off-peak days, observed
+# holidays) and the default prices are adapted from the MIT-licensed
+# "PGE Time-of-Day Price" Home Assistant integration by LJspice
+# (https://github.com/LJspice/PGE-Pricing-HASS), licensed under the MIT License.
+# These defaults (marketing FAQ rates) are only used when no portal rate card is
+# discoverable and the user has not configured an override — best-effort and
+# labelled "defaults" (not "official") in the UI.
+# ---------------------------------------------------------------
+DEFAULT_TOD_RATES: dict[str, float] = {
+    TodPeriod.OFF_PEAK.value: 0.0893,
+    TodPeriod.MID_PEAK.value: 0.1670,
+    TodPeriod.ON_PEAK.value: 0.4313,
+}
+# Flat "Basic" (Schedule 32/34) counterfactual price used by the local estimate
+# when the portal does not expose a Basic rate card. Fallback estimate.
+DEFAULT_BASIC_RATE = 0.10
+
+# Portal rate-plan identifiers observed in the GQL responses.
+RATE_PLAN_TOU = "TOU"
+RATE_PLAN_BASIC = "BASIC"
 
 
 # UI default: every 4 hours on the Pacific clock grid starting at midnight

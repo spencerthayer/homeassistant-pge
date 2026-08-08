@@ -36,6 +36,10 @@ from .const import (
     CONF_POLLING_INTERVAL,
     CONF_POLLING_INTERVAL_UNIT,
     CONF_SYNC_LOCAL_TIME,
+    CONF_TOD_RATE_BASIC_SERVICE,
+    CONF_TOD_RATE_MID_PEAK,
+    CONF_TOD_RATE_OFF_PEAK,
+    CONF_TOD_RATE_ON_PEAK,
     DEFAULT_AUTO_BACKFILL,
     DEFAULT_BILL_PDF_FORM,
     DEFAULT_BILL_PDF_RETENTION,
@@ -85,6 +89,9 @@ from .const import (
     ENTITY_UNIQUE_SYNC_PROGRESS,
     ENTITY_UNIQUE_SYNC_STATUS,
     ENTITY_UNIQUE_TEMPERATURE,
+    ENTITY_UNIQUE_TOD_PERIOD,
+    ENTITY_UNIQUE_TOD_PRICE,
+    ENTITY_UNIQUE_TOD_VS_BASIC_SAVINGS,
     ENTITY_UNIQUE_YESTERDAY_COMPENSATION,
     ENTITY_UNIQUE_YESTERDAY_COST,
     ENTITY_UNIQUE_YESTERDAY_ENERGY,
@@ -158,6 +165,9 @@ _SENSOR_ROLES: dict[str, str] = {
     "est_next_bill_max": ENTITY_UNIQUE_EST_NEXT_BILL_MAX,
     "billing_cycle_day": ENTITY_UNIQUE_BILLING_CYCLE_DAY,
     "billing_cycle_total_days": ENTITY_UNIQUE_BILLING_CYCLE_TOTAL_DAYS,
+    "tod_period": ENTITY_UNIQUE_TOD_PERIOD,
+    "tod_price": ENTITY_UNIQUE_TOD_PRICE,
+    "tod_vs_basic_savings": ENTITY_UNIQUE_TOD_VS_BASIC_SAVINGS,
 }
 
 _BINARY_ROLES: dict[str, str] = {
@@ -257,11 +267,39 @@ def _account_payload(hass: HomeAssistant, entry_id: str, coordinator: PGECoordin
             "bill_pdf_rolling_count": int(
                 get_entry_option(entry, CONF_BILL_PDF_ROLLING_COUNT, DEFAULT_BILL_PDF_ROLLING_COUNT)
             ),
+            "tod_rate_off_peak": get_entry_option(entry, CONF_TOD_RATE_OFF_PEAK, None),
+            "tod_rate_mid_peak": get_entry_option(entry, CONF_TOD_RATE_MID_PEAK, None),
+            "tod_rate_on_peak": get_entry_option(entry, CONF_TOD_RATE_ON_PEAK, None),
+            "tod_rate_basic_service": get_entry_option(entry, CONF_TOD_RATE_BASIC_SERVICE, None),
         },
         "statistic_ids": _statistic_ids(account_key),
         "bill_pdf_statistic_ids": _bill_pdf_statistic_ids(account_key),
         "bill_pdf": dict(coordinator.bill_pdf_summary or {}),
+        "tod": _tod_payload(coordinator),
         "entity_ids": _entity_ids(hass, account_key),
+    }
+
+
+@callback
+def _tod_payload(coordinator: PGECoordinator) -> dict[str, Any]:
+    """Effective E-TOU period/rates/sources + portal snapshot for the panel."""
+    tod = coordinator.tod
+    rate_card = tod.rate_card
+    snapshot = coordinator.tod_snapshot
+    return {
+        "period": tod.period.value,
+        "is_holiday": tod.is_holiday,
+        "is_weekend": tod.is_weekend,
+        "next_transition_at": (tod.next_transition_at.isoformat() if tod.next_transition_at is not None else None),
+        "rate_source": tod.current_rate_source,
+        "rates": dict(rate_card.rates),
+        "sources": dict(rate_card.sources),
+        "basic_rate": rate_card.basic_rate,
+        "basic_rate_source": rate_card.basic_source,
+        "savings_total": (snapshot.savings_total if snapshot is not None else None),
+        "portal_fetched_at": (
+            snapshot.fetched_at.isoformat() if snapshot is not None and snapshot.fetched_at else None
+        ),
     }
 
 

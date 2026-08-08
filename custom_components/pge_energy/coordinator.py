@@ -19,6 +19,7 @@ from .billing_models import (
     BillingFreshness,
     EnergyTrackerEstimates,
     ProgramsSnapshot,
+    TodSnapshot,
 )
 from .billing_sync import async_run_billing_sync
 from .const import (
@@ -75,6 +76,7 @@ from .sync_progress import (
     snapshot_to_store_fields,
 )
 from .time_util import iter_local_days, local_day_bounds, today_local
+from .tod_pricing import TodPricingCoordinator, tod_snapshot_from_dict, tod_snapshot_to_dict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -158,6 +160,8 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.lifetime_payments_usd: float | None = None
         self.lifetime_billed_usd: float | None = None
         self.bill_pdf_summary: dict[str, Any] = {}
+        # Last-good portal Time of Day pricing snapshot (soft-fail, never blanked).
+        self.tod_snapshot: TodSnapshot | None = None
         # async_update_entry for token persistence must not trigger options reload.
         self._skip_reload_on_next_update = False
         # Debounce reauth flows so a flapping Cognito blip does not spam the UI.
@@ -170,6 +174,9 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             name=DOMAIN,
             update_interval=resolve_polling_timedelta(entry),
         )
+
+        # Time of Day pricing coordinator (transition wake-ups + rate card).
+        self.tod = TodPricingCoordinator(hass, entry, self)
 
     @property
     def has_retained_state(self) -> bool:
@@ -390,6 +397,7 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._import_store = await async_load_import_state(self.hass, self.entry.entry_id)
         if not self._import_store.account_key:
             self._import_store.account_key = self.account_key
+        self.tod_snapshot = tod_snapshot_from_dict(self._import_store.tod_snapshot)
         if self._import_store.sync_status:
             self._sync_progress = snapshot_from_store_fields(self._import_store)
         # Never restore a live-looking status with no task behind it. Resume re-enters
@@ -399,6 +407,23 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.fail_sync_job("Interrupted by restart")
             self._apply_sync_progress_to_store()
         await self.async_refresh_lifetime_totals()
+
+    async def async_start_tod(self) -> None:
+        """Start the TOD transition coordinator (period/rate recompute + wake-up)."""
+        try:
+            await self.tod.async_start()
+        except Exception as exc:  # noqa: BLE001 - TOD is soft-fail, never breaks setup
+            _LOGGER.warning("TOD coordinator start failed for %s: %s", self.account_key[:8], exc)
+
+    async def async_stop_tod(self) -> None:
+        await self.tod.async_stop()
+
+    async def async_set_tod_snapshot(self, snapshot: TodSnapshot | None) -> None:
+        """Replace the portal TOD snapshot, persist, and refresh the rate card."""
+        self.tod_snapshot = snapshot
+        self._import_store.tod_snapshot = tod_snapshot_to_dict(snapshot)
+        await async_save_import_state(self.hass, self.entry.entry_id, self._import_store, critical=False)
+        await self.tod.async_refresh()
 
     def update_sync_progress(
         self,

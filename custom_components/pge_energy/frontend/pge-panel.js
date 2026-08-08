@@ -10,7 +10,10 @@ import {
   RANGE_PRESET_MORE,
   RANGE_PRESET_ORDER,
   RANGE_PRESET_PRIMARY,
+  TOD_PERIOD_LABELS,
+  TOD_PERIODS,
   accountingPlan,
+  bucketTodByPeriod,
   clampToPublishedEnd,
   computeUsageAccounting,
   countSeriesPoints,
@@ -18,6 +21,7 @@ import {
   formatRangeLabel,
   invalidateStatsCache,
   minPointsForPreset,
+  pacificParts,
   pacificWeekStartUtc,
   pacificYmd,
   publishedDataEnd,
@@ -27,7 +31,10 @@ import {
   stateDisplay,
   stateNumber,
   sumStatisticChange,
-} from "./data.js?v=0.8.2";
+  todHolidays,
+  todPeriodForPacific,
+  todWeekDays,
+} from "./data.js?v=0.9.0";
 import {
   createBarChart,
   createLineChart,
@@ -37,15 +44,16 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.8.2";
-import { sparklineSvg } from "./svg-helpers.js?v=0.8.2";
-import { applyPanelTheme } from "./theme.js?v=0.8.2";
+} from "./charts.js?v=0.9.0";
+import { sparklineSvg } from "./svg-helpers.js?v=0.9.0";
+import { applyPanelTheme } from "./theme.js?v=0.9.0";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
   glance: "#kpis",
   usage: "#hero",
   analytics: "#insights-weather",
+  tod: "#tod",
   billing: "#billing",
 };
 
@@ -78,6 +86,9 @@ const STYLE = `
   --pge-status-good: var(--success-color, #1baf7a);
   --pge-status-warn: var(--warning-color, #eb6834);
   --pge-status-critical: var(--error-color, #e34948);
+  --pge-tod-off: var(--success-color, #1baf7a);
+  --pge-tod-mid: var(--warning-color, #eb6834);
+  --pge-tod-on: var(--error-color, #e34948);
   color-scheme: light;
 }
 :host *, :host *::before, :host *::after { box-sizing: border-box; }
@@ -652,6 +663,76 @@ details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 
   .rollup-caption { font-size: 0.78rem; }
   .entity-row { flex-wrap: wrap; gap: 4px 12px; }
 }
+
+  /* ---- Time of Day hub (#tod) ---- */
+  .tod-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .tod-source { font-size: 0.78rem; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600;
+    border: 1px solid var(--divider-color);
+  }
+  .badge.on { color: var(--pge-status-good); border-color: var(--pge-status-good); }
+  .badge.off { color: var(--secondary-text-color); }
+  .kpi.tod-off_peak { border-left-color: var(--pge-tod-off); }
+  .kpi.tod-mid_peak { border-left-color: var(--pge-tod-mid); }
+  .kpi.tod-on_peak { border-left-color: var(--pge-tod-on); }
+  .tod-schedule { margin-top: 16px; }
+  .tod-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 8px; font-size: 0.78rem; }
+  .tod-legend .legend { display: inline-flex; align-items: center; gap: 5px; color: var(--secondary-text-color); }
+  .tod-legend .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .legend.off_peak i { background: var(--pge-tod-off); }
+  .legend.mid_peak i { background: var(--pge-tod-mid); }
+  .legend.on_peak i { background: var(--pge-tod-on); }
+  .tod-grid {
+    display: grid;
+    grid-template-columns: 52px repeat(24, 1fr);
+    gap: 2px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .tod-grid-head { font-size: 0.68rem; color: var(--secondary-text-color); text-align: center; align-self: end; }
+  .tod-grid-label { font-size: 0.72rem; color: var(--secondary-text-color); align-self: center; padding-right: 4px; white-space: nowrap; }
+  .tod-cell { height: 18px; border-radius: 3px; min-width: 12px; }
+  .tod-cell.off_peak { background: var(--pge-tod-off); }
+  .tod-cell.mid_peak { background: var(--pge-tod-mid); }
+  .tod-cell.on_peak { background: var(--pge-tod-on); }
+  .tod-cell.now {
+    outline: 2px solid var(--primary-text-color);
+    outline-offset: -2px;
+    box-shadow: 0 0 0 1px var(--card-background-color, var(--primary-background-color));
+  }
+  details.tod-holidays { margin-top: 8px; }
+  details.tod-holidays > summary { cursor: pointer; font-size: 0.85rem; color: var(--secondary-text-color); }
+  .tod-holidays-body { margin-top: 6px; padding-left: 4px; font-size: 0.82rem; }
+  .tod-usage { margin-top: 16px; }
+  .tod-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 10px; }
+  .tod-table th, .tod-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--divider-color); }
+  .tod-table .num { text-align: right; }
+  .tod-table thead th { color: var(--secondary-text-color); font-weight: 600; }
+  .tod-table tfoot td { font-weight: 600; }
+  .tod-share-bar {
+    display: flex; width: 100%; height: 14px; border-radius: 7px; overflow: hidden;
+    margin-top: 10px; gap: 2px;
+  }
+  .tod-share-seg { height: 100%; }
+  .tod-share-seg.off_peak { background: var(--pge-tod-off); }
+  .tod-share-seg.mid_peak { background: var(--pge-tod-mid); }
+  .tod-share-seg.on_peak { background: var(--pge-tod-on); }
+  .tod-counterfactual {
+    margin-top: 12px; padding: 12px; border-radius: 10px;
+    border: 1px solid var(--divider-color);
+    border-left-width: 3px; border-left-style: solid; border-left-color: var(--pge-series-savings);
+    background: color-mix(
+      in srgb,
+      var(--primary-text-color) 5%,
+      var(--card-background-color, var(--primary-background-color, transparent))
+    );
+  }
+  .tod-counterfactual.official { border-left-color: var(--pge-status-good); }
+  .tod-counterfactual .label { font-size: 0.75rem; color: var(--secondary-text-color); }
+  .tod-counterfactual .value { font-size: 1.3rem; font-weight: 650; margin: 4px 0; }
+  .tod-counterfactual .delta { font-size: 0.75rem; color: var(--secondary-text-color); }
 `;
 
 class PgeEnergyPanel extends HTMLElement {
@@ -867,6 +948,7 @@ class PgeEnergyPanel extends HTMLElement {
         <p class="muted" style="grid-column:1/-1;margin:0">Gray cells are days without an imported sample in recorder — not a full calendar year of PGE data.</p>
       </section>
       <section class="card" id="billing"></section>
+      <section class="card" id="tod"></section>
       <section class="card" id="programs"></section>
       <section class="card">
         <details class="diagnostics" id="diagnostics"><summary>Diagnostics</summary><div id="diag-body"></div></details>
@@ -893,6 +975,7 @@ class PgeEnergyPanel extends HTMLElement {
     await this._renderDataGaps();
     await this._renderHero();
     await this._renderInsights();
+    await this._renderTod();
     this._renderBillingPrograms();
     this._renderDiagnostics();
   }
@@ -2362,6 +2445,266 @@ class PgeEnergyPanel extends HTMLElement {
         <div class="usage-accounting-body">${this._renderSummaryPairs(rows)}</div>
       </details>
     `;
+  }
+
+  // -------------------------------------------------------------------------
+  // Time of Day hub (#tod)
+  // -------------------------------------------------------------------------
+
+  _todCountdown(iso) {
+    if (!iso) return "—";
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return "—";
+    const diff = t - Date.now();
+    if (diff <= 0) return "now";
+    const mins = Math.round(diff / 60000);
+    if (mins < 60) return `${mins}m`;
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    if (h < 24) return `${h}h ${m}m`;
+    return `${Math.floor(h / 24)}d ${h % 24}h`;
+  }
+
+  _todWeekGrid() {
+    const now = new Date();
+    const days = todWeekDays(now);
+    const nowParts = pacificParts(now);
+    let html = '<div class="tod-grid">';
+    html += '<div class="tod-grid-head tod-corner"></div>';
+    for (let h = 0; h < 24; h++) {
+      html += `<div class="tod-grid-head tod-hour">${h}</div>`;
+    }
+    for (const day of days) {
+      html += `<div class="tod-grid-label">${this._escape(day.name)}</div>`;
+      for (let h = 0; h < 24; h++) {
+        const period = todPeriodForPacific(day.ymd, h);
+        const isNow = day.ymd === nowParts.ymd && h === nowParts.hour;
+        html += `<div class="tod-cell ${period}${isNow ? " now" : ""}" title="${this._escape(
+          day.name
+        )} ${String(h).padStart(2, "0")}:00 Pacific — ${TOD_PERIOD_LABELS[period]}"></div>`;
+      }
+    }
+    html += "</div>";
+    return html;
+  }
+
+  _todHolidayNote() {
+    const year = Number(pacificYmd().slice(0, 4));
+    const holidays = [...todHolidays(year)].sort();
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: "UTC",
+      month: "short",
+      day: "numeric",
+    });
+    const labels = holidays.map((ymd) => {
+      const [y, m, d] = ymd.split("-").map(Number);
+      return fmt.format(new Date(Date.UTC(y, m - 1, d)));
+    });
+    return `
+      <details class="tod-holidays" data-persist="tod_holidays"${this._detailsOpenAttr("tod_holidays")}>
+        <summary>Off-peak days & holidays ${year}</summary>
+        <div class="tod-holidays-body">
+          <p class="muted">Off-peak all day on Saturdays, Sundays, and observed holidays. Weekday windows (Pacific): off-peak 12am–7am and 9pm–12am, mid-peak 7am–5pm, on-peak 5pm–9pm.</p>
+          <p>${labels.join(" · ")}</p>
+        </div>
+      </details>
+    `;
+  }
+
+  /** Hourly analysis window for by-period totals — capped so huge ranges stay light. */
+  _todAnalysisWindow(range) {
+    const capMs = 60 * 24 * 60 * 60 * 1000; // 60 days of hourly = 1440 pts, no downsampling.
+    const span = range.end.getTime() - range.start.getTime();
+    if (span <= capMs) return { ...range, capped: false };
+    return { start: new Date(range.end.getTime() - capMs), end: range.end, capped: true };
+  }
+
+  async _todUsageByPeriod() {
+    const ids = this._account.statistic_ids;
+    const range = this._resolveChartRange();
+    const window = this._todAnalysisWindow(range);
+    const [kwhSeries, costSeries] = await Promise.all([
+      fetchStatisticSeries(this._hass, ids.consumption, {
+        start: window.start,
+        end: window.end,
+        period: "hour",
+        maxPoints: 2000,
+      }),
+      fetchStatisticSeries(this._hass, ids.cost, {
+        start: window.start,
+        end: window.end,
+        period: "hour",
+        maxPoints: 2000,
+      }),
+    ]);
+    return {
+      kwh: bucketTodByPeriod(kwhSeries),
+      cost: bucketTodByPeriod(costSeries),
+      window,
+    };
+  }
+
+  _todShareBar(totals) {
+    const sum = TOD_PERIODS.reduce((acc, p) => acc + (totals[p] || 0), 0);
+    if (!sum || sum <= 0) return "";
+    return `<div class="tod-share-bar" aria-label="Share of kWh by period">
+      ${TOD_PERIODS.map((p) => {
+        const share = ((totals[p] || 0) / sum) * 100;
+        if (share <= 0) return "";
+        return `<div class="tod-share-seg ${p}" style="width:${share.toFixed(2)}%" title="${TOD_PERIOD_LABELS[p]}: ${share.toFixed(0)}%"></div>`;
+      }).join("")}
+    </div>`;
+  }
+
+  async _renderTod() {
+    const el = this.shadowRoot.getElementById("tod");
+    if (!el) return;
+    try {
+      await this._renderTodBody(el);
+    } catch (err) {
+      el.innerHTML = `<h2>Time of Day</h2><p class="error">Failed to render Time of Day: ${this._escape(
+        String(err?.message || err)
+      )}</p>`;
+    }
+  }
+
+  async _renderTodBody(el) {
+    const account = this._account;
+    if (!account || !account.tod) {
+      el.innerHTML = `<h2>Time of Day</h2><p class="muted">TOD data not available yet — wait for a sync.</p>`;
+      return;
+    }
+    const tod = account.tod;
+    const e = account.entity_ids;
+    const enrolled = stateDisplay(this._hass, e.program_time_of_day, "") === "on";
+    const period = tod.period || "off_peak";
+    const rateUsd = Number(tod.rates?.[period]);
+    const rateCents = Number.isFinite(rateUsd) ? rateUsd * 100 : null;
+    const sourceLabels = {
+      override: "manual override",
+      portal: "PGE",
+      default: "offline defaults",
+    };
+    const sourceLabel = sourceLabels[tod.rate_source] || tod.rate_source || "—";
+    const fetched = tod.portal_fetched_at
+      ? ` · updated ${this._fmtDate(tod.portal_fetched_at)}`
+      : "";
+    const nextAt = tod.next_transition_at;
+    let nextLabel = "—";
+    if (nextAt) {
+      const parts = pacificParts(new Date(nextAt));
+      const nextPeriod = todPeriodForPacific(parts.ymd, parts.hour);
+      nextLabel = `${this._todCountdown(nextAt)} → ${TOD_PERIOD_LABELS[nextPeriod] || nextPeriod}`;
+    }
+    const dayNote = tod.is_holiday
+      ? "Holiday — off-peak all day"
+      : tod.is_weekend
+        ? "Weekend — off-peak all day"
+        : "Weekday schedule";
+    const sourceHint = `Rates: ${sourceLabel}${fetched}`;
+
+    let usageHtml = "";
+    let savingsHtml = "";
+    let windowNote = "";
+    try {
+      const { kwh, cost, window } = await this._todUsageByPeriod();
+      const totalKwh = kwh.off_peak + kwh.mid_peak + kwh.on_peak;
+      const rates = tod.rates || {};
+      const effective =
+        kwh.off_peak * Number(rates.off_peak || 0) +
+        kwh.mid_peak * Number(rates.mid_peak || 0) +
+        kwh.on_peak * Number(rates.on_peak || 0);
+      const basicRate = Number(tod.basic_rate);
+      const basicCost = Number.isFinite(basicRate) ? totalKwh * basicRate : null;
+      const estimate = Number.isFinite(basicCost) ? basicCost - effective : null;
+      const importedCost = cost.off_peak + cost.mid_peak + cost.on_peak;
+      windowNote = window.capped
+        ? `Newest 60 days of ${this._escape(formatRangeLabel(window.start, window.end))} — long ranges stay capped so hourly totals stay exact.`
+        : `Imported hourly intervals, ${this._escape(formatRangeLabel(window.start, window.end))}.`;
+      if (totalKwh > 0) {
+        const rows = TOD_PERIODS.map((p) => {
+          const kw = kwh[p] || 0;
+          const c = cost[p] || 0;
+          const share = (kw / totalKwh) * 100;
+          return `<tr>
+            <td>${TOD_PERIOD_LABELS[p]}</td>
+            <td class="num">${this._fmt(kw, " kWh")}</td>
+            <td class="num">${this._fmt(c, "", true)}</td>
+            <td class="num">${this._fmt(share, "%")}</td>
+            <td class="num">${Number.isFinite(kw) && kw > 0 ? this._fmt((c / kw) * 100, " ¢/kWh") : "—"}</td>
+          </tr>`;
+        }).join("");
+        usageHtml = `
+          <h3>Usage by period</h3>
+          <p class="muted" style="margin:0 0 8px">${windowNote}</p>
+          ${this._todShareBar(kwh)}
+          <table class="tod-table">
+            <thead><tr><th>Period</th><th class="num">Energy</th><th class="num">Cost</th><th class="num">Share</th><th class="num">Avg rate</th></tr></thead>
+            <tbody>${rows}</tbody>
+            <tfoot><tr><td>Total</td><td class="num">${this._fmt(totalKwh, " kWh")}</td><td class="num">${this._fmt(importedCost, "", true)}</td><td class="num">100%</td><td class="num">—</td></tr></tfoot>
+          </table>
+          <p class="muted" style="margin:8px 0 0">Avg rate is imported cost ÷ energy for each period; share uses energy.</p>
+        `;
+        const estimateMoney = estimate == null ? "—" : this._fmt(estimate, "", true);
+        const estimateAbsMoney =
+          estimate == null ? "—" : this._fmt(Math.abs(estimate), "", true);
+        const estimateLabel =
+          estimate == null
+            ? "Basic flat rate not available — no local comparison."
+            : estimate >= 0
+              ? `About ${this._escape(estimateAbsMoney)} cheaper than Basic over this window.`
+              : `About ${this._escape(estimateAbsMoney)} more than Basic over this window.`;
+        savingsHtml = `
+          <div class="tod-counterfactual">
+            <div class="label">TOD vs Basic (local estimate)</div>
+            <div class="value">${estimateMoney}</div>
+            <div class="delta">${estimateLabel} Uses effective rates (${sourceLabel}) × imported energy; estimate only.</div>
+          </div>
+        `;
+      } else {
+        usageHtml = `<p class="muted">No imported hourly usage in this window yet.</p>`;
+      }
+    } catch (_err) {
+      usageHtml = `<p class="muted">Usage-by-period unavailable for this range.</p>`;
+    }
+
+    if (tod.savings_total != null) {
+      savingsHtml = `
+        <div class="tod-counterfactual official">
+          <div class="label">PGE TOD vs Basic savings</div>
+          <div class="value">${this._fmt(tod.savings_total, "", true)}</div>
+          <div class="delta">Official total from PGE portal (${this._escape(sourceLabel)}).</div>
+        </div>
+        ${savingsHtml}
+      `;
+    }
+
+    el.innerHTML = `
+      <h2>Time of Day</h2>
+      <div class="tod-header">
+        <span class="badge ${enrolled ? "on" : "off"}">${enrolled ? "Enrolled in Time of Day" : "Not enrolled in Time of Day"}</span>
+        <span class="muted tod-source">${this._escape(sourceHint)}</span>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi tod-${period}"><div class="label">Period now</div><div class="value">${TOD_PERIOD_LABELS[period]}</div><div class="delta">${this._escape(dayNote)}</div></div>
+        <div class="kpi"><div class="label">Current rate</div><div class="value">${rateCents != null ? this._fmt(rateCents, " ¢/kWh") : "—"}</div><div class="delta">${this._escape(sourceLabel)}</div></div>
+        <div class="kpi"><div class="label">Next transition</div><div class="value">${this._escape(this._todCountdown(nextAt))}</div><div class="delta">${this._escape(nextLabel)}</div></div>
+      </div>
+      <div class="tod-schedule">
+        <h3>Week schedule (Pacific)</h3>
+        <div class="tod-legend">
+          ${TOD_PERIODS.map((p) => `<span class="legend ${p}"><i></i>${TOD_PERIOD_LABELS[p]}</span>`).join("")}
+          <span class="muted" style="margin-left:auto">Highlighted column = now</span>
+        </div>
+        ${this._todWeekGrid()}
+        ${this._todHolidayNote()}
+      </div>
+      <div class="usage-accounting tod-usage">
+        ${usageHtml}
+        ${savingsHtml}
+      </div>
+    `;
+    this._bindPersistentDetails(el.querySelector("details.tod-holidays"));
   }
 
   _renderBillingPrograms() {

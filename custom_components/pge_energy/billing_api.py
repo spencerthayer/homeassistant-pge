@@ -18,6 +18,7 @@ from .billing_models import (
     LedgerEventType,
     ProgramEnrollment,
     ProgramsSnapshot,
+    TodSnapshot,
 )
 from .exceptions import (
     PGEAuthenticationError,
@@ -203,6 +204,17 @@ query getSmartThermostatEnrollmentDetails($params: SmartThermostatEnrollmentDeta
   getSmartThermostatEnrollmentDetails(params: $params) {
     isEnrolled
     cardType
+  }
+}
+"""
+
+# Best-effort TOD pricing discovery (speculative op/param names — see the
+# ``DATA_CONTRACT.md`` TOD section). Soft-fail into the offline defaults when the
+# portal does not expose it; parser tolerates missing/renamed fields.
+GET_TIME_OF_DAY_PRICING_DETAILS = """
+query getTimeOfDayPricingDetails($params: TimeOfDayPricingDetailsParams!) {
+  getTimeOfDayPricingDetails(params: $params) {
+    offPeakRate midPeakRate onPeakRate basicServiceRate todVsBasicSavings
   }
 }
 """
@@ -663,6 +675,52 @@ class PGEBillingApiClient:
             projected_max_amount=_safe_float(details.get("maxProjectedAmount")),
             current_period_kwh=_safe_float(current.get("totalKwh")),
             previous_period_kwh=_safe_float(previous.get("totalKwh")),
+        )
+
+    # -- Time of Day pricing -------------------------------------------------
+
+    async def get_tod_pricing(
+        self,
+        encrypted_account_number: str,
+        encrypted_premise_id: str,
+        encrypted_sa_id: str,
+    ) -> TodSnapshot:
+        """Best-effort portal TOD rates + savings for the offline rate card.
+
+        Discovery-only: the operation/field names are speculative. The parser
+        tolerates missing nested fields and returns a partial (possibly empty)
+        snapshot, but raises :class:`PGESchemaError` when the top-level
+        ``getTimeOfDayPricingDetails`` object is missing or not a dict. Callers
+        soft-fail into the offline defaults.
+        """
+        del encrypted_premise_id  # shared premise not needed for this op
+        params = {
+            "encryptedAccountNumber": encrypted_account_number,
+            "encryptedServiceAgreementId": encrypted_sa_id,
+        }
+        data = await self._post_graphql(
+            GET_TIME_OF_DAY_PRICING_DETAILS,
+            {"params": params},
+            "getTimeOfDayPricingDetails",
+        )
+        raw = data.get("getTimeOfDayPricingDetails")
+        if not isinstance(raw, dict):
+            raise PGESchemaError("Response missing data.getTimeOfDayPricingDetails")
+        rates: dict[str, float] = {}
+        for period, field_name in (
+            ("off_peak", "offPeakRate"),
+            ("mid_peak", "midPeakRate"),
+            ("on_peak", "onPeakRate"),
+        ):
+            value = _safe_float(raw.get(field_name))
+            if value is not None and value > 0:
+                rates[period] = value
+        return TodSnapshot(
+            rates=rates,
+            basic_rate=_safe_float(raw.get("basicServiceRate")),
+            savings_total=_safe_float(raw.get("todVsBasicSavings")),
+            fetched_at=datetime.now(UTC),
+            attributes=dict(raw),
         )
 
     # -- Programs -----------------------------------------------------------

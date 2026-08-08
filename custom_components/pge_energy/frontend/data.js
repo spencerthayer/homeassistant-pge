@@ -157,6 +157,13 @@ export async function fetchStatisticSeries(hass, statisticId, { start, end, peri
   return out;
 }
 
+/** Coerce epoch-seconds / ms / ISO string / Date into a Date. */
+function _asDate(t = new Date()) {
+  if (t instanceof Date) return t;
+  if (typeof t === "number" && t < 1e12) return new Date(t * 1000);
+  return new Date(t);
+}
+
 /** Pacific calendar YYYY-MM-DD for an instant. */
 export function pacificYmd(date = new Date()) {
   return new Intl.DateTimeFormat("en-CA", {
@@ -164,7 +171,7 @@ export function pacificYmd(date = new Date()) {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(date);
+  }).format(_asDate(date));
 }
 
 /** UTC instant of Pacific local midnight for YYYY-MM-DD. */
@@ -755,4 +762,149 @@ export function stateDisplay(hass, entityId, fallback = "—") {
 export function stateAttr(hass, entityId, attr) {
   if (!entityId || !hass.states[entityId]) return null;
   return hass.states[entityId].attributes?.[attr] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Time of Day (E-TOU) schedule — mirrors tod_schedule.py for panel rendering.
+// Weekday windows (Pacific): off [21:00,07:00) / mid [07:00,17:00) / on
+// [17:00,21:00). Weekends + observed holidays are off-peak all day.
+// ---------------------------------------------------------------------------
+
+export const TOD_PERIODS = ["off_peak", "mid_peak", "on_peak"];
+
+export const TOD_PERIOD_LABELS = {
+  off_peak: "Off-peak",
+  mid_peak: "Mid-peak",
+  on_peak: "On-peak",
+};
+
+/** 0-23 Pacific-local hour for an epoch-seconds / ms / ISO / Date instant. */
+export function pacificHour(t) {
+  const d = _asDate(t);
+  const raw = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    hour: "2-digit",
+    hour12: false,
+  }).format(d);
+  // Midnight can format as "24" depending on the engine.
+  const n = Number(raw);
+  return n === 24 ? 0 : n;
+}
+
+/** Pacific YYYY-MM-DD + hour for an instant (single helper for TOD bucketing). */
+export function pacificParts(t) {
+  return { ymd: pacificYmd(t), hour: pacificHour(t) };
+}
+
+function _observedIso(date) {
+  const ymd = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+    date.getDate()
+  ).padStart(2, "0")}`;
+  return ymd;
+}
+
+/** First (nth>=1) or last (nth=-1) weekday of a month → Date. */
+function _nthWeekday(year, month, nth, weekday) {
+  const first = new Date(year, month, 1);
+  const firstWday = first.getDay();
+  const day = 1 + ((weekday - firstWday + 7) % 7);
+  if (nth > 0) return new Date(year, month, day + (nth - 1) * 7);
+  const last = new Date(year, month + 1, 0);
+  const lastWday = last.getDay();
+  return new Date(year, month, last.getDate() - ((lastWday - weekday + 7) % 7));
+}
+
+/** Shift a fixed holiday to its observed day: Sat→Fri, Sun→Mon. */
+function _observed(date) {
+  const wd = date.getDay();
+  if (wd === 6) return new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1);
+  if (wd === 0) return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+  return date;
+}
+
+/**
+ * Observed PGE holidays (YYYY-MM-DD) for a year — mirrors tod_schedule.py,
+ * including the Dec 31 edge case when next Jan 1 is a Saturday.
+ */
+const _todHolidayCache = new Map();
+
+export function todHolidays(year) {
+  const cached = _todHolidayCache.get(year);
+  if (cached) return cached;
+  const observed = new Set();
+  const fixed = [
+    new Date(year, 0, 1),
+    new Date(year, 6, 4),
+    new Date(year, 11, 25),
+  ];
+  for (const d of fixed) {
+    const obs = _observed(d);
+    if (obs.getFullYear() === year) observed.add(_observedIso(obs));
+  }
+  observed.add(_observedIso(_nthWeekday(year, 4, -1, 1))); // Memorial: last Mon May
+  observed.add(_observedIso(_nthWeekday(year, 8, 1, 1))); // Labor: first Mon Sep
+  observed.add(_observedIso(_nthWeekday(year, 10, 4, 4))); // Thanksgiving: 4th Thu Nov
+  const nextJan1 = new Date(year + 1, 0, 1);
+  if (nextJan1.getDay() === 6) observed.add(`${year}-12-31`);
+  _todHolidayCache.set(year, observed);
+  return observed;
+}
+
+/** True for Saturday, Sunday, or a PGE holiday (all-day off-peak). */
+export function isTodOffPeakDay(ymd) {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  const wd = dt.getDay();
+  if (wd === 0 || wd === 6) return true;
+  return todHolidays(y).has(ymd);
+}
+
+/**
+ * E-TOU period for a Pacific YYYY-MM-DD + local hour (0-23).
+ * @returns {"off_peak"|"mid_peak"|"on_peak"}
+ */
+export function todPeriodForPacific(ymd, hour) {
+  if (isTodOffPeakDay(ymd)) return "off_peak";
+  if (hour < 7) return "off_peak";
+  if (hour < 17) return "mid_peak";
+  if (hour < 21) return "on_peak";
+  return "off_peak";
+}
+
+/**
+ * Bucket an hourly statistic series by E-TOU period (Pacific), summing values.
+ * @param {{xs: number[], values: (number|null)[]}} series
+ * @returns {{off_peak: number, mid_peak: number, on_peak: number}}
+ */
+export function bucketTodByPeriod(series) {
+  const totals = { off_peak: 0, mid_peak: 0, on_peak: 0 };
+  for (let i = 0; i < (series.xs || []).length; i++) {
+    const v = Number(series.values?.[i]);
+    if (!Number.isFinite(v)) continue;
+    const { ymd, hour } = pacificParts(series.xs[i]);
+    totals[todPeriodForPacific(ymd, hour)] += v;
+  }
+  return totals;
+}
+
+/** Sun–Sat labels with the Pacific YYYY-MM-DD for the current week. */
+export function todWeekDays(today = new Date()) {
+  const nowLocal = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+  }).format(today);
+  const [, mm, dd, yy] = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(nowLocal) || [];
+  const start = new Date(Number(yy), Number(mm) - 1, Number(dd));
+  const dow = start.getDay();
+  const sunday = new Date(start.getFullYear(), start.getMonth(), start.getDate() - dow);
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(sunday.getFullYear(), sunday.getMonth(), sunday.getDate() + i);
+    days.push({
+      name: new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(d),
+      ymd: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+        d.getDate()
+      ).padStart(2, "0")}`,
+    });
+  }
+  return days;
 }

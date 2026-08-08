@@ -34,6 +34,8 @@ from .const import (
     DEFAULT_INCLUDE_BILLING,
     DEFAULT_INCLUDE_DIAGNOSTICS,
     DOMAIN,
+    E_TOU_PERIODS,
+    ENABLE_TOD_SENSORS,
     ENTITY_UNIQUE_ACCOUNT_BALANCE,
     ENTITY_UNIQUE_AMOUNT_DUE,
     ENTITY_UNIQUE_BILL_AVG_TEMPERATURE,
@@ -70,6 +72,9 @@ from .const import (
     ENTITY_UNIQUE_SYNC_PROGRESS,
     ENTITY_UNIQUE_SYNC_STATUS,
     ENTITY_UNIQUE_TEMPERATURE,
+    ENTITY_UNIQUE_TOD_PERIOD,
+    ENTITY_UNIQUE_TOD_PRICE,
+    ENTITY_UNIQUE_TOD_VS_BASIC_SAVINGS,
     ENTITY_UNIQUE_YESTERDAY_COMPENSATION,
     ENTITY_UNIQUE_YESTERDAY_COST,
     ENTITY_UNIQUE_YESTERDAY_ENERGY,
@@ -212,6 +217,15 @@ async def async_setup_entry(
             [
                 PGEAuthExpirationSensor(coordinator, account_key),
                 PGELastApiErrorSensor(coordinator, account_key),
+            ]
+        )
+
+    if ENABLE_TOD_SENSORS:
+        entities.extend(
+            [
+                PGETodPeriodSensor(coordinator, account_key),
+                PGETodPriceSensor(coordinator, account_key),
+                PGETodVsBasicSavingsSensor(coordinator, account_key),
             ]
         )
 
@@ -1333,3 +1347,103 @@ class PGEBillPdfLineItemSensor(PGEBaseEntity, SensorEntity):
         if suffix:
             attrs["external_statistic_id"] = _get_statistic_id(self._account_key, suffix)
         return attrs
+
+
+# ---------------------------------------------------------------------------
+# Time of Day (E-TOU) sensors
+# ---------------------------------------------------------------------------
+
+
+class _TodSensor(PGEBaseEntity, SensorEntity):
+    """TOD sensor backed by the transition coordinator's live rate card."""
+
+    _attr_unique_id: str
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str, unique_suffix: str) -> None:
+        super().__init__(coordinator)
+        self._account_key = account_key
+        self._attr_unique_id = f"{account_key}_{unique_suffix}"
+
+    def _tod_attrs(self) -> dict[str, Any]:
+        tod = self.coordinator.tod
+        rate_card = tod.rate_card
+        attrs: dict[str, Any] = {
+            "account_key": self._account_key,
+            "rate_source": tod.current_rate_source,
+            "basic_rate": rate_card.basic_rate,
+            "basic_rate_source": rate_card.basic_source,
+        }
+        for period in E_TOU_PERIODS:
+            attrs[f"{period}_rate"] = rate_card.rates.get(period)
+            attrs[f"{period}_source"] = rate_card.sources.get(period)
+        if tod.next_transition_at is not None:
+            attrs["next_transition_at"] = tod.next_transition_at.isoformat()
+        snapshot = tod.tod_snapshot
+        if snapshot is not None and snapshot.fetched_at is not None:
+            attrs["portal_fetched_at"] = snapshot.fetched_at.isoformat()
+        return attrs
+
+
+class PGETodPeriodSensor(_TodSensor):
+    """Current E-TOU period (off_peak / mid_peak / on_peak)."""
+
+    _attr_translation_key = "tod_period"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(E_TOU_PERIODS)
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator, account_key, ENTITY_UNIQUE_TOD_PERIOD)
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.tod.period.value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._tod_attrs()
+
+
+class PGETodPriceSensor(_TodSensor):
+    """Effective rate for the current period (USD/kWh)."""
+
+    _attr_translation_key = "tod_price"
+    _attr_native_unit_of_measurement = "USD/kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator, account_key, ENTITY_UNIQUE_TOD_PRICE)
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.tod.current_rate
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs = self._tod_attrs()
+        attrs["period"] = self.coordinator.tod.period.value
+        return attrs
+
+
+class PGETodVsBasicSavingsSensor(_TodSensor):
+    """Portal-reported cumulative TOD vs Basic service savings (USD).
+
+    ``None`` until the portal exposes a savings figure; the panel computes its
+    own local counterfactual from the rate card when this is unavailable.
+    """
+
+    _attr_translation_key = "tod_vs_basic_savings"
+    _attr_native_unit_of_measurement = "USD"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = None
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator, account_key, ENTITY_UNIQUE_TOD_VS_BASIC_SAVINGS)
+
+    @property
+    def native_value(self) -> float | None:
+        snapshot = self.coordinator.tod.tod_snapshot
+        return snapshot.savings_total if snapshot is not None else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._tod_attrs()

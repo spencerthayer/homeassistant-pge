@@ -86,6 +86,9 @@ class ImportStoreData:
     bill_pdf_index: dict[str, BillPdfIndexEntry] = field(default_factory=dict)
     bill_pdf_last_success: str | None = None
     bill_pdf_last_error: str | None = None
+    # Last-good portal Time of Day pricing snapshot (rates/savings). Additive:
+    # keeps the offline rates card warm across reloads without a version bump.
+    tod_snapshot: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -131,6 +134,7 @@ class ImportStoreData:
             bill_pdf_index=_load_bill_pdf_index(data),
             bill_pdf_last_success=data.get("bill_pdf_last_success"),
             bill_pdf_last_error=data.get("bill_pdf_last_error"),
+            tod_snapshot=_load_tod_snapshot(data),
         )
 
 
@@ -139,6 +143,15 @@ def _load_bill_pdf_index(data: dict[str, Any]) -> dict[str, BillPdfIndexEntry]:
     if not isinstance(raw, dict):
         return {}
     return {str(k): BillPdfIndexEntry.from_dict(v) for k, v in raw.items()}
+
+
+def _load_tod_snapshot(data: dict[str, Any]) -> dict[str, Any] | None:
+    raw = data.get("tod_snapshot")
+    if not raw:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    return dict(raw)
 
 
 def _store_for_entry(hass: HomeAssistant, entry_id: str) -> ImportStateStore:

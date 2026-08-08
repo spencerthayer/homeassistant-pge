@@ -120,6 +120,23 @@ class ProgramsSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class TodSnapshot:
+    """Portal-sourced Time of Day pricing + savings (best-effort, may be partial).
+
+    Discovered from pricing-plan GraphQL ops; every field is optional so a
+    partial/empty payload still soft-fails into the offline defaults. The
+    coordinator caches the last-good snapshot across reloads (never blanking
+    rates on a renew/sync failure).
+    """
+
+    rates: dict[str, float] = field(default_factory=dict)
+    basic_rate: float | None = None
+    savings_total: float | None = None
+    fetched_at: datetime | None = None
+    attributes: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class BillingFreshness:
     """Coordinator-facing freshness marker for the billing sync."""
 

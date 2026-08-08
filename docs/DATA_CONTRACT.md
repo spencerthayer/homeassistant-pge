@@ -242,6 +242,14 @@ Backs the portal “Current Use” card (est. current charges, billing-cycle day
 - **Probe:** packaged CLI `billing-snapshot` / live portal Current Use card (maintainer notes in `docs/LIVE_TESTING.md`).
 - **HA import:** fetched in `billing_sync` after the ledger, soft-failing to the previous value; surfaced as sensors (`est_current_charges`, `est_next_bill_min`/`_max`, `billing_cycle_day`, `billing_cycle_total_days`) and panel “PGE est.” cards. No statistics are published — these are estimates that get revised daily.
 
+### `getTimeOfDayPricingDetails` — Time of Day rate card (v0.9.0+, speculative)
+
+- **Purpose:** current E-TOU rate card (per-period ¢/kWh) and total `basic_service` rate for the account. Used by the `tod_pricing` module, the three `tod_*` sensors, and the panel **Time of Day** section.
+- **Variables:** `{ params: { encryptedAccountNumber } }` from `getAccountDetailList.accounts[]` for the bound entry.
+- **Fields:** `timeOfUseRates` (period / price) plus a `basicService` / basic rate field. Treat this op as **speculative** — the GraphQL field names are portal-documented, not yet verified end-to-end against a live enrolled account.
+- **Failure policy:** the op is best-effort and **cannot fail the billing sync**. `_async_fetch_tod_snapshot` catches PGE errors and generic exceptions, logs at debug, and returns the last-good snapshot (re-persisted) so the previous rate card survives.
+- **Resolution chain:** account overrides (`tod_rate_off_peak`/`_mid_peak`/`_on_peak`/`_basic_service`) → last portal rate card → built-in defaults (`DEFAULT_TOD_RATES` / `DEFAULT_BASIC_RATE`). Period definitions, holiday rules, and the offline engine live in `tod_schedule.py`; resolution in `tod_pricing.resolve_tod_rates`.
+
 ### Programs
 
 - **Status:** `getProgramsEnrollmentStatusDetails` with `{ encryptedAccountNumber, encryptedPremiseId, encryptedSaId }`.

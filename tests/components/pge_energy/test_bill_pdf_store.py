@@ -82,3 +82,8 @@ def test_bill_pdf_identity_upsert_and_canonical_selection():
     eligible = eligible_bill_pdf_entries(store, retention="latest", configured_form=BillPdfForm.DETAILED)
     assert len(eligible) == 1
     assert eligible[0].bill_date == "2025-02-13"
+
+
+def test_malformed_tod_snapshot_is_ignored():
+    loaded = ImportStoreData.from_dict({"account_key": "acct1234", "tod_snapshot": "not-a-dict"})
+    assert loaded.tod_snapshot is None
