@@ -18,9 +18,12 @@ from .billing_models import (
     AccountSnapshot,
     BillingFreshness,
     EnergyTrackerEstimates,
+    NetMeteringSnapshot,
     ProgramsSnapshot,
+    RateCompareSnapshot,
     TodSnapshot,
 )
+from .billing_statistics import async_refresh_billing_lifetime_totals
 from .billing_sync import async_run_billing_sync
 from .const import (
     BACKFILL_CANCEL_GRACE,
@@ -55,6 +58,9 @@ from .models import (
     SyncProgressSnapshot,
     UsageInterval,
     UsageResolution,
+    merge_tip_intervals,
+    tip_intervals_from_store,
+    tip_intervals_to_store,
 )
 from .options import get_entry_option, resolve_polling_timedelta
 from .statistics import (
@@ -95,6 +101,15 @@ def _format_statistics_import_error(hass: HomeAssistant, exc: BaseException) -> 
             "shutting down. Wait until HA is fully up, then Refresh again."
         )
     return f"Statistics import failed: {exc}"
+
+
+def _parse_store_dt(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -162,6 +177,8 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.bill_pdf_summary: dict[str, Any] = {}
         # Last-good portal Time of Day pricing snapshot (soft-fail, never blanked).
         self.tod_snapshot: TodSnapshot | None = None
+        self.net_metering_snapshot: NetMeteringSnapshot | None = None
+        self.rate_compare_snapshot: RateCompareSnapshot | None = None
         # async_update_entry for token persistence must not trigger options reload.
         self._skip_reload_on_next_update = False
         # Debounce reauth flows so a flapping Cognito blip does not spam the UI.
@@ -398,6 +415,9 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self._import_store.account_key:
             self._import_store.account_key = self.account_key
         self.tod_snapshot = tod_snapshot_from_dict(self._import_store.tod_snapshot)
+        self.net_metering_snapshot = NetMeteringSnapshot.from_dict(self._import_store.net_metering_snapshot)
+        self.rate_compare_snapshot = RateCompareSnapshot.from_dict(self._import_store.rate_compare_snapshot)
+        self._hydrate_sensor_snapshots_from_store()
         if self._import_store.sync_status:
             self._sync_progress = snapshot_from_store_fields(self._import_store)
         # Never restore a live-looking status with no task behind it. Resume re-enters
@@ -407,6 +427,71 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.fail_sync_job("Interrupted by restart")
             self._apply_sync_progress_to_store()
         await self.async_refresh_lifetime_totals()
+        try:
+            payments, billed = await async_refresh_billing_lifetime_totals(self.hass, self.account_key)
+            self.lifetime_payments_usd = payments
+            self.lifetime_billed_usd = billed
+        except Exception as exc:  # noqa: BLE001 - recorder may not be ready at bootstrap
+            _LOGGER.debug("Billing lifetime totals unavailable at store load: %s", exc)
+        # Seed coordinator.data so the first soft-fail poll has a real retained payload
+        # (sensors read in-memory tip/billing fields, not data — but soft-fail copies data).
+        if self.data is None and (
+            self._recent_intervals
+            or self.account_snapshot is not None
+            or self.programs_snapshot is not None
+            or self.tracker_estimates is not None
+        ):
+            self.data = self._retained_poll_payload()
+            self.data["stale"] = False
+
+    def _hydrate_sensor_snapshots_from_store(self) -> None:
+        """Restore tip/billing/program fields sensors need after cold boot."""
+        store = self._import_store
+        tip = tip_intervals_from_store(store.tip_intervals)
+        if tip:
+            self._recent_intervals = tip
+        account = AccountSnapshot.from_dict(store.account_snapshot)
+        if account is not None:
+            self.account_snapshot = account
+        programs = ProgramsSnapshot.from_dict(store.programs_snapshot)
+        if programs is not None:
+            self.programs_snapshot = programs
+        tracker = EnergyTrackerEstimates.from_dict(store.tracker_estimates)
+        if tracker is not None:
+            self.tracker_estimates = tracker
+        newest = _parse_store_dt(store.newest_interval)
+        if newest is not None:
+            self._newest_interval = newest
+        last_ok = _parse_store_dt(store.last_successful_update)
+        if last_ok is not None:
+            self._last_successful_update = last_ok
+        if store.billing_last_success:
+            success = _parse_store_dt(store.billing_last_success)
+            self.billing_freshness = BillingFreshness(
+                last_success=success,
+                last_error=store.billing_last_error,
+            )
+
+    def _apply_sensor_snapshots_to_store(self) -> None:
+        """Mirror in-memory tip/billing sensor fields onto the import Store."""
+        store = self._import_store
+        if self._recent_intervals:
+            store.tip_intervals = tip_intervals_to_store(self._recent_intervals)
+        if self.account_snapshot is not None:
+            store.account_snapshot = self.account_snapshot.to_dict()
+        if self.programs_snapshot is not None:
+            store.programs_snapshot = self.programs_snapshot.to_dict()
+        if self.tracker_estimates is not None:
+            store.tracker_estimates = self.tracker_estimates.to_dict()
+        if self._newest_interval is not None:
+            store.newest_interval = self._newest_interval.isoformat()
+        if self._last_successful_update is not None:
+            store.last_successful_update = self._last_successful_update.isoformat()
+
+    async def async_persist_sensor_snapshots(self, *, critical: bool = False) -> None:
+        """Persist tip/billing snapshots used to keep sensors warm across restarts."""
+        self._apply_sensor_snapshots_to_store()
+        await async_save_import_state(self.hass, self.entry.entry_id, self._import_store, critical=critical)
 
     async def async_start_tod(self) -> None:
         """Start the TOD transition coordinator (period/rate recompute + wake-up)."""
@@ -949,10 +1034,10 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self.async_persist_sync_progress()
 
         self._failed_days_this_poll = list(failed_days)
-        # Never wipe last-known tip intervals on an empty/failed poll — history in
-        # recorder is untouched, and sensors keep showing the prior tip sample.
+        # Merge successful days into the retained tip — never replace wholesale so a
+        # failed newer day keeps its last-known intervals across memory + Store.
         if all_intervals:
-            self._recent_intervals = all_intervals
+            self._recent_intervals = merge_tip_intervals(self._recent_intervals, all_intervals)
 
         if all_intervals:
             newest = max(iv.end for iv in all_intervals)
@@ -961,6 +1046,8 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             dirty_from = min(iv.start for iv in all_intervals).isoformat()
             self._import_store.dirty_from = dirty_from
+            # Persist tip before recorder import so a soft-fail still survives restart.
+            self._apply_sensor_snapshots_to_store()
             await async_save_import_state(self.hass, self.entry.entry_id, self._import_store)
             try:
                 async with self.import_lock:
@@ -974,8 +1061,8 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self.async_refresh_lifetime_totals()
             except Exception as exc:
                 err = _format_statistics_import_error(self.hass, exc)
-                # Import merge failed — keep prior tip/lifetime; do not mark the
-                # whole entry unavailable or clear already-imported history.
+                # Import merge failed — tip already persisted above; keep prior
+                # lifetime; do not mark the whole entry unavailable or clear history.
                 return await self._async_soft_fail_poll(
                     err,
                     tracking=tracking,
@@ -1033,6 +1120,9 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if tracking:
                 self.complete_sync_job(message="Refresh done")
                 await self.async_persist_sync_progress()
+
+        # Keep tip/billing sensor fields warm across HA restarts / failed boot polls.
+        await self.async_persist_sensor_snapshots(critical=False)
 
         # Scheduled catch-up: keep polling until yesterday's hourly validates.
         yesterday_iso = (today_local() - timedelta(days=1)).isoformat()

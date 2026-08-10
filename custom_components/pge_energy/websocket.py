@@ -18,6 +18,8 @@ from .const import (
     BINARY_UNIQUE_PROGRAM_GREEN_FUTURE,
     BINARY_UNIQUE_PROGRAM_HABITAT_SUPPORT,
     BINARY_UNIQUE_PROGRAM_PEAK_TIME_REBATES,
+    BINARY_UNIQUE_PROGRAM_SMART_BATTERY,
+    BINARY_UNIQUE_PROGRAM_SMART_CHARGING,
     BINARY_UNIQUE_PROGRAM_SMART_THERMOSTAT,
     BINARY_UNIQUE_PROGRAM_TIME_OF_DAY,
     CONF_ACCOUNT_ID,
@@ -81,6 +83,8 @@ from .const import (
     ENTITY_UNIQUE_LAST_PAYMENT_DATE,
     ENTITY_UNIQUE_LIFETIME_BILLED,
     ENTITY_UNIQUE_LIFETIME_PAYMENTS,
+    ENTITY_UNIQUE_NET_METERING,
+    ENTITY_UNIQUE_NEXT_PTR_EVENT_DATE,
     ENTITY_UNIQUE_RETURN,
     ENTITY_UNIQUE_SYNC_DETAIL,
     ENTITY_UNIQUE_SYNC_ERROR,
@@ -168,6 +172,8 @@ _SENSOR_ROLES: dict[str, str] = {
     "tod_period": ENTITY_UNIQUE_TOD_PERIOD,
     "tod_price": ENTITY_UNIQUE_TOD_PRICE,
     "tod_vs_basic_savings": ENTITY_UNIQUE_TOD_VS_BASIC_SAVINGS,
+    "next_ptr_event_date": ENTITY_UNIQUE_NEXT_PTR_EVENT_DATE,
+    "net_metering": ENTITY_UNIQUE_NET_METERING,
 }
 
 _BINARY_ROLES: dict[str, str] = {
@@ -178,6 +184,8 @@ _BINARY_ROLES: dict[str, str] = {
     "program_time_of_day": BINARY_UNIQUE_PROGRAM_TIME_OF_DAY,
     "program_smart_thermostat": BINARY_UNIQUE_PROGRAM_SMART_THERMOSTAT,
     "program_habitat_support": BINARY_UNIQUE_PROGRAM_HABITAT_SUPPORT,
+    "program_smart_charging": BINARY_UNIQUE_PROGRAM_SMART_CHARGING,
+    "program_smart_battery": BINARY_UNIQUE_PROGRAM_SMART_BATTERY,
 }
 
 _STAT_SUFFIXES: dict[str, str] = {
@@ -286,6 +294,21 @@ def _tod_payload(coordinator: PGECoordinator) -> dict[str, Any]:
     tod = coordinator.tod
     rate_card = tod.rate_card
     snapshot = coordinator.tod_snapshot
+    savings_total = snapshot.savings_total if snapshot is not None else None
+    savings_source: str | None = "pricing_plan" if savings_total is not None else None
+    rate_compare = coordinator.rate_compare_snapshot
+    rate_compare_payload: dict[str, Any] | None = None
+    if rate_compare is not None and rate_compare.has_data:
+        rate_compare_payload = {
+            "savings": rate_compare.savings,
+            "tou_total": rate_compare.tou_total,
+            "basic_total": rate_compare.basic_total,
+            "comparison_period": rate_compare.comparison_period,
+            "fetched_at": rate_compare.fetched_at.isoformat() if rate_compare.fetched_at else None,
+        }
+        if savings_total is None and rate_compare.savings is not None:
+            savings_total = rate_compare.savings
+            savings_source = "rate_compare"
     return {
         "period": tod.period.value,
         "is_holiday": tod.is_holiday,
@@ -296,7 +319,9 @@ def _tod_payload(coordinator: PGECoordinator) -> dict[str, Any]:
         "sources": dict(rate_card.sources),
         "basic_rate": rate_card.basic_rate,
         "basic_rate_source": rate_card.basic_source,
-        "savings_total": (snapshot.savings_total if snapshot is not None else None),
+        "savings_total": savings_total,
+        "savings_source": savings_source,
+        "rate_compare": rate_compare_payload,
         "portal_fetched_at": (
             snapshot.fetched_at.isoformat() if snapshot is not None and snapshot.fetched_at else None
         ),

@@ -14,6 +14,7 @@ def test_panel_section_anchors_and_resolver_present():
     assert 'analytics: "#insights-weather"' in source
     assert 'tod: "#tod"' in source
     assert 'billing: "#billing"' in source
+    assert 'programs: "#programs"' in source
     assert "export function resolveLandingSelector" in source
     assert "_scheduleDefaultLandingScroll" in source
     assert "this._landingApplied" in source

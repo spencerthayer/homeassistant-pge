@@ -12,11 +12,14 @@ import pytest
 from custom_components.pge_energy.billing_api import (
     PGEBillingApiClient,
     _parse_date,
+    _program_list_eligible,
+    _program_list_enrolled,
     _safe_bool,
     _safe_float,
     _select_account,
+    normalize_ptr_events,
 )
-from custom_components.pge_energy.billing_models import LedgerEventType
+from custom_components.pge_energy.billing_models import LedgerEventType, ProgramEnrollment, RateCompareSnapshot
 from custom_components.pge_energy.exceptions import PGESchemaError
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "billing"
@@ -238,9 +241,318 @@ class TestProgramsParse:
             raise AssertionError(f"unexpected op {operation_name}")
 
         client._post_graphql = AsyncMock(side_effect=_post)
-        # Detail ops go through _best_effort_detail → _post_graphql; return None via error
         client._best_effort_detail = AsyncMock(return_value=None)
         programs = await client.get_programs("enc-a", "enc-p", "enc-sa")
         assert programs.ytd_flex_load_earnings == 3.7
         assert programs.peak_time_rebates_enrolled is True
         assert programs.green_future_enrolled is True
+        assert programs.peak_time_rebates_eligible is True
+        assert programs.green_future_eligible is True
+        assert programs.time_of_day_enrolled is False
+        assert programs.time_of_day_eligible is True
+        assert programs.smart_thermostat_enrolled is False
+        assert programs.smart_thermostat_eligible is False
+        assert programs.habitat_support_enrolled is None
+        assert programs.habitat_support_eligible is None
+
+    @pytest.mark.asyncio
+    async def test_smart_charging_and_battery_from_status_list(self):
+        client = _client()
+        status = _load("programs_enrollment.json")
+
+        async def _post(query, variables, operation_name):
+            if operation_name == "GetProgramsEnrollmentStatusDetails":
+                return status
+            raise AssertionError(f"unexpected op {operation_name}")
+
+        client._post_graphql = AsyncMock(side_effect=_post)
+        client._best_effort_detail = AsyncMock(return_value=None)
+        programs = await client.get_programs("enc-a", "enc-p", "enc-sa")
+        assert programs.smart_charging_enrolled is False
+        assert programs.smart_charging_eligible is True
+        assert programs.smart_battery_enrolled is False
+        assert programs.smart_battery_eligible is True
+
+    @pytest.mark.asyncio
+    async def test_smart_charging_detail_enrichment(self):
+        client = _client()
+        status = _load("programs_enrollment.json")
+        sc_detail = {
+            "enrollmentStatus": "ENROLLED",
+            "cardType": "smart_charging",
+            "lastSeasonEarnedCredit": 12.5,
+            "activeSeason": {"name": "Summer 2026", "start": "2026-06-01", "end": "2026-09-30"},
+        }
+
+        async def _post(query, variables, operation_name):
+            if operation_name == "GetProgramsEnrollmentStatusDetails":
+                return status
+            raise AssertionError(f"unexpected op {operation_name}")
+
+        client._post_graphql = AsyncMock(side_effect=_post)
+
+        async def _detail(query, op_name, params):
+            if op_name == "getSmartChargingEnrollmentDetails":
+                return sc_detail
+            return None
+
+        client._best_effort_detail = AsyncMock(side_effect=_detail)
+        programs = await client.get_programs("enc-a", "enc-p", "enc-sa")
+        assert programs.smart_charging_enrolled is True
+        assert programs.attributes.get("smart_charging_detail") == sc_detail
+
+    @pytest.mark.asyncio
+    async def test_smart_battery_detail_enrichment(self):
+        client = _client()
+        status = _load("programs_enrollment.json")
+        sb_detail = {
+            "isEnrolled": True,
+            "cardType": "smart_battery",
+            "currentBillCreditAmount": 5.0,
+            "currentBillKwh": 20.0,
+            "ytdCreditAmount": 25.0,
+            "ytdKwh": 100.0,
+        }
+
+        async def _post(query, variables, operation_name):
+            if operation_name == "GetProgramsEnrollmentStatusDetails":
+                return status
+            raise AssertionError(f"unexpected op {operation_name}")
+
+        client._post_graphql = AsyncMock(side_effect=_post)
+
+        async def _detail(query, op_name, params):
+            if op_name == "getSmartBatteryDetails":
+                return sb_detail
+            return None
+
+        client._best_effort_detail = AsyncMock(side_effect=_detail)
+        programs = await client.get_programs("enc-a", "enc-p", "enc-sa")
+        assert programs.smart_battery_enrolled is True
+        assert programs.attributes.get("smart_battery_detail") == sb_detail
+
+
+class TestPTREvents:
+    def test_normalize_sorts_and_dedupes(self):
+        raw = [
+            {"eventDate": "2026-08-15", "eventEarnedCredit": 2.5},
+            {"eventDate": "2026-08-10", "eventEarnedCredit": 1.0},
+            {"eventDate": "2026-08-15", "eventEarnedCredit": 3.0},
+        ]
+        result = normalize_ptr_events(raw)
+        assert len(result) == 2
+        assert result[0]["event_date"] == "2026-08-10"
+        assert result[1]["event_date"] == "2026-08-15"
+        assert result[1]["event_earned_credit"] == 2.5
+
+    def test_normalize_filters_malformed(self):
+        raw = [
+            {"eventDate": "not-a-date", "eventEarnedCredit": 1.0},
+            {"eventDate": "2026-08-20", "eventEarnedCredit": None},
+            {"eventDate": "", "eventEarnedCredit": 2.0},
+            {},
+            None,
+        ]
+        result = normalize_ptr_events(raw)
+        assert len(result) == 1
+        assert result[0]["event_date"] == "2026-08-20"
+        assert result[0]["event_earned_credit"] is None
+
+    def test_normalize_empty_and_none(self):
+        assert normalize_ptr_events(None) == []
+        assert normalize_ptr_events([]) == []
+
+    def test_normalize_us_date_format(self):
+        raw = [{"eventDate": "08/25/2026", "eventEarnedCredit": 3.0}]
+        result = normalize_ptr_events(raw)
+        assert len(result) == 1
+        assert result[0]["event_date"] == "2026-08-25"
+
+    @pytest.mark.asyncio
+    async def test_ptr_detail_enriches_events(self):
+        client = _client()
+        status = _load("programs_enrollment.json")
+        ptr_detail = {
+            "enrollmentStatus": "ENROLLED",
+            "cardType": "peak_time",
+            "totalEarnedCredit": 10.0,
+            "activePTRSeason": "Summer 2026",
+            "peakTimeEvents": [
+                {"eventDate": "2026-08-15", "eventEarnedCredit": 2.5},
+                {"eventDate": "2026-08-10", "eventEarnedCredit": 1.0},
+            ],
+            "seasonalDates": {
+                "summer": {"start": "2026-06-01", "end": "2026-09-30"},
+                "winter": {"start": "2026-10-01", "end": "2027-05-31"},
+            },
+            "lastPTRSeason": "Winter 2025",
+            "nextPTRSeason": "Winter 2026",
+        }
+
+        async def _post(query, variables, operation_name):
+            if operation_name == "GetProgramsEnrollmentStatusDetails":
+                return status
+            raise AssertionError(f"unexpected op {operation_name}")
+
+        client._post_graphql = AsyncMock(side_effect=_post)
+
+        async def _detail(query, op_name, params):
+            if op_name == "getPeakTimeRebateEnrollmentDetails":
+                return ptr_detail
+            return None
+
+        client._best_effort_detail = AsyncMock(side_effect=_detail)
+        programs = await client.get_programs("enc-a", "enc-p", "enc-sa")
+        peak = programs.attributes.get("peak_time_rebate")
+        assert peak is not None
+        events = peak["peak_time_events"]
+        assert len(events) == 2
+        assert events[0]["event_date"] == "2026-08-10"
+        assert events[1]["event_date"] == "2026-08-15"
+        assert peak["seasonal_dates"]["summer"]["start"] == "2026-06-01"
+        assert peak["lastPTRSeason"] == "Winter 2025"
+        assert peak["nextPTRSeason"] == "Winter 2026"
+
+
+class TestNetMeteringParse:
+    @pytest.mark.asyncio
+    async def test_parse_net_metering_details(self):
+        client = _client()
+        client._post_graphql = AsyncMock(
+            return_value={
+                "getNetMeteringDetails": {
+                    "isEnrolled": True,
+                    "cardType": "net_metering",
+                    "currentBalance": "$45.00",
+                    "annualTrueUpDate": "2027-04-15",
+                }
+            }
+        )
+        snapshot = await client.get_net_metering_details("enc-a", "enc-p")
+        assert snapshot.fetched_at is not None
+        assert snapshot.attributes["isEnrolled"] is True
+        assert snapshot.attributes["currentBalance"] == "$45.00"
+
+    @pytest.mark.asyncio
+    async def test_net_metering_tolerates_missing(self):
+        client = _client()
+        client._post_graphql = AsyncMock(return_value={"getNetMeteringDetails": None})
+        snapshot = await client.get_net_metering_details("enc-a", "enc-p")
+        assert snapshot.attributes == {}
+
+
+class TestRateCompareParse:
+    @pytest.mark.asyncio
+    async def test_parse_rate_compare(self):
+        client = _client()
+        client._post_graphql = AsyncMock(
+            return_value={
+                "getRateCompare": {
+                    "touTotal": 150.0,
+                    "basicTotal": 175.0,
+                    "savings": 25.0,
+                    "comparisonPeriod": "2026-01 to 2026-07",
+                }
+            }
+        )
+        snapshot = await client.get_rate_compare("0000000000")
+        assert snapshot.fetched_at is not None
+        assert snapshot.attributes["touTotal"] == 150.0
+        assert snapshot.attributes["savings"] == 25.0
+
+    def test_rate_compare_accessors(self):
+        snapshot = RateCompareSnapshot(
+            fetched_at=datetime(2026, 8, 10, tzinfo=UTC),
+            attributes={
+                "touTotal": 150.0,
+                "basicTotal": 175.0,
+                "savings": 25.0,
+                "comparisonPeriod": "2026-01 to 2026-07",
+            },
+        )
+        assert snapshot.savings == 25.0
+        assert snapshot.tou_total == 150.0
+        assert snapshot.basic_total == 175.0
+        assert snapshot.comparison_period == "2026-01 to 2026-07"
+        assert snapshot.has_data is True
+
+    def test_rate_compare_accessors_empty_or_non_numeric(self):
+        snapshot = RateCompareSnapshot()
+        assert snapshot.savings is None
+        assert snapshot.tou_total is None
+        assert snapshot.basic_total is None
+        assert snapshot.comparison_period is None
+        assert snapshot.has_data is False
+
+        weird = RateCompareSnapshot(attributes={"savings": "n/a", "touTotal": float("inf")})
+        assert weird.savings is None
+        assert weird.tou_total is None
+
+
+class TestTodEnrollmentDetail:
+    @pytest.mark.asyncio
+    async def test_tod_detail_attributes_enriched(self):
+        client = _client()
+        status = _load("programs_enrollment.json")
+        tod_detail = {
+            "isEnrolled": False,
+            "cardType": "time_of_day",
+            "annualLookBackEarnedCredit": 42.0,
+            "offPeakCharges": 100.0,
+            "midPeakCharges": 50.0,
+            "onPeakCharges": 75.0,
+            "planSavings": 25.0,
+        }
+
+        async def _post(query, variables, operation_name):
+            if operation_name == "GetProgramsEnrollmentStatusDetails":
+                return status
+            raise AssertionError(f"unexpected op {operation_name}")
+
+        client._post_graphql = AsyncMock(side_effect=_post)
+
+        async def _detail(query, op_name, params):
+            if op_name == "getTimeOfDayEnrollmentDetails":
+                return tod_detail
+            return None
+
+        client._best_effort_detail = AsyncMock(side_effect=_detail)
+        programs = await client.get_programs("enc-a", "enc-p", "enc-sa")
+        detail = programs.attributes.get("tod_enrollment_detail")
+        assert detail is not None
+        assert detail["annualLookBackEarnedCredit"] == 42.0
+        assert detail["planSavings"] == 25.0
+
+
+class TestProgramListTriState:
+    def test_eligible_null_on_matched_row_stays_unknown(self):
+        programs = [ProgramEnrollment(program_name="Time of Day", is_enrolled=True, is_eligible=None)]
+        assert _program_list_eligible(programs, ("time of day", "tod")) is None
+
+    def test_eligible_explicit_false(self):
+        programs = [ProgramEnrollment(program_name="Time of Day", is_enrolled=False, is_eligible=False)]
+        assert _program_list_eligible(programs, ("time of day",)) is False
+
+    def test_eligible_true_wins_over_null_sibling(self):
+        programs = [
+            ProgramEnrollment(program_name="Time of Day A", is_enrolled=False, is_eligible=None),
+            ProgramEnrollment(program_name="Time of Day B", is_enrolled=True, is_eligible=True),
+        ]
+        assert _program_list_eligible(programs, ("time of day",)) is True
+
+    def test_enrolled_null_on_matched_row_stays_unknown(self):
+        programs = [ProgramEnrollment(program_name="Peak Time Rebates", is_enrolled=None)]
+        assert _program_list_enrolled(programs, ("peak time", "ptr")) is None
+
+    def test_unmatched_stays_none(self):
+        programs = [ProgramEnrollment(program_name="Other", is_eligible=True, is_enrolled=True)]
+        assert _program_list_eligible(programs, ("time of day",)) is None
+        assert _program_list_enrolled(programs, ("time of day",)) is None
+
+
+def test_program_enrollment_store_round_trip_allows_null_enrolled():
+    row = ProgramEnrollment(program_name="Time of Day", is_enrolled=None, is_eligible=True)
+    restored = ProgramEnrollment.from_dict(row.to_dict())
+    assert restored is not None
+    assert restored.is_enrolled is None
+    assert restored.is_eligible is True

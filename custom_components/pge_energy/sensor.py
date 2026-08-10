@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import zoneinfo
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -64,6 +64,8 @@ from .const import (
     ENTITY_UNIQUE_LAST_PAYMENT_DATE,
     ENTITY_UNIQUE_LIFETIME_BILLED,
     ENTITY_UNIQUE_LIFETIME_PAYMENTS,
+    ENTITY_UNIQUE_NET_METERING,
+    ENTITY_UNIQUE_NEXT_PTR_EVENT_DATE,
     ENTITY_UNIQUE_RETURN,
     ENTITY_UNIQUE_SYNC_DETAIL,
     ENTITY_UNIQUE_SYNC_ERROR,
@@ -254,6 +256,8 @@ async def async_setup_entry(
                 PGEBillingCycleTotalDaysSensor(coordinator, account_key),
                 PGEBillingLastSyncSensor(coordinator, account_key),
                 PGEBillPdfParseStatusSensor(coordinator, account_key),
+                PGENextPtrEventDateSensor(coordinator, account_key),
+                PGENetMeteringSensor(coordinator, account_key),
             ]
         )
         entities.extend(PGEBillPdfLineItemSensor.build_all(coordinator, account_key))
@@ -324,7 +328,10 @@ class _StatisticLinkedSensor(PGEBaseEntity, SensorEntity):
 class PGEEnergySensor(_StatisticLinkedSensor):
     """Lifetime grid-imported energy (kWh). State is lifetime cumulative sum."""
 
-    _attr_name = "Energy"
+    _attr_name = "Consumption"
+    # Keep documented object-id suffix ``_energy`` on fresh installs (unique_id
+    # remains ``…_energy``; existing registry rows are never renamed).
+    _attr_suggested_object_id = "energy"
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
@@ -332,6 +339,11 @@ class PGEEnergySensor(_StatisticLinkedSensor):
 
     def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
         super().__init__(coordinator, account_key, ENTITY_UNIQUE_ENERGY)
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        """Force ``…_energy`` object id even though the friendly name is Consumption."""
+        return "energy"
 
     @property
     def native_value(self) -> float | None:
@@ -1228,6 +1240,77 @@ class PGEBillingCycleTotalDaysSensor(_TrackerEstimateSensor):
         return estimates.billing_cycle_total_days if estimates is not None else None
 
 
+class PGENextPtrEventDateSensor(PGEBaseEntity, SensorEntity):
+    """Nearest future Peak Time Rebates event date (Pacific today or later)."""
+
+    _attr_translation_key = "next_ptr_event_date"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.DATE
+    _attr_unique_id: str
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{account_key}_{ENTITY_UNIQUE_NEXT_PTR_EVENT_DATE}"
+
+    @property
+    def native_value(self) -> date | None:
+        programs = self.coordinator.programs_snapshot
+        if programs is None:
+            return None
+        detail = programs.attributes.get("peak_time_rebate")
+        if not isinstance(detail, dict):
+            return None
+        events = detail.get("peak_time_events")
+        if not events:
+            return None
+        today_iso = datetime.now(_PGE_TZ).strftime("%Y-%m-%d")
+        for ev in events:
+            event_date = ev.get("event_date", "")
+            if event_date >= today_iso:
+                try:
+                    return date.fromisoformat(event_date)
+                except ValueError:
+                    continue
+        return None
+
+
+class PGENetMeteringSensor(PGEBaseEntity, SensorEntity):
+    """Diagnostic sensor exposing raw net-metering portal fields."""
+
+    _attr_translation_key = "net_metering"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_unique_id: str
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{account_key}_{ENTITY_UNIQUE_NET_METERING}"
+
+    @property
+    def native_value(self) -> str | None:
+        snapshot = self.coordinator.net_metering_snapshot
+        if snapshot is None:
+            return None
+        enrolled = snapshot.attributes.get("isEnrolled")
+        if enrolled is True:
+            return "enrolled"
+        if enrolled is False:
+            return "not_enrolled"
+        return "unknown"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        snapshot = self.coordinator.net_metering_snapshot
+        if snapshot is None:
+            return {}
+        attrs: dict[str, Any] = {}
+        for key, val in snapshot.attributes.items():
+            if val is not None:
+                attrs[key] = val
+        if snapshot.fetched_at is not None:
+            attrs["fetched_at"] = snapshot.fetched_at.isoformat()
+        return attrs
+
+
 class PGEBillingLastSyncSensor(PGEBaseEntity, SensorEntity):
     _attr_translation_key = "billing_last_sync"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
@@ -1429,6 +1512,8 @@ class PGETodVsBasicSavingsSensor(_TodSensor):
 
     ``None`` until the portal exposes a savings figure; the panel computes its
     own local counterfactual from the rate card when this is unavailable.
+    Prefers the legacy pricing-plan ``savings_total`` snapshot and falls back
+    to the confirmed ``getRateCompare`` savings aggregate.
     """
 
     _attr_translation_key = "tod_vs_basic_savings"
@@ -1442,8 +1527,22 @@ class PGETodVsBasicSavingsSensor(_TodSensor):
     @property
     def native_value(self) -> float | None:
         snapshot = self.coordinator.tod.tod_snapshot
-        return snapshot.savings_total if snapshot is not None else None
+        if snapshot is not None and snapshot.savings_total is not None:
+            return snapshot.savings_total
+        rate_compare = self.coordinator.rate_compare_snapshot
+        if rate_compare is not None and rate_compare.has_data:
+            return rate_compare.savings
+        return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        return self._tod_attrs()
+        attrs = self._tod_attrs()
+        rate_compare = self.coordinator.rate_compare_snapshot
+        if rate_compare is not None and rate_compare.has_data:
+            attrs["rate_compare_savings"] = rate_compare.savings
+            attrs["rate_compare_tou_total"] = rate_compare.tou_total
+            attrs["rate_compare_basic_total"] = rate_compare.basic_total
+            attrs["rate_compare_period"] = rate_compare.comparison_period
+            if rate_compare.fetched_at is not None:
+                attrs["rate_compare_fetched_at"] = rate_compare.fetched_at.isoformat()
+        return attrs

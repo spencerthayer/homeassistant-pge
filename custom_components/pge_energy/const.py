@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
-VERSION = "0.9.0"
+VERSION = "0.9.9"
 PLATFORMS = ["sensor", "binary_sensor"]
 
 # Custom panel (registered once per HA instance, not per entry).
@@ -250,6 +250,10 @@ ENTITY_UNIQUE_EST_NEXT_BILL_MAX = "est_next_bill_max"
 ENTITY_UNIQUE_BILLING_CYCLE_DAY = "billing_cycle_day"
 ENTITY_UNIQUE_BILLING_CYCLE_TOTAL_DAYS = "billing_cycle_total_days"
 
+# Programs detail sensors.
+ENTITY_UNIQUE_NEXT_PTR_EVENT_DATE = "next_ptr_event_date"
+ENTITY_UNIQUE_NET_METERING = "net_metering"
+
 # Billing / programs binary sensor entity unique-id suffixes.
 BINARY_UNIQUE_AUTOPAY = "autopay"
 BINARY_UNIQUE_PAPERLESS_BILL = "paperless_bill"
@@ -258,6 +262,8 @@ BINARY_UNIQUE_PROGRAM_GREEN_FUTURE = "program_green_future"
 BINARY_UNIQUE_PROGRAM_TIME_OF_DAY = "program_time_of_day"
 BINARY_UNIQUE_PROGRAM_SMART_THERMOSTAT = "program_smart_thermostat"
 BINARY_UNIQUE_PROGRAM_HABITAT_SUPPORT = "program_habitat_support"
+BINARY_UNIQUE_PROGRAM_SMART_CHARGING = "program_smart_charging"
+BINARY_UNIQUE_PROGRAM_SMART_BATTERY = "program_smart_battery"
 
 SYNC_STATUS_IDLE = "idle"
 SYNC_STATUS_REFRESHING = "refreshing"

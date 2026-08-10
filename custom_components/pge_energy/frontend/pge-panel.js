@@ -10,22 +10,31 @@ import {
   RANGE_PRESET_MORE,
   RANGE_PRESET_ORDER,
   RANGE_PRESET_PRIMARY,
+  RATE_EPSILON_KWH,
   TOD_PERIOD_LABELS,
   TOD_PERIODS,
   accountingPlan,
   bucketTodByPeriod,
   clampToPublishedEnd,
+  computeTodPlanCompare,
+  todEnrollmentVerdict,
   computeUsageAccounting,
   countSeriesPoints,
   fetchStatisticSeries,
   formatRangeLabel,
+  formatSignedUsd,
   invalidateStatsCache,
   minPointsForPreset,
+  pacificMidnightUtc,
   pacificParts,
   pacificWeekStartUtc,
   pacificYmd,
+  priorPacificYmd,
+  projectDirectionalUsage,
+  projectUsageSeries,
   publishedDataEnd,
   rangePresets,
+  seriesCostCoverageComplete,
   shiftChartRange,
   stateAttr,
   stateDisplay,
@@ -34,7 +43,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.9.0";
+} from "./data.js?v=0.9.9";
 import {
   createBarChart,
   createLineChart,
@@ -44,9 +53,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.9.0";
-import { sparklineSvg } from "./svg-helpers.js?v=0.9.0";
-import { applyPanelTheme } from "./theme.js?v=0.9.0";
+} from "./charts.js?v=0.9.9";
+import { sparklineSvg } from "./svg-helpers.js?v=0.9.9";
+import { applyPanelTheme } from "./theme.js?v=0.9.9";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -55,6 +64,7 @@ export const PANEL_SECTION_ANCHORS = {
   analytics: "#insights-weather",
   tod: "#tod",
   billing: "#billing",
+  programs: "#programs",
 };
 
 /**
@@ -639,6 +649,8 @@ details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 
       var(--card-background-color, var(--primary-background-color, transparent))
     );
   }
+  .tod-compare-pair { grid-template-columns: 1fr; }
+  .tod-compare-vs { padding-top: 0; text-align: center; }
   .usage-table-wrap {
     max-height: min(60vh, 420px);
     -webkit-overflow-scrolling: touch;
@@ -733,6 +745,35 @@ details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 
   .tod-counterfactual .label { font-size: 0.75rem; color: var(--secondary-text-color); }
   .tod-counterfactual .value { font-size: 1.3rem; font-weight: 650; margin: 4px 0; }
   .tod-counterfactual .delta { font-size: 0.75rem; color: var(--secondary-text-color); }
+  .tod-compare-verdict {
+    font-size: 1.45rem;
+    font-weight: 700;
+    margin: 6px 0 2px;
+    line-height: 1.2;
+  }
+  .tod-compare-verdict.cost-more { color: var(--pge-status-critical); }
+  .tod-compare-verdict.save { color: var(--pge-status-good); }
+  .tod-compare-pair {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 8px;
+    align-items: start;
+    margin: 6px 0 8px;
+  }
+  .tod-compare-leg .value { font-size: 1.15rem; font-weight: 650; margin: 2px 0 0; }
+  .tod-compare-vs {
+    align-self: center;
+    font-size: 0.75rem;
+    color: var(--secondary-text-color);
+    padding-top: 1.1rem;
+  }
+  details.tod-compare-math { margin-top: 8px; }
+  details.tod-compare-math > summary {
+    cursor: pointer; font-size: 0.85rem; color: var(--secondary-text-color);
+  }
+  .tod-range { margin: 0 0 12px; }
+  .tod-range-caption { margin: 0; flex: 1 1 100%; font-size: 0.85rem; }
+  .tod-range .range-label { font-size: 0.82rem; color: var(--secondary-text-color); }
 `;
 
 class PgeEnergyPanel extends HTMLElement {
@@ -748,6 +789,11 @@ class PgeEnergyPanel extends HTMLElement {
     this._rangeKey = "24h";
     this._rangeShift = 0;
     this._customRange = null;
+    this._todRangeKey = "last_cycle";
+    this._todCustomRange = null;
+    this._todRangeTouched = false;
+    this._todBillReady = false;
+    this._todRenderGen = 0;
     this._availablePresets = null;
     this._period = "hour";
     this._loading = true;
@@ -768,8 +814,15 @@ class PgeEnergyPanel extends HTMLElement {
       this._renderBillingPrograms();
       this._renderSync();
       this._renderDiagnostics();
-      // Bill-bound presets (cycle) may appear only after entity states hydrate.
-      void this._probeAvailablePresets().then(() => this._renderFilters());
+      // Bill-bound presets (cycle / last_cycle) may appear only after entity states hydrate.
+      void this._probeAvailablePresets().then(() => {
+        this._renderFilters();
+        const billReady = !!this._billBounds();
+        if (billReady !== this._todBillReady) {
+          this._todBillReady = billReady;
+          void this._renderTod();
+        }
+      });
       // Theme / dark-mode switches require chart option rebuild (canvas colors).
       if (themeChanged) {
         void this._rebuildThemeCharts();
@@ -969,6 +1022,7 @@ class PgeEnergyPanel extends HTMLElement {
     destroyCharts(this._charts);
     this._charts = [];
     await this._probeAvailablePresets();
+    this._todBillReady = !!this._billBounds();
     this._renderFilters();
     this._renderSync();
     await this._renderKpis();
@@ -1040,6 +1094,60 @@ class PgeEnergyPanel extends HTMLElement {
     const base = this._basePresetRange();
     const shifted = shiftChartRange(base, -Math.max(0, this._rangeShift || 0));
     return { ...shifted, key: base.key, label: base.label || base.key };
+  }
+
+  _ensureTodRangeKey() {
+    if (this._todCustomRange?.start && this._todCustomRange?.end) return;
+    const available = this._todAvailablePresets();
+    // Untouched default prefers Last cycle only when statement dates exist;
+    // otherwise fall through to a short exact-window preset (not a fake cycle).
+    if (!this._todRangeTouched) {
+      const preferred = ["last_cycle", "cycle", "30d", "7d", "24h"].find((k) =>
+        available.has(k)
+      );
+      this._todRangeKey = preferred || "24h";
+      return;
+    }
+    const key = this._normalizeRangeKey(this._todRangeKey);
+    if (available.has(key)) {
+      this._todRangeKey = key;
+      return;
+    }
+    const fallback = ["last_cycle", "cycle", "30d", "7d", "24h"].find((k) =>
+      available.has(k)
+    );
+    this._todRangeKey = fallback || "24h";
+  }
+
+  _resolveTodRange() {
+    if (this._todCustomRange?.start && this._todCustomRange?.end) {
+      const start = new Date(this._todCustomRange.start);
+      const end = clampToPublishedEnd(this._todCustomRange.end);
+      if (Number.isFinite(start.getTime()) && end > start) {
+        const clamped = this._clampTodExactWindow(start, end);
+        // Persist the clamp so the datetime inputs match the analyzed window.
+        if (clamped.capped) {
+          this._todCustomRange = { start: clamped.start, end: clamped.end };
+        }
+        return {
+          start: clamped.start,
+          end: clamped.end,
+          period: "hour",
+          key: "custom",
+          label: "custom",
+          capped: clamped.capped,
+        };
+      }
+    }
+    this._ensureTodRangeKey();
+    const base = this._basePresetRange(this._todRangeKey);
+    return { ...base, key: this._todRangeKey, label: base.label || this._todRangeKey };
+  }
+
+  _selectTodRangeKey(key) {
+    this._todRangeKey = this._normalizeRangeKey(key);
+    this._todCustomRange = null;
+    this._todRangeTouched = true;
   }
 
   async _probeAvailablePresets() {
@@ -1377,6 +1485,7 @@ class PgeEnergyPanel extends HTMLElement {
     const yesterdayKwh = stateNumber(this._hass, e.yesterday_energy);
     const yesterdayReturn = stateNumber(this._hass, e.yesterday_return);
     const yesterdayCost = stateNumber(this._hass, e.yesterday_cost);
+    const yesterdayCompensation = stateNumber(this._hass, e.yesterday_compensation);
     // Same PGE billDetails period as current_bill_kwh (billingPeriodStartDate→EndDate).
     const cycleKwh = stateNumber(this._hass, e.current_bill_kwh);
     const cycleCost = stateNumber(this._hass, e.bill_current_charges);
@@ -1428,11 +1537,14 @@ class PgeEnergyPanel extends HTMLElement {
     let sinceStatementKwh = null;
     let sinceStatementCost = null;
     let sinceStatementRange = "After statement cycle";
+    let yesterdayCompensationStat = null;
+    let sparkNetCost = null;
     try {
       const publishedEnd = publishedDataEnd();
       const weekStart = pacificWeekStartUtc();
       const sparkStart = new Date(publishedEnd.getTime() - 14 * 24 * 60 * 60 * 1000);
-      const [kwhSeries, costSeries, weekKwhSum, weekCostSum] = await Promise.all([
+      const yesterdayStart = pacificMidnightUtc(priorPacificYmd(pacificYmd(publishedEnd)));
+      const [kwhSeries, costSeries, weekKwhSum, weekCostSum, compensationDaySum, compensationSparkSeries] = await Promise.all([
         fetchStatisticSeries(this._hass, this._account.statistic_ids.consumption, {
           start: sparkStart,
           end: publishedEnd,
@@ -1455,11 +1567,44 @@ class PgeEnergyPanel extends HTMLElement {
           end: publishedEnd,
           period: "hour",
         }),
+        sumStatisticChange(this._hass, this._account.statistic_ids.compensation, {
+          start: yesterdayStart,
+          end: publishedEnd,
+          period: "hour",
+        }),
+        fetchStatisticSeries(this._hass, this._account.statistic_ids.compensation, {
+          start: sparkStart,
+          end: publishedEnd,
+          period: "day",
+          maxPoints: 32,
+        }),
       ]);
       sparkKwh = kwhSeries.values || [];
       sparkCost = costSeries.values || [];
       weekKwh = weekKwhSum.total;
       weekCost = weekCostSum.total;
+      yesterdayCompensationStat = compensationDaySum.count > 0 ? compensationDaySum.total : null;
+      {
+        const compByX = new Map();
+        const compXs = compensationSparkSeries.xs || [];
+        const compVals = compensationSparkSeries.values || [];
+        let observedCompensation = false;
+        for (let i = 0; i < compXs.length; i++) {
+          const cv = Number(compVals[i]);
+          if (compXs[i] == null || !Number.isFinite(cv)) continue;
+          compByX.set(Math.round(compXs[i]), cv);
+          if (cv > 0) observedCompensation = true;
+        }
+        if (observedCompensation) {
+          const xs = costSeries.xs || [];
+          sparkNetCost = sparkCost.map((v, i) => {
+            const cost = Number(v);
+            if (!Number.isFinite(cost)) return null;
+            const comp = compByX.get(Math.round(xs[i]));
+            return comp != null ? cost - comp : cost;
+          });
+        }
+      }
       const weekStartDay = pacificYmd(weekStart);
       const weekEndDay = pacificYmd(new Date(publishedEnd.getTime() - 1));
       if (weekStartDay && weekEndDay) {
@@ -1558,25 +1703,55 @@ class PgeEnergyPanel extends HTMLElement {
 
 
     const spark = (vals, color) => sparklineSvg(vals || [], { stroke: color });
+    const hasYesterdayExport = yesterdayReturn != null && yesterdayReturn > 0;
+    // yesterday_compensation is disabled by default; fall back to the imported
+    // `_compensation` statistic so export days still show the net interval amount.
+    const yesterdayCompensationEffective =
+      yesterdayCompensation != null ? yesterdayCompensation : yesterdayCompensationStat;
+    const hasYesterdayCredit =
+      hasYesterdayExport &&
+      Number.isFinite(yesterdayCompensationEffective) &&
+      yesterdayCompensationEffective > 0;
+    const yesterdayNetAmount = hasYesterdayCredit
+      ? (yesterdayCost || 0) - yesterdayCompensationEffective
+      : null;
+    const yesterdayMoneyLabel = hasYesterdayCredit
+      ? "Yesterday net interval amount"
+      : "Yesterday import cost";
+    const yesterdayMoneyValue = hasYesterdayCredit
+      ? formatSignedUsd(yesterdayNetAmount)
+      : this._fmt(yesterdayCost, "", true);
+    const yesterdayMoneyNote = hasYesterdayCredit
+      ? yesterdayNetAmount < 0
+        ? "Interval credit (estimate)"
+        : "Interval charge (estimate)"
+      : "";
+    // Pair the money KPI with a matching trend: net interval amount uses the
+    // compensation-adjusted series; import cost uses the raw import costs.
+    const moneySpark = hasYesterdayCredit && sparkNetCost ? sparkNetCost : sparkCost;
     el.innerHTML = `
       <h2>At a glance</h2>
-      <p class="muted" style="margin:0 0 12px">Yesterday and week use imported intervals through yesterday (Pacific week starts Sunday; no complete today). Statement = PGE billDetails. Usage cycle = imported hourly sum over that period. Since statement = usage after the statement end through yesterday. PGE estimate = PGE's own open-cycle projection, which does not reconcile with the interval sums.</p>
+      <p class="muted" style="margin:0 0 12px">Yesterday and week use imported intervals through yesterday (Pacific week starts Sunday; no complete today). Statement = PGE billDetails. Usage cycle = imported hourly sum over that period. Since statement = usage after the statement end through yesterday. PGE estimate = PGE's own open-cycle projection, which does not reconcile with the interval sums. Interval net amount is an estimate and does not model PGE monthly/TOD credit buckets or annual true-up.</p>
       <div class="kpi-row">
         <div class="kpi"><div class="label">Yesterday import</div><div class="value">${this._fmt(yesterdayKwh, " kWh")}</div>${spark(sparkKwh, "var(--pge-series-kwh)")}</div>
         ${
-          yesterdayReturn != null && yesterdayReturn > 0
+          hasYesterdayExport
             ? `<div class="kpi"><div class="label">Yesterday export</div><div class="value">${this._fmt(yesterdayReturn, " kWh")}</div></div>`
             : ""
         }
-        <div class="kpi"><div class="label">Yesterday cost</div><div class="value">${this._fmt(yesterdayCost, "", true)}</div>${spark(sparkCost, "var(--pge-series-cost)")}</div>
-        <div class="kpi"><div class="label">Week kWh</div><div class="value">${this._fmt(weekKwh, " kWh")}</div><div class="delta">${this._escape(weekRange)}</div>${spark(sparkWeekKwh, "var(--pge-series-kwh)")}</div>
-        <div class="kpi"><div class="label">Week cost</div><div class="value">${this._fmt(weekCost, "", true)}</div><div class="delta">${this._escape(weekRange)}</div>${spark(sparkWeekCost, "var(--pge-series-cost)")}</div>
+        <div class="kpi"><div class="label">${yesterdayMoneyLabel}</div><div class="value">${yesterdayMoneyValue}</div>${
+          yesterdayMoneyNote
+            ? `<div class="delta">${this._escape(yesterdayMoneyNote)}</div>`
+            : ""
+        }${spark(moneySpark, "var(--pge-series-cost)")}</div>
+        <div class="kpi"><div class="label">Week import</div><div class="value">${this._fmt(weekKwh, " kWh")}</div><div class="delta">${this._escape(weekRange)}</div>${spark(sparkWeekKwh, "var(--pge-series-kwh)")}</div>
+        <div class="kpi"><div class="label">Week import cost</div><div class="value">${this._fmt(weekCost, "", true)}</div><div class="delta">${this._escape(weekRange)}</div>${spark(sparkWeekCost, "var(--pge-series-cost)")}</div>
         <div class="kpi kpi-statement"><div class="label">Statement cycle cost</div><div class="value">${this._fmt(cycleCost, "", true)}</div><div class="delta">${this._escape(cycleRange)}</div></div>
         <div class="kpi kpi-statement"><div class="label">Statement cycle kWh</div><div class="value">${this._fmt(cycleKwh, " kWh")}</div><div class="delta">${this._escape(cycleRange)}</div></div>
-        <div class="kpi kpi-usage"><div class="label">Usage cycle cost</div><div class="value">${this._fmt(usageCycleCost, "", true)}</div><div class="delta">${this._escape(fmtDelta(costDelta, true))}</div></div>
-        <div class="kpi kpi-usage"><div class="label">Usage cycle kWh</div><div class="value">${this._fmt(usageCycleKwh, " kWh")}</div><div class="delta">${this._escape(fmtDelta(kwhDelta, false))}</div></div>
-        <div class="kpi kpi-usage"><div class="label">Since statement cost</div><div class="value">${this._fmt(sinceStatementCost, "", true)}</div><div class="delta">${this._escape(sinceStatementRange)}</div></div>
-        <div class="kpi kpi-usage"><div class="label">Since statement kWh</div><div class="value">${this._fmt(sinceStatementKwh, " kWh")}</div><div class="delta">${this._escape(sinceStatementRange)}</div></div>
+        <div class="kpi kpi-usage"><div class="label">Usage cycle import cost</div><div class="value">${this._fmt(usageCycleCost, "", true)}</div><div class="delta">${this._escape(fmtDelta(costDelta, true))}</div></div>
+        <div class="kpi kpi-usage"><div class="label">Usage cycle import kWh</div><div class="value">${this._fmt(usageCycleKwh, " kWh")}</div><div class="delta">${this._escape(fmtDelta(kwhDelta, false))}</div></div>
+        <div class="kpi kpi-usage"><div class="label">Since statement import cost</div><div class="value">${this._fmt(sinceStatementCost, "", true)}</div><div class="delta">${this._escape(sinceStatementRange)}</div></div>
+        <div class="kpi kpi-usage"><div class="label">Since statement import kWh</div><div class="value">${this._fmt(sinceStatementKwh, " kWh")}</div><div class="delta">${this._escape(sinceStatementRange)}</div></div>
         <div class="kpi kpi-estimate"><div class="label">PGE est. charges so far</div><div class="value">${this._fmt(estCharges, "", true)}</div><div class="delta">${this._escape(cycleProgress)}</div></div>
         <div class="kpi kpi-estimate kpi-dual"><div class="label">PGE est. next bill</div><div class="value">${this._escape(estRange)}</div><div class="delta">${this._escape(cycleProgress)}</div></div>
         <div class="kpi status-${dueStatus}"><div class="label">Amount due</div><div class="value">${this._fmt(amountDue, "", true)}</div><div class="delta">Due ${this._escape(this._fmtDate(dueDate) || "—")}</div></div>
@@ -1629,45 +1804,26 @@ class PgeEnergyPanel extends HTMLElement {
     // High ceiling so range accounting is not LTTB-downsampled away.
     const maxPoints = 20000;
 
-    const [kwh, returned, cost, temp] = await Promise.all([
-      fetchStatisticSeries(this._hass, ids.consumption, {
-        start: range.start,
-        end: range.end,
-        period,
-        maxPoints,
-      }),
-      ids.return
-        ? fetchStatisticSeries(this._hass, ids.return, {
-            start: range.start,
-            end: range.end,
-            period,
-            maxPoints,
-          })
-        : Promise.resolve({ xs: [], values: [] }),
-      fetchStatisticSeries(this._hass, ids.cost, {
-        start: range.start,
-        end: range.end,
-        period,
-        maxPoints,
-      }),
-      fetchStatisticSeries(this._hass, ids.temperature, {
-        start: range.start,
-        end: range.end,
-        period,
-        maxPoints,
-      }),
-    ]);
-    this._lastSeries = { kwh, returned, cost, temp, range, period };
+    const raw = await this._fetchUsageSeries(ids, range.start, range.end, period, maxPoints);
+    // Chart view uses projectDirectionalUsage shape; accounting uses projectUsageSeries.
+    const chartProjection = projectDirectionalUsage(raw);
+    const accountingProjection = projectUsageSeries(raw);
+    this._lastSeries = { ...raw, projection: accountingProjection, range, period };
 
     const usageHost = this.shadowRoot.getElementById("chart-usage");
     if (usageHost) {
       this._disposeHostCharts(usageHost);
       const chart = await createUsageComboChart(usageHost, {
-        kwh: { xs: kwh.xs, ys: kwh.values },
-        returned: { xs: returned.xs, ys: returned.values },
-        cost: { xs: cost.xs, ys: cost.values },
-        temp: { xs: temp.xs, ys: temp.means },
+        kwh: { xs: raw.kwh?.xs || [], ys: raw.kwh?.values || [] },
+        returned: { xs: raw.returned?.xs || [], ys: raw.returned?.values || [] },
+        cost: { xs: raw.cost?.xs || [], ys: raw.cost?.values || [] },
+        compensation: {
+          xs: raw.compensation?.xs || [],
+          ys: raw.compensation?.values || [],
+        },
+        temp: { xs: raw.temp?.xs || [], ys: raw.temp?.means || [] },
         colors,
+        projection: chartProjection,
       });
       if (chart) this._charts.push(chart);
     }
@@ -1740,26 +1896,33 @@ class PgeEnergyPanel extends HTMLElement {
     return s;
   }
 
-  async _fetchTriple(ids, start, end, period, maxPoints) {
-    const [kwh, returned, cost, temp] = await Promise.all([
+  async _fetchUsageSeries(ids, start, end, period, maxPoints) {
+    const [kwh, returned, cost, compensation, temp] = await Promise.all([
       fetchStatisticSeries(this._hass, ids.consumption, { start, end, period, maxPoints }),
       ids.return
         ? fetchStatisticSeries(this._hass, ids.return, { start, end, period, maxPoints })
         : Promise.resolve({ xs: [], values: [] }),
       fetchStatisticSeries(this._hass, ids.cost, { start, end, period, maxPoints }),
+      ids.compensation
+        ? fetchStatisticSeries(this._hass, ids.compensation, { start, end, period, maxPoints })
+        : Promise.resolve({ xs: [], values: [] }),
       fetchStatisticSeries(this._hass, ids.temperature, { start, end, period, maxPoints }),
     ]);
-    return { kwh, returned, cost, temp };
+    return { kwh, returned, cost, compensation, temp };
   }
 
-  /** Drop empty rollup rows (no kWh/cost/temp — lack of data, not a real zero day). */
+  /**
+   * Drop empty rollup rows (missing data only). Retain true signed/net zeros when
+   * samples, cost, or temperature prove the bucket exists.
+   */
   _populatedRollupRows(rows) {
-    return (rows || []).filter(
-      (r) =>
-        (r.kwh != null && Number(r.kwh) !== 0) ||
-        (r.cost != null && Number(r.cost) !== 0) ||
-        (r.avgTemp != null && Number.isFinite(Number(r.avgTemp)))
-    );
+    return (rows || []).filter((r) => {
+      if (r.samples > 0) return true;
+      if (r.avgTemp != null && Number.isFinite(Number(r.avgTemp))) return true;
+      if (r.cost != null && Number.isFinite(Number(r.cost)) && Number(r.cost) !== 0) return true;
+      if (r.kwh != null && Number.isFinite(Number(r.kwh)) && Number(r.kwh) !== 0) return true;
+      return false;
+    });
   }
 
   /** localStorage map of Usage `<details data-persist>` open state. */
@@ -1806,23 +1969,28 @@ class PgeEnergyPanel extends HTMLElement {
     });
   }
 
-  _rollupTable(title, caption, rows, keyLabel, persistKey) {
+  _rollupTable(title, caption, rows, keyLabel, persistKey, { signed = false, netAmount = false } = {}) {
     const populated = this._populatedRollupRows(rows);
     if (!populated.length) return "";
-    const cell = (raw, money = false) => {
+    const kwhHead = signed ? "Net kWh" : "Import kWh";
+    const costHead = netAmount ? "Net interval amount" : "Import cost";
+    const rateHead = netAmount ? "Net $/kWh (est.)" : "$/kWh";
+    const cell = (raw, money = false, { allowZero = false } = {}) => {
       if (raw == null || Number.isNaN(Number(raw))) return "";
-      if (Number(raw) === 0) return "";
-      return this._fmt(raw, "", money);
+      const n = Number(raw);
+      if (n === 0 && !allowZero) return "";
+      if (money && (netAmount || n < 0)) return formatSignedUsd(n);
+      return this._fmt(n, "", money);
     };
     const numAttr = (raw) =>
       raw == null || Number.isNaN(Number(raw)) ? "" : String(Number(raw));
     const body = populated
       .map((r) => {
-        const kwh = cell(r.kwh);
-        const cost = cell(r.cost, true);
+        const kwh = cell(r.kwh, false, { allowZero: signed });
+        const cost = cell(r.cost, true, { allowZero: netAmount });
         const rate = cell(r.rate, true);
         const temp = cell(r.avgTemp);
-        const peak = cell(r.peakKwh);
+        const peak = cell(r.peakKwh, false, { allowZero: signed });
         return `<tr>
           <td data-sort="${this._escape(r.key)}">${this._escape(this._fmtRollupKey(r.key))}</td>
           <td data-sort="${numAttr(r.kwh)}">${kwh || "—"}</td>
@@ -1837,7 +2005,22 @@ class PgeEnergyPanel extends HTMLElement {
     const totK = populated.reduce((a, r) => a + (Number(r.kwh) || 0), 0);
     const totC = populated.reduce((a, r) => a + (Number(r.cost) || 0), 0);
     const totS = populated.reduce((a, r) => a + (r.samples || 0), 0);
-    const rate = totK > 0 ? totC / totK : null;
+    // Footer rate must match the row semantics: net-amount mode uses net flow,
+    // while signed import-cost mode divides by gross import (net + return) so an
+    // export-heavy range doesn't skew the $/kWh.
+    const totG = populated.reduce((a, r) => {
+      const g = Number(r.grossImport);
+      return a + (Number.isFinite(g) ? g : 0);
+    }, 0);
+    const hasGross = populated.some((r) => Number.isFinite(Number(r.grossImport)));
+    let rate;
+    if (netAmount) {
+      rate = Math.abs(totK) > RATE_EPSILON_KWH ? totC / totK : null;
+    } else if (signed && hasGross) {
+      rate = totG > RATE_EPSILON_KWH ? totC / totG : null;
+    } else {
+      rate = totK > RATE_EPSILON_KWH ? totC / totK : null;
+    }
     const captionText = `${caption} Click a column header to sort.`;
     const persist = persistKey
       ? ` data-persist="${this._escape(persistKey)}"${this._detailsOpenAttr(persistKey)}`
@@ -1852,9 +2035,9 @@ class PgeEnergyPanel extends HTMLElement {
           <table class="usage-day-table">
             <thead><tr>
               <th data-col="0" title="Sort by ${this._escape(keyLabel)}">${this._escape(keyLabel)}</th>
-              <th data-col="1" title="Sort by kWh">kWh</th>
-              <th data-col="2" title="Sort by cost">Cost</th>
-              <th data-col="3" title="Sort by rate">$/kWh</th>
+              <th data-col="1" title="Sort by ${this._escape(kwhHead)}">${this._escape(kwhHead)}</th>
+              <th data-col="2" title="Sort by ${this._escape(costHead)}">${this._escape(costHead)}</th>
+              <th data-col="3" title="Sort by ${this._escape(rateHead)}">${this._escape(rateHead)}</th>
               <th data-col="4" title="Sort by temperature">Avg °F</th>
               <th data-col="5" title="Sort by buckets">Buckets</th>
               <th data-col="6" title="Sort by peak">Peak bucket</th>
@@ -1862,9 +2045,21 @@ class PgeEnergyPanel extends HTMLElement {
             <tbody>${body}</tbody>
             <tfoot><tr>
               <td>Total</td>
-              <td>${totK ? this._fmt(totK, "") : ""}</td>
-              <td>${totC ? this._fmt(totC, "", true) : ""}</td>
-              <td>${rate != null && rate !== 0 ? this._fmt(rate, "", true) : ""}</td>
+              <td>${totK || (signed && populated.length) ? this._fmt(totK, "") : ""}</td>
+              <td>${
+                totC || (netAmount && populated.length)
+                  ? netAmount || totC < 0
+                    ? formatSignedUsd(totC)
+                    : this._fmt(totC, "", true)
+                  : ""
+              }</td>
+              <td>${
+                rate != null && rate !== 0
+                  ? netAmount || rate < 0
+                    ? formatSignedUsd(rate)
+                    : this._fmt(rate, "", true)
+                  : ""
+              }</td>
               <td></td>
               <td>${totS || ""}</td>
               <td></td>
@@ -1911,7 +2106,7 @@ class PgeEnergyPanel extends HTMLElement {
     const host = this.shadowRoot.getElementById("usage-stats");
     const account = this._account;
     if (!host || !this._lastSeries || !account) return;
-    const { kwh, cost, temp, range, period } = this._lastSeries;
+    const { range, period, projection: chartProjection } = this._lastSeries;
     if (!range?.start || !range?.end) {
       host.innerHTML = "";
       return;
@@ -1933,7 +2128,15 @@ class PgeEnergyPanel extends HTMLElement {
 
     const ids = account.statistic_ids;
     const maxPoints = 25000;
-    const chart = { kwh, cost, temp };
+    const chart =
+      chartProjection ||
+      projectUsageSeries({
+        kwh: this._lastSeries.kwh,
+        returned: this._lastSeries.returned,
+        cost: this._lastSeries.cost,
+        compensation: this._lastSeries.compensation,
+        temp: this._lastSeries.temp,
+      });
     let hourly = period === "hour" ? chart : null;
     let daily = period === "day" ? chart : null;
     let monthly = period === "month" ? chart : null;
@@ -1942,22 +2145,22 @@ class PgeEnergyPanel extends HTMLElement {
       const jobs = [];
       if (plan.needHour && !hourly) {
         jobs.push(
-          this._fetchTriple(ids, range.start, range.end, "hour", maxPoints).then((t) => {
-            hourly = t;
+          this._fetchUsageSeries(ids, range.start, range.end, "hour", maxPoints).then((t) => {
+            hourly = projectUsageSeries(t);
           })
         );
       }
       if (plan.needDay && !daily) {
         jobs.push(
-          this._fetchTriple(ids, range.start, range.end, "day", maxPoints).then((t) => {
-            daily = t;
+          this._fetchUsageSeries(ids, range.start, range.end, "day", maxPoints).then((t) => {
+            daily = projectUsageSeries(t);
           })
         );
       }
       if (plan.needMonth && !monthly) {
         jobs.push(
-          this._fetchTriple(ids, range.start, range.end, "month", maxPoints).then((t) => {
-            monthly = t;
+          this._fetchUsageSeries(ids, range.start, range.end, "month", maxPoints).then((t) => {
+            monthly = projectUsageSeries(t);
           })
         );
       }
@@ -1988,6 +2191,10 @@ class PgeEnergyPanel extends HTMLElement {
       return;
     }
 
+    const signed = acct.flowMode === "signed";
+    const netAmount = acct.amountMode === "net";
+    const kwhLabel = signed ? "Net kWh" : "Import kWh";
+    const amountLabel = netAmount ? "Net interval amount" : "Import cost";
     const spanLabel = formatRangeLabel(range.start, range.end);
     const periodLabel = period === "month" ? "month" : period === "day" ? "day" : "hour";
     const scaleNote =
@@ -2008,102 +2215,221 @@ class PgeEnergyPanel extends HTMLElement {
     if (acct.plan.showDays && daysPop.length) coverBits.push(`${daysPop.length} days`);
     if (acct.plan.showHours && hoursPop.length) coverBits.push(`${hoursPop.length} hours`);
     else if (acct.hour?.count) coverBits.push(`${acct.hour.count} hour samples`);
+    const modeNote = signed
+      ? " · signed grid flow + interval estimate"
+      : " · import series";
     const meta = `${spanLabel} · chart ${periodLabel} · ${scaleNote}${
       coverBits.length ? ` · ${coverBits.join(" · ")}` : ""
-    } · span ${acct.spanDays.toFixed(1)} days`;
+    } · span ${acct.spanDays.toFixed(1)} days${modeNote}`;
 
     const bucketLabel = periodLabel;
     /** @type {{section?: string, label?: string, value?: string, note?: string}[]} */
     const metrics = [];
     const addSection = (name) => metrics.push({ section: name });
-    const addMetric = (label, raw, note = "", { money = false, suffix = "" } = {}) => {
+    const addMetric = (label, raw, note = "", { money = false, suffix = "", allowZero = false } = {}) => {
       if (raw == null || Number.isNaN(Number(raw))) return;
       const n = Number(raw);
-      if (n === 0) return;
-      const value = money ? this._fmt(n, "", true) : this._fmt(n, suffix);
+      if (n === 0 && !allowZero) return;
+      const value = money
+        ? netAmount || n < 0
+          ? formatSignedUsd(n)
+          : this._fmt(n, "", true)
+        : this._fmt(n, suffix);
       if (!value || value === "—") return;
       metrics.push({ label, value, note: note || "" });
     };
 
     addSection("Totals & averages");
-    addMetric("Total kWh", acct.totalKwh, "imported series", { suffix: " kWh" });
-    addMetric("Total cost", acct.totalCost, "", { money: true });
-    addMetric("Avg $/kWh", acct.avgRate, "", { money: true });
-    addMetric("Avg kWh / hour", acct.avgKwhPerHour, "÷ span hours", { suffix: " kWh" });
-    addMetric("Avg kWh / day", acct.avgKwhPerDay, "÷ span days", { suffix: " kWh" });
-    addMetric("Avg cost / hour", acct.avgCostPerHour, "", { money: true });
-    addMetric("Avg cost / day", acct.avgCostPerDay, "", { money: true });
+    addMetric(
+      signed ? "Total net kWh" : "Total import kWh",
+      acct.totalKwh,
+      signed ? "consumption − return" : "imported series",
+      { suffix: " kWh", allowZero: signed }
+    );
+    addMetric(amountLabel, acct.totalCost, netAmount ? "cost − compensation (estimate)" : "", {
+      money: true,
+      allowZero: netAmount,
+    });
+    addMetric(
+      netAmount ? "Net amount / net kWh (estimate)" : "Avg import $/kWh",
+      acct.avgRate,
+      "not the TOD tariff",
+      { money: true }
+    );
+    addMetric(
+      signed ? "Avg net kWh / hour" : "Avg import kWh / hour",
+      acct.avgKwhPerHour,
+      "÷ span hours",
+      { suffix: " kWh" }
+    );
+    addMetric(
+      signed ? "Avg net kWh / day" : "Avg import kWh / day",
+      acct.avgKwhPerDay,
+      "÷ span days",
+      { suffix: " kWh" }
+    );
+    addMetric(
+      netAmount ? "Avg net amount / hour" : "Avg import cost / hour",
+      acct.avgCostPerHour,
+      "",
+      { money: true }
+    );
+    addMetric(
+      netAmount ? "Avg net amount / day" : "Avg import cost / day",
+      acct.avgCostPerDay,
+      "",
+      { money: true }
+    );
     if (acct.spanMonths >= 1.5) {
-      addMetric("Avg kWh / month", acct.avgKwhPerMonth, "÷ span months", { suffix: " kWh" });
-      addMetric("Avg cost / month", acct.avgCostPerMonth, "", { money: true });
+      addMetric(
+        signed ? "Avg net kWh / month" : "Avg import kWh / month",
+        acct.avgKwhPerMonth,
+        "÷ span months",
+        { suffix: " kWh" }
+      );
+      addMetric(
+        netAmount ? "Avg net amount / month" : "Avg import cost / month",
+        acct.avgCostPerMonth,
+        "",
+        { money: true }
+      );
     }
     if (acct.spanYears >= 0.9) {
-      addMetric("Avg kWh / year", acct.avgKwhPerYear, "÷ span years", { suffix: " kWh" });
-      addMetric("Avg cost / year", acct.avgCostPerYear, "", { money: true });
+      addMetric(
+        signed ? "Avg net kWh / year" : "Avg import kWh / year",
+        acct.avgKwhPerYear,
+        "÷ span years",
+        { suffix: " kWh" }
+      );
+      addMetric(
+        netAmount ? "Avg net amount / year" : "Avg import cost / year",
+        acct.avgCostPerYear,
+        "",
+        { money: true }
+      );
     }
 
     addSection(`Distribution (${bucketLabel})`);
     addMetric("Avg temperature", acct.temp.mean, `${acct.temp.count} samples`, { suffix: " °F" });
-    addMetric(`Median kWh`, acct.kwh.median, `per ${bucketLabel}`, { suffix: " kWh" });
-    addMetric(`Median cost`, acct.cost.median, `per ${bucketLabel}`, { money: true });
+    addMetric(`Median ${kwhLabel}`, acct.kwh.median, `per ${bucketLabel}`, { suffix: " kWh" });
+    addMetric(`Median ${amountLabel}`, acct.cost.median, `per ${bucketLabel}`, { money: true });
     addMetric("Median temperature", acct.temp.median, "", { suffix: " °F" });
-    addMetric("kWh stdev", acct.kwh.stdev, `per ${bucketLabel}`, { suffix: " kWh" });
-    addMetric("Cost stdev", acct.cost.stdev, `per ${bucketLabel}`, { money: true });
+    addMetric(`${kwhLabel} stdev`, acct.kwh.stdev, `per ${bucketLabel}`, { suffix: " kWh" });
+    addMetric(`${amountLabel} stdev`, acct.cost.stdev, `per ${bucketLabel}`, { money: true });
     addMetric("Temp stdev", acct.temp.stdev, `per ${bucketLabel}`, { suffix: " °F" });
 
     addSection("Extremes");
-    addMetric("Min kWh", acct.kwh.min, this._fmtWhen(acct.kwh.lowAt), { suffix: " kWh" });
-    addMetric("Max kWh", acct.kwh.max, this._fmtWhen(acct.kwh.peakAt), { suffix: " kWh" });
-    addMetric("Min cost", acct.cost.min, this._fmtWhen(acct.cost.lowAt), { money: true });
-    addMetric("Max cost", acct.cost.max, this._fmtWhen(acct.cost.peakAt), { money: true });
+    if (signed) {
+      addMetric("Peak export", acct.kwh.min != null && acct.kwh.min < 0 ? acct.kwh.min : null, this._fmtWhen(acct.kwh.lowAt), {
+        suffix: " kWh",
+      });
+      addMetric("Peak import", acct.kwh.max != null && acct.kwh.max > 0 ? acct.kwh.max : null, this._fmtWhen(acct.kwh.peakAt), {
+        suffix: " kWh",
+      });
+    } else {
+      addMetric("Min import kWh", acct.kwh.min, this._fmtWhen(acct.kwh.lowAt), { suffix: " kWh" });
+      addMetric("Max import kWh", acct.kwh.max, this._fmtWhen(acct.kwh.peakAt), { suffix: " kWh" });
+    }
+    addMetric(
+      netAmount ? "Lowest net amount" : "Min import cost",
+      acct.cost.min,
+      this._fmtWhen(acct.cost.lowAt),
+      { money: true }
+    );
+    addMetric(
+      netAmount ? "Highest net amount" : "Max import cost",
+      acct.cost.max,
+      this._fmtWhen(acct.cost.peakAt),
+      { money: true }
+    );
     addMetric("Min temperature", acct.temp.min, this._fmtWhen(acct.temp.lowAt), { suffix: " °F" });
     addMetric("Max temperature", acct.temp.max, this._fmtWhen(acct.temp.peakAt), { suffix: " °F" });
     if (acct.hour?.count) {
-      addMetric("Peak hour kWh", acct.hour.max, this._fmtWhen(acct.hour.peakAt), { suffix: " kWh" });
-      addMetric("Quiet hour kWh", acct.hour.min, this._fmtWhen(acct.hour.lowAt), { suffix: " kWh" });
-      addMetric("Median hour kWh", acct.hour.median, `${acct.hour.count} hours`, { suffix: " kWh" });
+      addMetric(
+        signed ? "Peak hour import" : "Peak hour kWh",
+        signed
+          ? acct.hour.max != null && acct.hour.max > 0
+            ? acct.hour.max
+            : null
+          : acct.hour.max,
+        this._fmtWhen(acct.hour.peakAt),
+        { suffix: " kWh" }
+      );
+      addMetric(
+        signed ? "Peak hour export / quiet" : "Quiet hour kWh",
+        signed
+          ? acct.hour.min != null && acct.hour.min < 0
+            ? acct.hour.min
+            : null
+          : acct.hour.min,
+        this._fmtWhen(acct.hour.lowAt),
+        { suffix: " kWh" }
+      );
+      addMetric("Median hour flow", acct.hour.median, `${acct.hour.count} hours`, { suffix: " kWh" });
     }
     if (acct.bestDay?.kwh) {
-      addMetric("Highest day", acct.bestDay.kwh, this._fmtRollupKey(acct.bestDay.key), {
-        suffix: " kWh",
-      });
+      addMetric(
+        signed ? "Highest net day" : "Highest day",
+        acct.bestDay.kwh,
+        this._fmtRollupKey(acct.bestDay.key),
+        { suffix: " kWh" }
+      );
     }
-    if (acct.worstDay?.kwh) {
-      addMetric("Lowest day", acct.worstDay.kwh, this._fmtRollupKey(acct.worstDay.key), {
-        suffix: " kWh",
-      });
+    if (acct.worstDay?.kwh != null) {
+      addMetric(
+        signed ? "Lowest net day" : "Lowest day",
+        acct.worstDay.kwh,
+        this._fmtRollupKey(acct.worstDay.key),
+        { suffix: " kWh", allowZero: signed }
+      );
     }
     if (acct.plan.showMonths && acct.bestMonth?.kwh) {
-      addMetric("Highest month", acct.bestMonth.kwh, this._fmtRollupKey(acct.bestMonth.key), {
-        suffix: " kWh",
-      });
+      addMetric(
+        signed ? "Highest net month" : "Highest month",
+        acct.bestMonth.kwh,
+        this._fmtRollupKey(acct.bestMonth.key),
+        { suffix: " kWh" }
+      );
     }
-    if (acct.plan.showMonths && acct.worstMonth?.kwh) {
-      addMetric("Lowest month", acct.worstMonth.kwh, this._fmtRollupKey(acct.worstMonth.key), {
-        suffix: " kWh",
-      });
+    if (acct.plan.showMonths && acct.worstMonth?.kwh != null) {
+      addMetric(
+        signed ? "Lowest net month" : "Lowest month",
+        acct.worstMonth.kwh,
+        this._fmtRollupKey(acct.worstMonth.key),
+        { suffix: " kWh", allowZero: signed }
+      );
     }
     if (acct.plan.showYears && acct.bestYear?.kwh) {
-      addMetric("Highest year", acct.bestYear.kwh, this._fmtRollupKey(acct.bestYear.key), {
-        suffix: " kWh",
-      });
+      addMetric(
+        signed ? "Highest net year" : "Highest year",
+        acct.bestYear.kwh,
+        this._fmtRollupKey(acct.bestYear.key),
+        { suffix: " kWh" }
+      );
     }
-    if (acct.plan.showYears && acct.worstYear?.kwh) {
-      addMetric("Lowest year", acct.worstYear.kwh, this._fmtRollupKey(acct.worstYear.key), {
-        suffix: " kWh",
-      });
+    if (acct.plan.showYears && acct.worstYear?.kwh != null) {
+      addMetric(
+        signed ? "Lowest net year" : "Lowest year",
+        acct.worstYear.kwh,
+        this._fmtRollupKey(acct.worstYear.key),
+        { suffix: " kWh", allowZero: signed }
+      );
     }
 
     const summaryHtml = this._renderSummaryPairs(metrics);
+    const tableCaption = signed
+      ? "Signed grid flow (import − export) and interval amount estimate — not PGE statement credit buckets."
+      : "Imported usage in range.";
     const tables = [];
     if (acct.plan.showYears) {
       tables.push(
         this._rollupTable(
           "Yearly breakdown",
-          "Pacific calendar years with imported usage in range.",
+          `Pacific calendar years. ${tableCaption}`,
           yearsPop,
           "Year",
-          "rollup_yearly"
+          "rollup_yearly",
+          { signed, netAmount }
         )
       );
     }
@@ -2111,10 +2437,11 @@ class PgeEnergyPanel extends HTMLElement {
       tables.push(
         this._rollupTable(
           "Monthly breakdown",
-          "Pacific calendar months with imported usage in range.",
+          `Pacific calendar months. ${tableCaption}`,
           monthsPop,
           "Month",
-          "rollup_monthly"
+          "rollup_monthly",
+          { signed, netAmount }
         )
       );
     }
@@ -2122,10 +2449,11 @@ class PgeEnergyPanel extends HTMLElement {
       tables.push(
         this._rollupTable(
           "Daily breakdown",
-          "Pacific calendar days with imported usage in range.",
+          `Pacific calendar days. ${tableCaption}`,
           daysPop,
           "Date",
-          "rollup_daily"
+          "rollup_daily",
+          { signed, netAmount }
         )
       );
     }
@@ -2133,10 +2461,11 @@ class PgeEnergyPanel extends HTMLElement {
       tables.push(
         this._rollupTable(
           "Hourly breakdown",
-          "Pacific hours with imported usage (short windows).",
+          `Pacific hours (short windows). ${tableCaption}`,
           hoursPop,
           "Hour",
-          "rollup_hourly"
+          "rollup_hourly",
+          { signed, netAmount }
         )
       );
     } else if (acct.hour?.count) {
@@ -2511,17 +2840,58 @@ class PgeEnergyPanel extends HTMLElement {
     `;
   }
 
-  /** Hourly analysis window for by-period totals — capped so huge ranges stay light. */
+  /** Hourly analysis window for by-period totals — capped so huge custom ranges stay light. */
+  _todExactCapMs() {
+    return 60 * 24 * 60 * 60 * 1000; // 60 days of hourly = 1440 pts, no downsampling.
+  }
+
+  _clampTodExactWindow(start, end) {
+    const capMs = this._todExactCapMs();
+    const span = end.getTime() - start.getTime();
+    if (span <= capMs) return { start, end, capped: false };
+    return { start: new Date(end.getTime() - capMs), end, capped: true };
+  }
+
+  _todPresetFitsExactWindow(key) {
+    const range = this._basePresetRange(key);
+    if (
+      (key === "cycle" || key === "last_cycle") &&
+      !this._billBounds()
+    ) {
+      return false;
+    }
+    return range.end.getTime() - range.start.getTime() <= this._todExactCapMs();
+  }
+
+  _todAvailablePresets() {
+    const available = new Set(this._availablePresets || RANGE_PRESET_PRIMARY);
+    if (this._billBounds()) {
+      available.add("cycle");
+      available.add("last_cycle");
+    } else {
+      available.delete("cycle");
+      available.delete("last_cycle");
+    }
+    for (const key of [...available]) {
+      if (!this._todPresetFitsExactWindow(key)) available.delete(key);
+    }
+    return available;
+  }
+
   _todAnalysisWindow(range) {
-    const capMs = 60 * 24 * 60 * 60 * 1000; // 60 days of hourly = 1440 pts, no downsampling.
-    const span = range.end.getTime() - range.start.getTime();
-    if (span <= capMs) return { ...range, capped: false };
-    return { start: new Date(range.end.getTime() - capMs), end: range.end, capped: true };
+    // Custom ranges are clamped in `_resolveTodRange` so controls match analysis.
+    const clamped = this._clampTodExactWindow(range.start, range.end);
+    return {
+      ...range,
+      start: clamped.start,
+      end: clamped.end,
+      capped: !!(range.capped || clamped.capped),
+    };
   }
 
   async _todUsageByPeriod() {
     const ids = this._account.statistic_ids;
-    const range = this._resolveChartRange();
+    const range = this._resolveTodRange();
     const window = this._todAnalysisWindow(range);
     const [kwhSeries, costSeries] = await Promise.all([
       fetchStatisticSeries(this._hass, ids.consumption, {
@@ -2540,8 +2910,95 @@ class PgeEnergyPanel extends HTMLElement {
     return {
       kwh: bucketTodByPeriod(kwhSeries),
       cost: bucketTodByPeriod(costSeries),
+      hasCost: seriesCostCoverageComplete(kwhSeries, costSeries),
       window,
     };
+  }
+
+  _todRangeControlsHtml() {
+    this._ensureTodRangeKey();
+    const available = this._todAvailablePresets();
+    const range = this._resolveTodRange();
+    const customActive = !!this._todCustomRange;
+    const moreActive = !customActive && RANGE_PRESET_MORE.includes(this._todRangeKey);
+    const presetLabel = customActive
+      ? "Custom"
+      : RANGE_PRESET_LABELS[this._todRangeKey] || this._todRangeKey;
+    const label = `${presetLabel} · ${formatRangeLabel(range.start, range.end)}`;
+    const primaryButtons = RANGE_PRESET_PRIMARY.map((k) => {
+      const enabled = available.has(k);
+      const active = !customActive && this._todRangeKey === k;
+      const text = RANGE_PRESET_LABELS[k] || k;
+      return `<button type="button" data-tod-range="${k}" class="${active ? "active" : ""}" ${
+        enabled ? "" : "disabled"
+      } aria-pressed="${active ? "true" : "false"}" title="${this._escape(text)}">${this._escape(text)}</button>`;
+    }).join("");
+    const moreOptions = RANGE_PRESET_MORE.map((k) => {
+      const enabled = available.has(k);
+      const text = RANGE_PRESET_LABELS[k] || k;
+      return `<option value="${k}" ${moreActive && this._todRangeKey === k ? "selected" : ""} ${
+        enabled ? "" : "disabled"
+      }>${this._escape(text)}</option>`;
+    }).join("");
+    const endInclusive = new Date(Math.max(range.start.getTime(), range.end.getTime() - 1));
+    return `
+      <div class="filters tod-range" aria-label="TOD estimate range">
+        <p class="muted tod-range-caption">Window for the local savings / cost estimate — independent of Usage. Custom ranges longer than 60 days are clipped to the newest 60 days so hourly totals stay exact.</p>
+        ${primaryButtons}
+        <select id="tod-range-more" class="range-more ${moreActive ? "active" : ""}" aria-label="More TOD ranges">
+          <option value="" ${moreActive ? "" : "selected"}>More…</option>
+          ${moreOptions}
+        </select>
+        <span class="range-label">${this._escape(label)}</span>
+        <div class="range-custom">
+          <input type="datetime-local" id="tod-range-start" aria-label="TOD range start" value="${this._escape(
+            this._toLocalInputValue(range.start)
+          )}" />
+          <input type="datetime-local" id="tod-range-end" aria-label="TOD range end" value="${this._escape(
+            this._toLocalInputValue(endInclusive)
+          )}" />
+          <button type="button" class="secondary" id="tod-range-apply">Apply</button>
+        </div>
+      </div>
+    `;
+  }
+
+  _bindTodRange(host) {
+    if (!host) return;
+    host.querySelectorAll("[data-tod-range]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        this._selectTodRangeKey(btn.dataset.todRange);
+        await this._renderTod();
+      });
+    });
+    const more = host.querySelector("#tod-range-more");
+    if (more) {
+      more.addEventListener("change", async (ev) => {
+        const key = ev.target.value;
+        if (!key) return;
+        this._selectTodRangeKey(key);
+        await this._renderTod();
+      });
+    }
+    const apply = host.querySelector("#tod-range-apply");
+    if (apply) {
+      apply.addEventListener("click", async () => {
+        const startRaw = host.querySelector("#tod-range-start")?.value;
+        const endRaw = host.querySelector("#tod-range-end")?.value;
+        const start = startRaw ? new Date(startRaw) : null;
+        let end = endRaw ? new Date(endRaw) : null;
+        if (!start || !end || !Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+          return;
+        }
+        end = new Date(end.getTime() + 60 * 1000);
+        end = clampToPublishedEnd(end);
+        if (end <= start) return;
+        const clamped = this._clampTodExactWindow(start, end);
+        this._todCustomRange = { start: clamped.start, end: clamped.end };
+        this._todRangeTouched = true;
+        await this._renderTod();
+      });
+    }
   }
 
   _todShareBar(totals) {
@@ -2559,24 +3016,33 @@ class PgeEnergyPanel extends HTMLElement {
   async _renderTod() {
     const el = this.shadowRoot.getElementById("tod");
     if (!el) return;
+    const gen = ++this._todRenderGen;
     try {
-      await this._renderTodBody(el);
+      await this._renderTodBody(el, gen);
     } catch (err) {
+      if (gen !== this._todRenderGen) return;
       el.innerHTML = `<h2>Time of Day</h2><p class="error">Failed to render Time of Day: ${this._escape(
         String(err?.message || err)
       )}</p>`;
     }
   }
 
-  async _renderTodBody(el) {
+  async _renderTodBody(el, gen) {
     const account = this._account;
     if (!account || !account.tod) {
+      if (gen !== this._todRenderGen) return;
       el.innerHTML = `<h2>Time of Day</h2><p class="muted">TOD data not available yet — wait for a sync.</p>`;
       return;
     }
     const tod = account.tod;
     const e = account.entity_ids;
-    const enrolled = stateDisplay(this._hass, e.program_time_of_day, "") === "on";
+    const todProgramState = this._hass?.states?.[e.program_time_of_day];
+    const enrolled =
+      !todProgramState ||
+      todProgramState.state === "unknown" ||
+      todProgramState.state === "unavailable"
+        ? null
+        : todProgramState.state === "on";
     const period = tod.period || "off_peak";
     const rateUsd = Number(tod.rates?.[period]);
     const rateCents = Number.isFinite(rateUsd) ? rateUsd * 100 : null;
@@ -2602,34 +3068,45 @@ class PgeEnergyPanel extends HTMLElement {
         ? "Weekend — off-peak all day"
         : "Weekday schedule";
     const sourceHint = `Rates: ${sourceLabel}${fetched}`;
+    this._ensureTodRangeKey();
 
     let usageHtml = "";
     let savingsHtml = "";
     let windowNote = "";
     try {
-      const { kwh, cost, window } = await this._todUsageByPeriod();
+      const { kwh, cost, hasCost, window } = await this._todUsageByPeriod();
+      if (gen !== this._todRenderGen) return;
       const totalKwh = kwh.off_peak + kwh.mid_peak + kwh.on_peak;
-      const rates = tod.rates || {};
-      const effective =
-        kwh.off_peak * Number(rates.off_peak || 0) +
-        kwh.mid_peak * Number(rates.mid_peak || 0) +
-        kwh.on_peak * Number(rates.on_peak || 0);
-      const basicRate = Number(tod.basic_rate);
-      const basicCost = Number.isFinite(basicRate) ? totalKwh * basicRate : null;
-      const estimate = Number.isFinite(basicCost) ? basicCost - effective : null;
       const importedCost = cost.off_peak + cost.mid_peak + cost.on_peak;
+      const compare = computeTodPlanCompare({
+        kwh,
+        cost,
+        rates: tod.rates || {},
+        basicRate: tod.basic_rate,
+        enrolled,
+        hasCost,
+      });
       windowNote = window.capped
         ? `Newest 60 days of ${this._escape(formatRangeLabel(window.start, window.end))} — long ranges stay capped so hourly totals stay exact.`
         : `Imported hourly intervals, ${this._escape(formatRangeLabel(window.start, window.end))}.`;
       if (totalKwh > 0) {
+        const priced = compare?.todPricedByPeriod || null;
+        const todHead = priced ? `<th class="num">TOD-priced</th>` : "";
+        const todFoot = priced
+          ? `<td class="num">${this._fmt(compare.todPriced, "", true)}</td>`
+          : "";
         const rows = TOD_PERIODS.map((p) => {
           const kw = kwh[p] || 0;
           const c = cost[p] || 0;
           const share = (kw / totalKwh) * 100;
+          const todCell = priced
+            ? `<td class="num">${this._fmt(priced[p], "", true)}</td>`
+            : "";
           return `<tr>
             <td>${TOD_PERIOD_LABELS[p]}</td>
             <td class="num">${this._fmt(kw, " kWh")}</td>
             <td class="num">${this._fmt(c, "", true)}</td>
+            ${todCell}
             <td class="num">${this._fmt(share, "%")}</td>
             <td class="num">${Number.isFinite(kw) && kw > 0 ? this._fmt((c / kw) * 100, " ¢/kWh") : "—"}</td>
           </tr>`;
@@ -2639,41 +3116,48 @@ class PgeEnergyPanel extends HTMLElement {
           <p class="muted" style="margin:0 0 8px">${windowNote}</p>
           ${this._todShareBar(kwh)}
           <table class="tod-table">
-            <thead><tr><th>Period</th><th class="num">Energy</th><th class="num">Cost</th><th class="num">Share</th><th class="num">Avg rate</th></tr></thead>
+            <thead><tr><th>Period</th><th class="num">Energy</th><th class="num">Cost</th>${todHead}<th class="num">Share</th><th class="num">Avg billed</th></tr></thead>
             <tbody>${rows}</tbody>
-            <tfoot><tr><td>Total</td><td class="num">${this._fmt(totalKwh, " kWh")}</td><td class="num">${this._fmt(importedCost, "", true)}</td><td class="num">100%</td><td class="num">—</td></tr></tfoot>
+            <tfoot><tr><td>Total</td><td class="num">${this._fmt(totalKwh, " kWh")}</td><td class="num">${this._fmt(importedCost, "", true)}</td>${todFoot}<td class="num">100%</td><td class="num">—</td></tr></tfoot>
           </table>
-          <p class="muted" style="margin:8px 0 0">Avg rate is imported cost ÷ energy for each period; share uses energy.</p>
+          <p class="muted" style="margin:8px 0 0">Cost and avg billed are imported hourly amounts; TOD-priced is period kWh × effective TOD rates. Share uses energy.</p>
         `;
-        const estimateMoney = estimate == null ? "—" : this._fmt(estimate, "", true);
-        const estimateAbsMoney =
-          estimate == null ? "—" : this._fmt(Math.abs(estimate), "", true);
-        const estimateLabel =
-          estimate == null
-            ? "Basic flat rate not available — no local comparison."
-            : estimate >= 0
-              ? `About ${this._escape(estimateAbsMoney)} cheaper than Basic over this window.`
-              : `About ${this._escape(estimateAbsMoney)} more than Basic over this window.`;
-        savingsHtml = `
-          <div class="tod-counterfactual">
-            <div class="label">TOD vs Basic (local estimate)</div>
-            <div class="value">${estimateMoney}</div>
-            <div class="delta">${estimateLabel} Uses effective rates (${sourceLabel}) × imported energy; estimate only.</div>
-          </div>
-        `;
+        savingsHtml = compare
+          ? this._todCompareHtml(
+              compare,
+              tod,
+              sourceLabel,
+              formatRangeLabel(window.start, window.end)
+            )
+          : hasCost
+            ? ""
+            : `<div class="tod-counterfactual"><p class="muted" style="margin:0">Local estimate unavailable — imported cost must cover every consumption hour in this window (enable Include cost / wait for a full cost sync).</p></div>`;
       } else {
         usageHtml = `<p class="muted">No imported hourly usage in this window yet.</p>`;
       }
     } catch (_err) {
+      if (gen !== this._todRenderGen) return;
       usageHtml = `<p class="muted">Usage-by-period unavailable for this range.</p>`;
     }
 
+    if (gen !== this._todRenderGen) return;
+
     if (tod.savings_total != null) {
+      const rateCompare = tod.rate_compare || null;
+      const officialPeriod =
+        tod.savings_source === "rate_compare" && rateCompare && rateCompare.comparison_period
+          ? ` for ${this._escape(rateCompare.comparison_period)}`
+          : "";
+      const savingsSourceLabels = {
+        pricing_plan: "PGE pricing plan",
+        rate_compare: "PGE rate comparison",
+      };
+      const savingsSourceLabel = savingsSourceLabels[tod.savings_source] || "PGE portal";
       savingsHtml = `
         <div class="tod-counterfactual official">
           <div class="label">PGE TOD vs Basic savings</div>
           <div class="value">${this._fmt(tod.savings_total, "", true)}</div>
-          <div class="delta">Official total from PGE portal (${this._escape(sourceLabel)}).</div>
+          <div class="delta">Official total from PGE portal${officialPeriod} (${this._escape(savingsSourceLabel)}).</div>
         </div>
         ${savingsHtml}
       `;
@@ -2682,7 +3166,15 @@ class PgeEnergyPanel extends HTMLElement {
     el.innerHTML = `
       <h2>Time of Day</h2>
       <div class="tod-header">
-        <span class="badge ${enrolled ? "on" : "off"}">${enrolled ? "Enrolled in Time of Day" : "Not enrolled in Time of Day"}</span>
+        <span class="badge ${
+          enrolled === true ? "on" : enrolled === false ? "off" : ""
+        }">${
+          enrolled === true
+            ? "Enrolled in Time of Day"
+            : enrolled === false
+              ? "Not enrolled in Time of Day"
+              : "Time of Day enrollment unknown"
+        }</span>
         <span class="muted tod-source">${this._escape(sourceHint)}</span>
       </div>
       <div class="kpi-row">
@@ -2700,11 +3192,135 @@ class PgeEnergyPanel extends HTMLElement {
         ${this._todHolidayNote()}
       </div>
       <div class="usage-accounting tod-usage">
+        ${this._todRangeControlsHtml()}
         ${usageHtml}
         ${savingsHtml}
       </div>
     `;
-    this._bindPersistentDetails(el.querySelector("details.tod-holidays"));
+    if (gen !== this._todRenderGen) return;
+    this._bindPersistentDetails(el);
+    this._bindTodRange(el);
+  }
+
+  /**
+   * Hero: would cost more / would save vs billed energy. Details: inferred ¢/kWh
+   * plus the offline/portal rate-card TOD vs Basic model.
+   */
+  _todCompareHtml(compare, tod, sourceLabel, windowLabel) {
+    if (!compare) return "";
+    const enrolled = compare.enrolled;
+    if (enrolled == null) {
+      return `
+      <div class="tod-counterfactual">
+        <div class="label">Local plan estimate</div>
+        <p class="muted" style="margin:6px 0 0">Enrollment unknown — wait for programs sync before comparing TOD vs Basic.</p>
+      </div>`;
+    }
+    const title = enrolled
+      ? "On Time of Day vs Basic (local estimate)"
+      : "If enrolled in Time of Day (local estimate)";
+    const left = enrolled
+      ? { label: "Billed energy (TOD)", value: compare.billed }
+      : { label: "TOD estimate", value: compare.todPriced };
+    const right = enrolled
+      ? { label: "If on Basic (rate card)", value: compare.rateCardBasic }
+      : { label: "Billed energy", value: compare.billed };
+    const verdict = todEnrollmentVerdict(compare);
+    const absMoney =
+      verdict.amount == null ? "—" : this._fmt(verdict.amount, "", true);
+    let verdictText;
+    let verdictClass = "tod-compare-verdict";
+    if (verdict.kind === "unknown") {
+      verdictText = enrolled
+        ? "Cannot tell yet — Basic rate card missing."
+        : "Cannot tell yet — TOD rates missing.";
+    } else if (verdict.kind === "same") {
+      verdictText = enrolled
+        ? "About the same as the Basic rate card"
+        : "About the same as billed energy";
+    } else if (verdict.kind === "cost_more") {
+      verdictClass += " cost-more";
+      verdictText = enrolled
+        ? `Costing about ${absMoney} more than Basic`
+        : `Would cost about ${absMoney} more`;
+    } else {
+      verdictClass += " save";
+      verdictText = enrolled
+        ? `Saving about ${absMoney} versus Basic`
+        : `Would save about ${absMoney}`;
+    }
+    const mathNote = enrolled
+      ? `Versus the Basic rate card${windowLabel ? ` (${windowLabel})` : ""}, not a full bill.`
+      : `Versus billed energy${windowLabel ? ` (${windowLabel})` : ""}, not a full bill.`;
+    const eff =
+      compare.effectiveUsdPerKwh != null
+        ? ` Billed energy averaged ${this._fmt(compare.effectiveUsdPerKwh * 100, " ¢/kWh")} (imported cost ÷ kWh).`
+        : "";
+    const rates = tod.rates || {};
+    const rateList = TOD_PERIODS.map((p) => {
+      const n = Number(rates[p]);
+      return Number.isFinite(n) ? this._fmt(n * 100, "") : "—";
+    }).join(" / ");
+    const basicRaw = tod.basic_rate;
+    const basic = basicRaw == null ? NaN : Number(basicRaw);
+    const basicCentsLabel = Number.isFinite(basic) ? this._fmt(basic * 100, " ¢/kWh") : "—";
+    const sourceLabels = {
+      override: "manual override",
+      portal: "PGE",
+      default: "offline defaults",
+    };
+    const basicSrc =
+      sourceLabels[tod.basic_rate_source] || tod.basic_rate_source || sourceLabel;
+    const persist = ` data-persist="tod_compare"${this._detailsOpenAttr("tod_compare")}`;
+    let rateCardAmount = "—";
+    let rateCardNote = "Unavailable.";
+    if (compare.rateCardDelta != null) {
+      const absCard = this._fmt(Math.abs(compare.rateCardDelta), "", true);
+      if (compare.rateCardDelta >= 0) {
+        rateCardAmount = `${absCard} cheaper`;
+        rateCardNote = "TOD cheaper than the ¢/kWh Basic model — not billed energy.";
+      } else {
+        rateCardAmount = `${absCard} more`;
+        rateCardNote = "TOD more than the ¢/kWh Basic model — not billed energy.";
+      }
+    }
+    const line = (label, amount, rate, note) => `<tr>
+      <td>${label}</td>
+      <td class="num">${amount}</td>
+      <td class="num">${rate}</td>
+      <td>${note}</td>
+    </tr>`;
+    const money = (n) => (n == null ? "—" : this._fmt(n, "", true));
+    return `
+      <div class="tod-counterfactual">
+        <div class="label">${this._escape(title)}</div>
+        <div class="${verdictClass}">${this._escape(verdictText)}</div>
+        <div class="tod-compare-pair">
+          <div class="tod-compare-leg">
+            <div class="label">${this._escape(left.label)}</div>
+            <div class="value">${left.value == null ? "—" : this._fmt(left.value, "", true)}</div>
+          </div>
+          <div class="tod-compare-vs">vs</div>
+          <div class="tod-compare-leg">
+            <div class="label">${this._escape(right.label)}</div>
+            <div class="value">${right.value == null ? "—" : this._fmt(right.value, "", true)}</div>
+          </div>
+        </div>
+        <div class="delta">${this._escape(mathNote)}${this._escape(eff)} Estimate only — energy charges for imported kWh.</div>
+        <details class="tod-compare-math"${persist}>
+          <summary>How this was calculated</summary>
+          <table class="tod-table">
+            <thead><tr><th>Line</th><th class="num">Amount</th><th class="num">Rate</th><th>What this is</th></tr></thead>
+            <tbody>
+              ${line("Billed energy", money(compare.billed), compare.effectiveUsdPerKwh != null ? this._fmt(compare.effectiveUsdPerKwh * 100, " ¢/kWh") : "—", "Imported hourly cost in this window.")}
+              ${line(`TOD (${this._escape(sourceLabel)})`, money(compare.todPriced), this._escape(`${rateList} ¢/kWh`), "Period kWh × effective TOD rates.")}
+              ${line(`Basic (${this._escape(basicSrc)})`, money(compare.rateCardBasic), basicCentsLabel, "Rate-card model (kWh × Basic ¢) — not billed energy.")}
+              ${line("Rate-card TOD vs Basic", this._escape(rateCardAmount), "—", this._escape(rateCardNote))}
+            </tbody>
+          </table>
+        </details>
+      </div>
+    `;
   }
 
   _renderBillingPrograms() {
@@ -2814,23 +3430,42 @@ class PgeEnergyPanel extends HTMLElement {
       ["Time of Day", e.program_time_of_day],
       ["Smart Thermostat", e.program_smart_thermostat],
       ["Habitat Support", e.program_habitat_support],
+      ["EV Smart Charging", e.program_smart_charging],
+      ["Smart Battery Pilot", e.program_smart_battery],
     ];
+    const nextPtr = stateDisplay(this._hass, e.next_ptr_event_date, null);
+    const ptrFootnote = nextPtr
+      ? `<p class="muted stats-meta" style="margin-top:8px">Next Peak Time Rebates event: ${this._escape(nextPtr)}</p>`
+      : "";
     programs.innerHTML = `
       <h2>Programs</h2>
       <div class="programs">
         ${prog
           .map(([name, id]) => {
-            const on = stateDisplay(this._hass, id) === "on";
+            const raw = stateDisplay(this._hass, id, null);
+            const on = raw === "on";
+            const isEligible = stateAttr(this._hass, id, "is_eligible");
             const pct = stateAttr(this._hass, id, "green_future_pct");
-            const extra =
-              pct != null ? ` · ${pct}%` : "";
-            return `<div class="program ${on ? "on" : "off"}">
+            let stateText;
+            if (raw == null) {
+              stateText = "Unknown";
+            } else if (on) {
+              stateText = "Enrolled";
+            } else if (isEligible === true) {
+              stateText = "Eligible";
+            } else {
+              stateText = "Not enrolled";
+            }
+            const extra = pct != null ? ` · ${pct}%` : "";
+            const cls = on ? "on" : "off";
+            return `<div class="program ${cls}">
               <div class="name">${this._escape(name)}</div>
-              <div class="state">${on ? "Enrolled" : "Not enrolled"}${this._escape(String(extra))}</div>
+              <div class="state">${this._escape(stateText)}${this._escape(String(extra))}</div>
             </div>`;
           })
           .join("")}
       </div>
+      ${ptrFootnote}
     `;
   }
 

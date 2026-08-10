@@ -43,7 +43,7 @@ class TestLocalDays:
 class TestStatisticDisplayNames:
     def test_energy_source_uses_account_number(self):
         meta = _build_consumption_metadata("abc123key", account_id="1071234567")
-        assert meta["name"] == "PGE 1071234567"
+        assert meta["name"] == "PGE 1071234567 consumption"
 
     def test_cost_source_uses_account_number(self):
         meta = _build_cost_metadata("abc123key", account_id="1071234567")

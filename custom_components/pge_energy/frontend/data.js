@@ -191,6 +191,17 @@ export function pacificMidnightUtc(ymd) {
   return new Date(`${ymd}T07:00:00.000Z`);
 }
 
+/** Previous Pacific calendar YYYY-MM-DD (calendar arithmetic, DST-safe). */
+export function priorPacificYmd(ymd) {
+  const [y, m, d] = String(ymd).split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getUTCDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
 /**
  * Exclusive end of published PGE usage: Pacific midnight of the current
  * Pacific calendar day. PGE never publishes a complete "today" — only
@@ -201,6 +212,145 @@ export function publishedDataEnd(now = new Date()) {
 }
 
 const HOUR_MS = 60 * 60 * 1000;
+
+/** Near-zero threshold for suppressing nonsense $/kWh on net-zero buckets. */
+export const RATE_EPSILON_KWH = 1e-6;
+
+/**
+ * Build a timestamp → finite number map from a `{xs, values}` series.
+ * Non-finite values are omitted (missing ≠ zero).
+ */
+function _seriesMap(series) {
+  const map = new Map();
+  const xs = series?.xs || [];
+  const ys = series?.values || series?.ys || [];
+  for (let i = 0; i < xs.length; i++) {
+    const t = xs[i];
+    const v = ys[i];
+    if (t == null || v == null) continue;
+    const n = Number(v);
+    if (!Number.isFinite(n)) continue;
+    map.set(t, n);
+  }
+  return map;
+}
+
+function _sortedUnionKeys(...maps) {
+  const keys = new Set();
+  for (const m of maps) {
+    for (const k of m.keys()) keys.add(k);
+  }
+  return [...keys].sort((a, b) => a - b);
+}
+
+/**
+ * Project directional recorder series into a panel view model.
+ *
+ * Energy: grid flow = consumption − return (positive import, negative export).
+ * Amount: net interval amount = cost − compensation only when the range
+ * contains at least one positive compensation credit (> 0); otherwise import cost.
+ * A zero-only compensation series does not enable net mode.
+ *
+ * Missing counterparts at a timestamp with a directional observation mean zero.
+ * True gaps (neither direction observed) stay omitted.
+ *
+ * @param {{kwh?, returned?, cost?, compensation?}} series
+ * @returns {{
+ *   flow: {xs:number[], values:(number|null)[]},
+ *   amount: {xs:number[], values:(number|null)[]},
+ *   hasReturn: boolean,
+ *   hasCompensation: boolean,
+ *   flowMode: 'import'|'signed',
+ *   amountMode: 'import'|'net',
+ * }}
+ */
+export function projectDirectionalUsage({ kwh, returned, cost, compensation } = {}) {
+  const consMap = _seriesMap(kwh);
+  const retMap = _seriesMap(returned);
+  const costMap = _seriesMap(cost);
+  const compMap = _seriesMap(compensation);
+
+  const hasReturn = [...retMap.values()].some((v) => v > 0);
+  // Match hasReturn / KPI policy: only positive credits flip amount mode to net.
+  const hasCompensation = [...compMap.values()].some((v) => v > 0);
+  const flowMode = hasReturn ? "signed" : "import";
+  const amountMode = hasCompensation ? "net" : "import";
+
+  const energyKeys = _sortedUnionKeys(consMap, retMap);
+  const flowXs = [];
+  const flowYs = [];
+  for (const t of energyKeys) {
+    const hasCons = consMap.has(t);
+    const hasRet = retMap.has(t);
+    if (!hasCons && !hasRet) continue;
+    const c = hasCons ? consMap.get(t) : 0;
+    const r = hasRet ? retMap.get(t) : 0;
+    flowXs.push(t);
+    flowYs.push(c - r);
+  }
+
+  const amountKeys = amountMode === "net" ? _sortedUnionKeys(costMap, compMap) : [...costMap.keys()].sort((a, b) => a - b);
+  const amountXs = [];
+  const amountYs = [];
+  for (const t of amountKeys) {
+    const hasCost = costMap.has(t);
+    const hasComp = compMap.has(t);
+    if (amountMode === "net") {
+      if (!hasCost && !hasComp) continue;
+      const c = hasCost ? costMap.get(t) : 0;
+      const p = hasComp ? compMap.get(t) : 0;
+      amountXs.push(t);
+      amountYs.push(c - p);
+    } else if (hasCost) {
+      amountXs.push(t);
+      amountYs.push(costMap.get(t));
+    }
+  }
+
+  return {
+    flow: { xs: flowXs, values: flowYs },
+    amount: { xs: amountXs, values: amountYs },
+    hasReturn,
+    hasCompensation,
+    flowMode,
+    amountMode,
+  };
+}
+
+/**
+ * Symmetric axis extent around zero for bipolar series: ``[-bound, +bound]``.
+ * Returns null for empty/non-finite input.
+ */
+export function symmetricExtent(values, padRatio = 0.08) {
+  const nums = (values || [])
+    .filter((v) => v != null && Number.isFinite(Number(v)))
+    .map(Number);
+  if (!nums.length) return null;
+  let maxAbs = 0;
+  for (const n of nums) maxAbs = Math.max(maxAbs, Math.abs(n));
+  if (maxAbs === 0) return [-1, 1];
+  const bound = maxAbs * (1 + padRatio);
+  return [-bound, bound];
+}
+
+/** Format USD for tooltips/KPIs; negative → ``−$0.08`` (not ``$-0.08``). */
+export function formatSignedUsd(value, digits = 2) {
+  if (value == null || value === "" || value === "-") return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  const abs = Math.abs(n).toFixed(digits);
+  if (n < 0) return `−$${abs}`;
+  return `$${abs}`;
+}
+
+/** Human kWh label; negative flow shown as positive export magnitude when signed. */
+export function formatSignedKwh(value, { signed = false } = {}) {
+  if (value == null || value === "" || value === "-") return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  if (signed && n < 0) return `${Math.abs(n).toFixed(2)} kWh`;
+  return `${Number(n.toFixed(2))} kWh`;
+}
 const DAY_MS = 24 * HOUR_MS;
 
 /**
@@ -312,6 +462,37 @@ export function countSeriesPoints(series, field = "values") {
   return n;
 }
 
+/**
+ * True when every finite primary (kWh) timestamp has a finite secondary (cost)
+ * sample. Partial / mid-window cost must not baseline a full-window energy total.
+ *
+ * @param {{xs?: number[], values?: (number|null)[]}|null|undefined} primary
+ * @param {{xs?: number[], values?: (number|null)[]}|null|undefined} secondary
+ */
+export function seriesCostCoverageComplete(primary, secondary) {
+  const sec = new Set();
+  for (let i = 0; i < (secondary?.xs || []).length; i++) {
+    const rawV = secondary.values?.[i];
+    // Number(null) === 0 — must not treat explicit null as observed $0 cost.
+    if (rawV == null) continue;
+    const x = Number(secondary.xs[i]);
+    const v = Number(rawV);
+    if (!Number.isFinite(x) || !Number.isFinite(v)) continue;
+    sec.add(x);
+  }
+  let primaryCount = 0;
+  for (let i = 0; i < (primary?.xs || []).length; i++) {
+    const rawV = primary.values?.[i];
+    if (rawV == null) continue;
+    const x = Number(primary.xs[i]);
+    const v = Number(rawV);
+    if (!Number.isFinite(x) || !Number.isFinite(v)) continue;
+    primaryCount += 1;
+    if (!sec.has(x)) return false;
+  }
+  return primaryCount > 0;
+}
+
 function _finiteNums(arr) {
   const out = [];
   for (const v of arr || []) {
@@ -419,10 +600,58 @@ function _tempField(temp) {
   return temp?.means?.some((v) => v != null) ? temp.means : temp?.values;
 }
 
-function _rollupRows(kwh, cost, temp, keyFn) {
+/**
+ * Bucket $/kWh for signed-or-import accounting.
+ *
+ * Import-cost mode: only when net flow is a clear import (avoids negative
+ * “Avg import $/kWh” on net-export buckets). Net-amount mode: allow signed
+ * cost ÷ signed kWh (credit ÷ export can be a positive effective rate).
+ *
+ * When signed flow has a gross-import denominator (net flow + returned), the
+ * import-cost rate uses gross import so export-heavy buckets do not overstate
+ * “$/kWh” (mirrors `_avgImportRate` at range level).
+ */
+function _bucketRate(cost, kwh, amountMode = "import", grossImport = null) {
+  if (cost == null || kwh == null) return null;
+  const c = Number(cost);
+  const k = Number(kwh);
+  if (!Number.isFinite(c) || !Number.isFinite(k)) return null;
+  if (amountMode === "net") {
+    return Math.abs(k) > RATE_EPSILON_KWH ? c / k : null;
+  }
+  const g = Number(grossImport);
+  if (Number.isFinite(g)) {
+    return g > RATE_EPSILON_KWH ? c / g : null;
+  }
+  return k > RATE_EPSILON_KWH ? c / k : null;
+}
+
+/**
+ * Range-level average rate. When flow is signed but amount is still import
+ * cost (no compensation observed), prefer gross import (net + return).
+ */
+function _avgImportRate(totalCost, totalKwh, returnedValues, flowMode, amountMode) {
+  if (!Number.isFinite(Number(totalCost))) return null;
+  const cost = Number(totalCost);
+  const kwh = Number(totalKwh) || 0;
+  if (amountMode === "net") {
+    return Math.abs(kwh) > RATE_EPSILON_KWH ? cost / kwh : null;
+  }
+  if (flowMode === "signed") {
+    const retNums = _finiteNums(returnedValues);
+    if (retNums.length) {
+      const grossImport = kwh + _sum(retNums);
+      return grossImport > RATE_EPSILON_KWH ? cost / grossImport : null;
+    }
+  }
+  return kwh > RATE_EPSILON_KWH ? cost / kwh : null;
+}
+
+function _rollupRows(kwh, cost, temp, keyFn, amountMode = "import", returned = null) {
   const tempField = _tempField(temp);
   const costByT = new Map((cost?.xs || []).map((t, i) => [t, cost.values[i]]));
   const tempByT = new Map((temp?.xs || []).map((t, i) => [t, (tempField || [])[i]]));
+  const retByT = returned?.xs?.length ? _seriesMap(returned) : null;
   const map = new Map();
   for (let i = 0; i < (kwh?.xs || []).length; i++) {
     const t = kwh.xs[i];
@@ -440,6 +669,7 @@ function _rollupRows(kwh, cost, temp, keyFn) {
       firstT: t,
       peakKwh: null,
       peakT: null,
+      grossImport: retByT ? 0 : null,
     };
     const n = Number(kv);
     row.kwh += n;
@@ -447,6 +677,10 @@ function _rollupRows(kwh, cost, temp, keyFn) {
     if (row.peakKwh == null || n > row.peakKwh) {
       row.peakKwh = n;
       row.peakT = t;
+    }
+    if (retByT) {
+      const rv = retByT.get(t);
+      row.grossImport += Math.max(0, n + (Number.isFinite(rv) ? rv : 0));
     }
     const c = costByT.get(t);
     if (c != null && Number.isFinite(Number(c))) row.cost += Number(c);
@@ -467,7 +701,8 @@ function _rollupRows(kwh, cost, temp, keyFn) {
         cost: r.cost,
         avgTemp: r.tempN ? r.tempSum / r.tempN : null,
         samples: r.samples,
-        rate: r.kwh > 0 ? r.cost / r.kwh : null,
+        rate: _bucketRate(r.cost, r.kwh, amountMode, r.grossImport),
+        grossImport: retByT ? r.grossImport : null,
         peakKwh: r.peakKwh,
         peakAt: r.peakT,
       };
@@ -501,10 +736,35 @@ function _bestWorst(rows, field = "kwh") {
 }
 
 /**
+ * Project a raw fetch triple into chart-shaped series for accounting/charts.
+ * Temp is passed through unchanged. Call once per grain (hour/day/month).
+ *
+ * @param {{kwh?, returned?, cost?, compensation?, temp?}} raw
+ */
+export function projectUsageSeries(raw = {}) {
+  const projected = projectDirectionalUsage(raw);
+  return {
+    kwh: projected.flow,
+    cost: projected.amount,
+    temp: raw.temp || { xs: [], values: [], means: [] },
+    returned: raw.returned || { xs: [], values: [] },
+    compensation: raw.compensation || { xs: [], values: [] },
+    hasReturn: projected.hasReturn,
+    hasCompensation: projected.hasCompensation,
+    flowMode: projected.flowMode,
+    amountMode: projected.amountMode,
+  };
+}
+
+/**
  * Multi-scale Usage accounting. Prefer the finest available series for rollups
  * (hour → day → month); chart-bucket stats always come from ``chart``.
  *
- * @param {{kwh,cost,temp}} chart
+ * Callers should pass already-projected chart/hourly/daily/monthly series
+ * (``projectUsageSeries`` at each grain) so signed flow and net interval
+ * amounts stay aligned.
+ *
+ * @param {{kwh,cost,temp,flowMode?,amountMode?}} chart
  * @param {{start,end,period,hourly?,daily?,monthly?}} opts
  */
 export function computeUsageAccounting(
@@ -514,6 +774,8 @@ export function computeUsageAccounting(
   const kwh = chart?.kwh;
   const cost = chart?.cost;
   const temp = chart?.temp;
+  const flowMode = chart?.flowMode || "import";
+  const amountMode = chart?.amountMode || "import";
   const startDate = start instanceof Date ? start : new Date(start);
   const endDate = end instanceof Date ? end : new Date(end);
   const spanMs = Math.max(0, endDate.getTime() - startDate.getTime());
@@ -535,39 +797,66 @@ export function computeUsageAccounting(
       : hourly?.kwh?.xs?.length
         ? hourly
         : chart;
-  const totalKwh = _sum(_finiteNums(totalSource.kwh?.values)) || kwhStats.total || 0;
-  const totalCost = _sum(_finiteNums(totalSource.cost?.values)) || costStats.total || 0;
-  const avgRate = totalKwh > 0 ? totalCost / totalKwh : null;
+  const coarseKwh = _finiteNums(totalSource.kwh?.values);
+  const coarseCost = _finiteNums(totalSource.cost?.values);
+  // Preserve legitimate 0 totals from undownsampled series; only fall back when
+  // that source has no finite samples (|| would treat 0 as missing).
+  const totalKwh = coarseKwh.length ? _sum(coarseKwh) : kwhStats.total || 0;
+  const totalCost = coarseCost.length ? _sum(coarseCost) : costStats.total || 0;
+  const avgRate = _avgImportRate(
+    totalCost,
+    totalKwh,
+    totalSource.returned?.values,
+    flowMode,
+    amountMode
+  );
 
   const hourSource = hourly || (period === "hour" ? chart : null);
   const daySource = daily || (period === "day" ? chart : null) || hourSource;
   const monthSource = monthly || (period === "month" ? chart : null) || daySource;
 
   const hours = hourSource
-    ? _rollupRows(hourSource.kwh, hourSource.cost, hourSource.temp, (t) => {
-        const d = new Date(t * 1000);
-        return new Intl.DateTimeFormat("en-CA", {
-          timeZone: "America/Los_Angeles",
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          hour12: false,
-        })
-          .format(d)
-          .replace(", ", "T");
-      })
+    ? _rollupRows(
+        hourSource.kwh,
+        hourSource.cost,
+        hourSource.temp,
+        (t) => {
+          const d = new Date(t * 1000);
+          return new Intl.DateTimeFormat("en-CA", {
+            timeZone: "America/Los_Angeles",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            hour12: false,
+          })
+            .format(d)
+            .replace(", ", "T");
+        },
+        amountMode,
+        hourSource.returned
+      )
     : [];
 
   const days = daySource
-    ? _rollupRows(daySource.kwh, daySource.cost, daySource.temp, (t) =>
-        pacificYmd(new Date(t * 1000))
+    ? _rollupRows(
+        daySource.kwh,
+        daySource.cost,
+        daySource.temp,
+        (t) => pacificYmd(new Date(t * 1000)),
+        amountMode,
+        daySource.returned
       )
     : [];
 
   const months = monthSource
-    ? _rollupRows(monthSource.kwh, monthSource.cost, monthSource.temp, (t) =>
-        _pacificMonthKey(t)
+    ? _rollupRows(
+        monthSource.kwh,
+        monthSource.cost,
+        monthSource.temp,
+        (t) => _pacificMonthKey(t),
+        amountMode,
+        monthSource.returned
       )
     : [];
 
@@ -585,10 +874,14 @@ export function computeUsageAccounting(
             samples: 0,
             peakKwh: null,
             peakAt: null,
+            grossImport: null,
           };
           row.kwh += m.kwh;
           row.cost += m.cost;
           row.samples += m.samples;
+          if (m.grossImport != null) {
+            row.grossImport = (row.grossImport || 0) + m.grossImport;
+          }
           if (m.avgTemp != null) {
             row.tempSum += m.avgTemp;
             row.tempN += 1;
@@ -609,15 +902,21 @@ export function computeUsageAccounting(
               cost: r.cost,
               avgTemp: r.tempN ? r.tempSum / r.tempN : null,
               samples: r.samples,
-              rate: r.kwh > 0 ? r.cost / r.kwh : null,
+              rate: _bucketRate(r.cost, r.kwh, amountMode, r.grossImport),
+              grossImport: r.grossImport,
               peakKwh: r.peakKwh,
               peakAt: r.peakAt,
             };
           });
       })()
     : daySource
-      ? _rollupRows(daySource.kwh, daySource.cost, daySource.temp, (t) =>
-          _pacificYearKey(t)
+      ? _rollupRows(
+          daySource.kwh,
+          daySource.cost,
+          daySource.temp,
+          (t) => _pacificYearKey(t),
+          amountMode,
+          daySource.returned
         )
       : [];
 
@@ -640,6 +939,8 @@ export function computeUsageAccounting(
   return {
     period: period || "hour",
     plan,
+    flowMode,
+    amountMode,
     spanHours,
     spanDays,
     spanMonths,
@@ -885,6 +1186,133 @@ export function bucketTodByPeriod(series) {
     totals[todPeriodForPacific(ymd, hour)] += v;
   }
   return totals;
+}
+
+/**
+ * Local TOD vs billed vs rate-card Basic comparison for the panel hub.
+ *
+ * When not enrolled, billed imported cost is treated as actual Basic energy
+ * charges and TOD is period kWh × effective TOD rates. When enrolled, billed
+ * cost is TOD and the alternative is kWh × the Basic rate card (not inferred
+ * ¢/kWh — TOD-shaped bills are not a flat Basic rate).
+ *
+ * Requires observed cost samples with complete timestamp coverage of imported
+ * kWh (`hasCost: true`). Empty or partial cost (Include cost off / mid-window
+ * cost history) must not be treated as $0 billed energy.
+ * Enrollment is tri-state: unknown withholds the enrollment-specific verdict.
+ *
+ * @param {{
+ *   kwh: {off_peak?: number, mid_peak?: number, on_peak?: number},
+ *   cost: {off_peak?: number, mid_peak?: number, on_peak?: number},
+ *   rates: {off_peak?: number, mid_peak?: number, on_peak?: number},
+ *   basicRate: number|null|undefined,
+ *   enrolled: boolean|null|undefined,
+ *   hasCost?: boolean,
+ * }} input
+ * @returns {null | {
+ *   totalKwh: number,
+ *   billed: number,
+ *   effectiveUsdPerKwh: number|null,
+ *   todPriced: number|null,
+ *   todPricedByPeriod: {off_peak: number, mid_peak: number, on_peak: number}|null,
+ *   rateCardBasic: number|null,
+ *   rateCardDelta: number|null,
+ *   vsBilled: number|null,
+ *   enrolled: boolean|null,
+ *   alternativePlan: "tod"|"basic"|null,
+ * }}
+ */
+export function computeTodPlanCompare({
+  kwh,
+  cost,
+  rates,
+  basicRate,
+  enrolled,
+  hasCost = true,
+}) {
+  const totalKwh = TOD_PERIODS.reduce((sum, p) => sum + (Number(kwh?.[p]) || 0), 0);
+  if (!(totalKwh > 0)) return null;
+  // Missing cost must not become a $0 billed baseline (false savings verdict).
+  if (hasCost !== true) return null;
+
+  const billed = TOD_PERIODS.reduce((sum, p) => sum + (Number(cost?.[p]) || 0), 0);
+  const todPricedByPeriod = { off_peak: 0, mid_peak: 0, on_peak: 0 };
+  let todPriced = 0;
+  let ratesOk = true;
+  for (const p of TOD_PERIODS) {
+    const rawRate = rates?.[p];
+    // Number(null) === 0 — missing period rates must withhold the comparison.
+    if (rawRate == null) {
+      ratesOk = false;
+      break;
+    }
+    const rate = Number(rawRate);
+    if (!Number.isFinite(rate) || rate < 0) {
+      ratesOk = false;
+      break;
+    }
+    const priced = (Number(kwh?.[p]) || 0) * rate;
+    todPricedByPeriod[p] = priced;
+    todPriced += priced;
+  }
+  if (!ratesOk) {
+    todPriced = null;
+  }
+  const basic = Number(basicRate);
+  const rateCardBasic = Number.isFinite(basic) && basic > 0 ? totalKwh * basic : null;
+  const effectiveUsdPerKwh = Number.isFinite(billed) ? billed / totalKwh : null;
+  const enrollmentKnown = enrolled === true || enrolled === false;
+  const isEnrolled = enrolled === true;
+  const alternativePlan = !enrollmentKnown ? null : isEnrolled ? "basic" : "tod";
+  const alternative = !enrollmentKnown ? null : isEnrolled ? rateCardBasic : todPriced;
+  const vsBilled =
+    alternative == null || !Number.isFinite(billed) ? null : alternative - billed;
+  const rateCardDelta =
+    rateCardBasic == null || todPriced == null ? null : rateCardBasic - todPriced;
+  return {
+    totalKwh,
+    billed,
+    effectiveUsdPerKwh,
+    todPriced,
+    todPricedByPeriod: ratesOk ? todPricedByPeriod : null,
+    rateCardBasic,
+    rateCardDelta,
+    vsBilled,
+    enrolled: enrollmentKnown ? isEnrolled : null,
+    alternativePlan,
+  };
+}
+
+/**
+ * Plain-language cost outcome for the panel hero.
+ *
+ * Not enrolled: TOD-priced kWh vs billed energy (would cost more / would save).
+ * Enrolled: billed TOD vs rate-card Basic (currently costing more / saving).
+ * Unknown enrollment or missing vsBilled → unknown (no false verdict).
+ *
+ * @param {ReturnType<typeof computeTodPlanCompare>} compare
+ * @returns {{kind: "cost_more"|"save"|"same"|"unknown", amount: number|null}}
+ */
+export function todEnrollmentVerdict(compare) {
+  if (
+    !compare ||
+    compare.enrolled == null ||
+    compare.vsBilled == null ||
+    !Number.isFinite(compare.vsBilled)
+  ) {
+    return { kind: "unknown", amount: null };
+  }
+  const amount = Math.abs(compare.vsBilled);
+  if (amount < 0.005) return { kind: "same", amount: 0 };
+  if (!compare.enrolled) {
+    return compare.vsBilled > 0
+      ? { kind: "cost_more", amount }
+      : { kind: "save", amount };
+  }
+  // vsBilled = Basic estimate − billed TOD; positive means TOD is cheaper.
+  return compare.vsBilled > 0
+    ? { kind: "save", amount }
+    : { kind: "cost_more", amount };
 }
 
 /** Sun–Sat labels with the Pacific YYYY-MM-DD for the current week. */

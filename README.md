@@ -53,7 +53,7 @@ PGE publishes usage **once overnight**, so a "stuck" latest interval near `01:00
 ### HACS (recommended)
 
 1. HACS → **⋯** → **Custom repositories**, add `https://github.com/spencerthayer/homeassistant-pge` with category **Integration**.
-2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.9.0`).
+2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.9.9`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -82,7 +82,7 @@ The Energy dashboard needs a **statistic** (or a lifetime cumulative sensor). Ti
 2. Prefer the external statistic `pge_energy:<account_key>_consumption` for **Grid consumption**.
    - Open More info on `sensor.pge_<account_number>_energy` and copy the `external_statistic_id` attribute.
    - The middle segment is an opaque `account_key` hash — searching by PGE account number will not find it ([#10](https://github.com/spencerthayer/homeassistant-pge/issues/10)).
-3. Simpler alternative: pick `sensor.pge_<account_number>_energy` (lifetime imported kWh, `total_increasing`). Prefer the external id when possible — backfill and repairs write that series directly.
+3. Simpler alternative: pick `sensor.pge_<account_number>_energy` (friendly name **Consumption**, lifetime imported kWh, `total_increasing`). Prefer the external id when possible — backfill and repairs write that series directly. The Energy statistic picker labels the series `PGE <account> consumption` so it is distinct from `… return`.
 4. Solar / net-metered accounts (v0.8.0+): also add `pge_energy:<account_key>_return` (or `sensor.pge_<account_number>_return`) for **Return to grid**, plus `_cost` / `_compensation` if wanted.
 
 Do **not** use for Grid consumption:
@@ -97,10 +97,10 @@ If the dashboard shows a huge negative kWh spike after a history rebuild, use th
 The integration registers `/pge` and (for admin users, by default) a sidebar item **PGE**. Use it for usage, cost, temperature, billing, programs, and live sync progress:
 
 - **At a glance** — yesterday and week (Pacific Sunday → yesterday) kWh/cost, statement and since-statement sums, PGE estimate cards, amount due. A collapsible **Sync status** section shows live import progress and PGE publication gaps.
-- **Usage** — combined multi-series chart (kWh bars + cost + temperature). Ranges end at Pacific midnight of the current day, so only complete published days appear. Fast-select: **24h / This cycle / Last cycle / 7 days / Month**, with **More…** for `6h`/`12h`/`3mo`/`6mo`/`12mo`/YTD. **Range accounting** scales with the window: totals, averages, `$/kWh`, median/min/max/stdev, and adaptive hour/day/month/year breakdown tables.
+- **Usage** — combined multi-series chart. For generating accounts, **grid flow** bars go above zero for import and below zero for export (Opower/HA Energy style); the money line is **import cost**, or **net interval amount** (`cost − compensation`) when export credits are present in the range — an interval estimate, not PGE’s statement credit bank. Ranges end at Pacific midnight of the current day. Fast-select: **24h / This cycle / Last cycle / 7 days / Month**, with **More…** for `6h`/`12h`/`3mo`/`6mo`/`12mo`/YTD. **Range accounting** uses the same signed projection.
 - **Analytics** — weather vs usage (daily kWh vs outdoor °F) and cost intelligence (monthly average rate, billed vs payments).
 - **Billing** — balance, statements, lifetime totals, and programs; when bill PDFs are enabled, **View bill PDF** + **Statement details (PDF)**.
-- **Time of Day** — current E-TOU period/rate KPIs with a next-transition countdown, an enrollment badge, and the week schedule grid (Sun–Sat × 24h Pacific) highlighting the current hour. Usage is bucketed by period (energy, cost, share, avg rate) with a **TOD vs Basic** local estimate computed from imported energy × effective rates (labeled estimate unless PGE provides the official savings total). Holiday/off-peak days for the current year are listed in a collapsed note.
+- **Time of Day** — current E-TOU period/rate KPIs with a next-transition countdown, an enrollment badge, and the week schedule grid (Sun–Sat × 24h Pacific) highlighting the current hour. Usage is bucketed by period (energy, imported cost, TOD-priced, share, avg billed ¢/kWh). The local comparison **hero** is TOD-priced kWh vs **billed imported energy** for a window chosen **in the Time of Day section** (24h / This cycle / Last cycle / 7 days / Month / More… / custom; default Last cycle; independent of the Usage chart range). A collapsed **How this was calculated** table also shows the offline/portal **rate-card** TOD vs Basic model (kWh × published/default ¢ — not billed). Official PGE `getRateCompare` savings stay a separate card when the portal returns them. Holiday/off-peak days for the current year are listed in a collapsed note.
 - Configure → **Panel** customizes the sidebar link (show/hide, title, icon), the admin gate, and the default landing section (including **Time of Day**). Hiding the link does **not** unregister `/pge` — it stays reachable by URL.
 
 ### Billing & programs
@@ -141,9 +141,9 @@ Settings → Devices & Services → PGE Energy → **Configure** (from any accou
 
 Details: [`docs/HA_SETTINGS_HISTORY.md`](docs/HA_SETTINGS_HISTORY.md).
 
-### Grid import/export diagnostic capture (v0.7.3 alpha)
+### Grid import/export diagnostic capture
 
-Generating / net-metered accounts publish signed HOURLY usage: positive kWh is grid import, negative kWh is grid export ([#5](https://github.com/spencerthayer/homeassistant-pge/issues/5)). The integration splits those into non-negative `_consumption` / `_return` (and `_cost` / `_compensation`) statistics for the Energy dashboard and `/pge` panel. An off-by-default **Enable diagnostic capture (alpha)** switch remains available for follow-up GraphQL captures (`PGE_ALPHA_GRID_CAPTURE`); it never logs credentials, tokens, or identifiers.
+Generating / net-metered accounts publish signed HOURLY usage: positive kWh is grid import, negative kWh is grid export ([#5](https://github.com/spencerthayer/homeassistant-pge/issues/5)). The integration splits those into non-negative `_consumption` / `_return` (and `_cost` / `_compensation`) statistics for the Energy dashboard and `/pge` panel. An off-by-default **Enable diagnostic capture** switch remains available for follow-up GraphQL captures (`PGE_ALPHA_GRID_CAPTURE`); it never logs credentials, tokens, or identifiers.
 
 ---
 

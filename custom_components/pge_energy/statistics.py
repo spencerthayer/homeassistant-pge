@@ -150,7 +150,7 @@ def _statistic_display_name(
         return f"{base} return"
     if temperature:
         return f"{base} temperature"
-    return base
+    return f"{base} consumption"
 
 
 def _as_utc_datetime(value: Any) -> datetime | None:

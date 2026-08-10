@@ -6,11 +6,16 @@
  */
 
 import {
+  formatSignedUsd,
+  projectDirectionalUsage,
+  symmetricExtent,
+} from "./data.js?v=0.9.9";
+import {
   chromeColors,
   seriesColors,
   tooltipTheme,
   withAlpha,
-} from "./theme.js?v=0.9.0";
+} from "./theme.js?v=0.9.9";
 
 export { seriesColors };
 
@@ -31,8 +36,7 @@ function formatKwhLabel(value) {
 }
 
 function formatCostLabel(value) {
-  const n = formatDisplayNumber(value, 2);
-  return n == null ? "—" : `$${n.toFixed(2)}`;
+  return formatSignedUsd(value, 2);
 }
 
 function formatTempLabel(value) {
@@ -616,39 +620,100 @@ function _categoryLabel(ms) {
   }).format(new Date(ms));
 }
 
-/** Single Usage chart: import/export kWh bars, cost + outdoor temperature lines. */
-export async function createUsageComboChart(host, { kwh, returned, cost, temp, colors }) {
+/** Single Usage chart: signed grid-flow bars + amount + outdoor temperature. */
+export async function createUsageComboChart(
+  host,
+  { kwh, returned, cost, compensation, temp, colors, projection = null }
+) {
   const root = resolveRoot(host);
   const theme = themeColors(root);
   const tip = tooltipTheme(root);
   const c = colors || seriesColors(root);
-  const kwhMap = _pairMap(kwh?.xs || [], kwh?.ys || []);
-  const returnMap = _pairMap(returned?.xs || [], returned?.ys || []);
-  const costMap = _pairMap(cost?.xs || [], cost?.ys || []);
-  const tempMap = _pairMap(temp?.xs || [], temp?.ys || []);
-  const hasReturn = [...returnMap.values()].some((v) => Number(v) > 0);
+  const projected = (() => {
+    if (projection?.flow && projection?.amount) return projection;
+    // Accept projectUsageSeries-shaped views (kwh/cost aliases).
+    if (projection?.kwh && projection?.cost) {
+      return {
+        flow: projection.kwh,
+        amount: projection.cost,
+        flowMode: projection.flowMode || "import",
+        amountMode: projection.amountMode || "import",
+        hasReturn: !!projection.hasReturn,
+        hasCompensation: !!projection.hasCompensation,
+      };
+    }
+    return projectDirectionalUsage({
+      kwh: { xs: kwh?.xs || [], values: kwh?.ys ?? kwh?.values ?? [] },
+      returned: { xs: returned?.xs || [], values: returned?.ys ?? returned?.values ?? [] },
+      cost: { xs: cost?.xs || [], values: cost?.ys ?? cost?.values ?? [] },
+      compensation: {
+        xs: compensation?.xs || [],
+        values: compensation?.ys ?? compensation?.values ?? [],
+      },
+    });
+  })();
+  const flowMap = _pairMap(projected.flow?.xs || [], projected.flow?.values || []);
+  const amountMap = _pairMap(projected.amount?.xs || [], projected.amount?.values || []);
+  const tempMap = _pairMap(temp?.xs || [], temp?.ys ?? temp?.values ?? temp?.means ?? []);
+  const signedFlow = projected.flowMode === "signed";
+  const netAmount = projected.amountMode === "net";
   const starts = [
-    ...new Set([...kwhMap.keys(), ...returnMap.keys(), ...costMap.keys(), ...tempMap.keys()]),
+    ...new Set([...flowMap.keys(), ...amountMap.keys(), ...tempMap.keys()]),
   ].sort((a, b) => a - b);
   // Category axis fills each slot; time axis leaves sparse hairline bars.
   const useCategory = starts.length > 0 && starts.length <= 96;
   const categories = useCategory ? starts.map(_categoryLabel) : null;
-  const kwhVals = useCategory ? starts.map((t) => kwhMap.get(t) ?? null) : toMsPairs(kwh?.xs || [], kwh?.ys || []);
-  const returnVals = useCategory
-    ? starts.map((t) => {
-        const v = returnMap.get(t);
-        return v != null && Number(v) > 0 ? v : null;
-      })
-    : toMsPairs(
-        (returned?.xs || []).filter((_, i) => Number(returned?.ys?.[i]) > 0),
-        (returned?.ys || []).filter((v) => Number(v) > 0)
-      );
-  const costVals = useCategory ? starts.map((t) => costMap.get(t) ?? null) : toMsPairs(cost?.xs || [], cost?.ys || []);
+  const flowVals = useCategory
+    ? starts.map((t) => (flowMap.has(t) ? flowMap.get(t) : null))
+    : toMsPairs(projected.flow.xs, projected.flow.values);
+  const amountVals = useCategory
+    ? starts.map((t) => (amountMap.has(t) ? amountMap.get(t) : null))
+    : toMsPairs(projected.amount.xs, projected.amount.values);
   // ECharts breaks category lines on '-' (null can render as a zero dip).
   const tempVals = useCategory
     ? starts.map((t) => (tempMap.has(t) ? tempMap.get(t) : "-"))
-    : toMsPairs(temp?.xs || [], temp?.ys || []);
-  const legendData = hasReturn ? ["Grid import", "Grid export", "Cost", "°F"] : ["kWh", "Cost", "°F"];
+    : toMsPairs(temp?.xs || [], temp?.ys ?? temp?.values ?? temp?.means ?? []);
+
+  const flowName = signedFlow ? "Grid flow" : "kWh";
+  const amountName = netAmount ? "Net interval amount" : "Import cost";
+  const legendData = [flowName, amountName, "°F"];
+  const flowExtent = signedFlow ? symmetricExtent(projected.flow.values) : null;
+  const amountNums = projected.amount.values.filter((v) => v != null && Number.isFinite(Number(v)));
+  const amountHasNegative = amountNums.some((v) => Number(v) < 0);
+  // Credits-only windows still need a zero baseline so direction stays readable.
+  const amountExtent = amountHasNegative ? _paddedExtent([...amountNums, 0]) : null;
+
+  const barData = useCategory
+    ? flowVals.map((v) => {
+        if (v == null || !Number.isFinite(Number(v))) return null;
+        const n = Number(v);
+        const exportBar = signedFlow && n < 0;
+        const barColor = exportBar ? c.export : c.kwh;
+        return {
+          value: n,
+          itemStyle: {
+            color: barColor,
+            borderRadius: exportBar ? [0, 0, 5, 5] : [5, 5, 0, 0],
+          },
+          // Per-bar emphasis so export hover glow matches export color.
+          emphasis: barEmphasis(barColor),
+        };
+      })
+    : flowVals.map(([t, v]) => {
+        if (v == null || !Number.isFinite(Number(v))) return [t, null];
+        const n = Number(v);
+        const exportBar = signedFlow && n < 0;
+        const barColor = exportBar ? c.export : c.kwh;
+        return {
+          value: [t, n],
+          itemStyle: {
+            color: barColor,
+            borderRadius: exportBar ? [0, 0, 5, 5] : [5, 5, 0, 0],
+          },
+          emphasis: barEmphasis(barColor),
+        };
+      });
+
   const option = {
     ...chartMotion(),
     backgroundColor: theme.bg,
@@ -675,17 +740,31 @@ export async function createUsageComboChart(host, { kwh, returned, cost, temp, c
         const title = items[0]?.axisValueLabel || items[0]?.name || "";
         const lines = items.map((p) => {
           const raw = Array.isArray(p.value) ? p.value[1] : p.value;
+          let seriesLabel = p.seriesName;
           let label = "—";
-          if (p.seriesName === "Cost") label = formatCostLabel(raw);
-          else if (p.seriesName === "°F") label = formatTempLabel(raw);
-          else if (
-            p.seriesName === "kWh" ||
-            p.seriesName === "Grid import" ||
-            p.seriesName === "Grid export"
-          ) {
-            label = formatKwhLabel(raw);
-          } else if (raw != null && raw !== "-") label = String(raw);
-          return `${p.marker}${p.seriesName}&nbsp;&nbsp;<b>${label}</b>`;
+          if (p.seriesName === amountName || p.seriesName === "Import cost" || p.seriesName === "Net interval amount") {
+            const n = Number(raw);
+            if (Number.isFinite(n) && netAmount) {
+              seriesLabel = n < 0 ? "Interval credit" : "Interval charge";
+            }
+            label = formatCostLabel(raw);
+          } else if (p.seriesName === "°F") {
+            label = formatTempLabel(raw);
+          } else if (p.seriesName === flowName || p.seriesName === "kWh" || p.seriesName === "Grid flow") {
+            const n = Number(raw);
+            if (signedFlow && Number.isFinite(n) && n < 0) {
+              seriesLabel = "Grid export";
+              label = formatKwhLabel(Math.abs(n));
+            } else if (signedFlow && Number.isFinite(n) && n > 0) {
+              seriesLabel = "Grid import";
+              label = formatKwhLabel(n);
+            } else {
+              label = formatKwhLabel(raw);
+            }
+          } else if (raw != null && raw !== "-") {
+            label = String(raw);
+          }
+          return `${p.marker}${seriesLabel}&nbsp;&nbsp;<b>${label}</b>`;
         });
         return `${title}<br/>${lines.join("<br/>")}`;
       },
@@ -735,7 +814,7 @@ export async function createUsageComboChart(host, { kwh, returned, cost, temp, c
         type: "value",
         name: "kWh",
         position: "left",
-        min: 0,
+        ...(flowExtent ? { min: flowExtent[0], max: flowExtent[1] } : { min: 0 }),
         nameTextStyle: { color: theme.muted },
         axisLabel: { color: theme.muted },
         splitLine: { lineStyle: { color: theme.grid } },
@@ -744,11 +823,13 @@ export async function createUsageComboChart(host, { kwh, returned, cost, temp, c
         type: "value",
         name: "$",
         position: "right",
-        min: 0,
+        ...(amountExtent
+          ? { min: amountExtent[0], max: amountExtent[1] }
+          : { min: 0 }),
         nameTextStyle: { color: theme.muted },
         axisLabel: {
           color: theme.muted,
-          formatter: (v) => `$${Number(v).toFixed(v >= 10 ? 0 : 2)}`,
+          formatter: (v) => formatSignedUsd(v, Math.abs(Number(v)) >= 10 ? 0 : 2),
         },
         splitLine: { show: false },
       },
@@ -765,46 +846,22 @@ export async function createUsageComboChart(host, { kwh, returned, cost, temp, c
     ],
     series: [
       {
-        name: hasReturn ? "Grid import" : "kWh",
+        name: flowName,
         type: "bar",
         yAxisIndex: 0,
-        data: kwhVals,
+        data: barData,
         barWidth: useCategory ? "70%" : undefined,
         barMaxWidth: useCategory ? 120 : 40,
         barCategoryGap: useCategory ? "10%" : "25%",
-        itemStyle: {
-          color: c.kwh,
-          borderRadius: [5, 5, 0, 0],
-        },
         emphasis: barEmphasis(c.kwh),
       },
-      ...(hasReturn
-        ? [
-            {
-              name: "Grid export",
-              type: "bar",
-              yAxisIndex: 0,
-              data: returnVals,
-              barWidth: useCategory ? "70%" : undefined,
-              barMaxWidth: useCategory ? 120 : 40,
-              barCategoryGap: useCategory ? "10%" : "25%",
-              itemStyle: {
-                color: c.export,
-                borderRadius: [5, 5, 0, 0],
-              },
-              emphasis: barEmphasis(c.export),
-            },
-          ]
-        : []),
       {
         // Line (not a second bar series) so kWh columns can fill each slot.
-        name: "Cost",
+        name: amountName,
         type: "line",
         yAxisIndex: 1,
-        data: costVals,
+        data: amountVals,
         symbol: "circle",
-        // Always paint small dots so axis hover can grow the active point;
-        // denser windows keep symbols tiny until emphasis.
         showSymbol: true,
         symbolSize: starts.length <= 48 ? 7 : 4,
         connectNulls: false,
