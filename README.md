@@ -2,7 +2,7 @@
 
 ![PGE Energy for Home Assistant — imports Portland General Electric usage, cost, and outdoor temperature into the Home Assistant Energy dashboard and a first-party /pge panel](./assets/readme/hero.svg)
 
-Home Assistant custom integration for **Portland General Electric (PGE)** — imports your energy usage into the HA Energy dashboard and a first-party `/pge` panel, using PGE's GraphQL API (not Opower, not HTML scraping).
+Home Assistant custom integration for **Portland General Electric (PGE)** — imports your energy usage into the HA Energy dashboard and a first-party `/pge` panel, using PGE's own in-house portal GraphQL API (not Opower, not HTML scraping).
 
 > **Not Pacific Gas & Electric (PG&E).** This is for [Portland General Electric](https://portlandgeneral.com/) in Oregon. It does **not** work with California PG&E / Opower integrations.
 >
@@ -184,6 +184,7 @@ Time-of-Day rates are resolved per poll: account-specific overrides → last por
 - DAILY windows under ~31 days may hard-error; prefer HOURLY or ≥31-day DAILY.
 - MONTHLY returns the latest ~12 billing periods per call; older history requires paging backwards.
 - Grid export uses signed HOURLY rows only; DAILY/MONTHLY net totals are not split into gross import/export.
+- PGE has told customers they are moving away from third-party data providers to their own in-house portal, and the Opower-backed endpoints used by the upstream `opower` integration have started returning 503 ([`tronikos/opower#210`](https://github.com/tronikos/opower/issues/210)). This integration talks to PGE's own portal API and is unaffected by that shutdown.
 - PGE may return transient 502s (retried). PGE's API is unofficial and may change without notice.
 
 ## Troubleshooting
