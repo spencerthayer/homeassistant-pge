@@ -37,7 +37,7 @@
 - [x] Panel harden: `TOD_PERIODS` import, ISO `next_transition_at` Date coerce, `_asDate` for pacific helpers, `_renderTod` error boundary, avg rate USD→¢
 - [x] Docs/README (DATA_CONTRACT resolution chain, ARCHITECTURE modules, README panel/sensors/options); VERSION `0.9.0` + frontend `?v=0.9.0`
 - [x] Open PR [#18](https://github.com/spencerthayer/homeassistant-pge/pull/18) from `issue-11`; CoPilot-PR-Loop clean review (iteration 9, review 4888386887)
-- [ ] HITL merge PR #18; then HACS release `v0.9.0` after green CI on merge SHA
+- [x] HITL merge PR #18; HACS release `v0.9.0` published (`e2597ca`)
 
 ## Active agents
 
