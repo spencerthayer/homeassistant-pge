@@ -24,3 +24,12 @@ def test_panel_section_anchors_and_resolver_present():
         source,
         re.MULTILINE,
     )
+
+
+def test_glance_kpi_clipboard_wiring_present():
+    source = FRONTEND.read_text(encoding="utf-8")
+    assert "formatKpiClipboardText" in source
+    assert "_bindGlanceKpiClipboard" in source
+    assert "this._bindGlanceKpiClipboard(el)" in source
+    assert "Click to copy" in source
+    assert "navigator.clipboard" in source
