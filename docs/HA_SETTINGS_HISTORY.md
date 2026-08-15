@@ -22,6 +22,7 @@ Settings → Devices & Services → **Portland General Electric Energy Usage** �
 | Bill PDF retention (`bill_pdf_retention`) | `latest` | Binary file retention: `latest`, `all_imported`, or `rolling_n`. Normalized Store records and recorder history are kept independently. |
 | Bill PDF rolling count (`bill_pdf_rolling_count`) | `12` | When retention is `rolling_n`, keep this many newest statement PDF files. |
 | Backfill concurrency | `2` | Parallel day fetches during backfill. |
+| TOD rate overrides (`tod_rate_off_peak` / `_mid_peak` / `_on_peak` / `_basic_service`) | blank | Optional USD/kWh overrides. Leave blank to use last portal rate, then built-in defaults. Empty boxes must validate (blank is allowed — do not require a float). |
 
 PGE publishes usage **overnight**, not continuously. A daytime-stuck **Latest available interval** near ~01:00 Pacific is expected.
 
