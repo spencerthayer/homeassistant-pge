@@ -22,8 +22,12 @@ from custom_components.pge_energy.const import (
     CONF_AUTO_BACKFILL,
     CONF_BACKFILL_CONCURRENCY,
     CONF_BEARER_TOKEN,
+    CONF_BILL_PDF_FORM,
+    CONF_BILL_PDF_RETENTION,
+    CONF_BILL_PDF_ROLLING_COUNT,
     CONF_CAPTURE_GRAPHQL_DIAGNOSTICS,
     CONF_CORRECTION_WINDOW,
+    CONF_DOWNLOAD_BILL_PDFS,
     CONF_EMAIL,
     CONF_HISTORY_MODE,
     CONF_HISTORY_START_DATE,
@@ -36,6 +40,10 @@ from custom_components.pge_energy.const import (
     CONF_POLLING_INTERVAL,
     CONF_POLLING_INTERVAL_UNIT,
     CONF_SYNC_LOCAL_TIME,
+    CONF_TOD_RATE_BASIC_SERVICE,
+    CONF_TOD_RATE_MID_PEAK,
+    CONF_TOD_RATE_OFF_PEAK,
+    CONF_TOD_RATE_ON_PEAK,
     DEFAULT_SYNC_LOCAL_TIME,
     MANUAL_SYNC_ACTION_REFRESH,
     HistoryMode,
@@ -245,6 +253,114 @@ class TestPGEOptionsFlow:
             field for field in schema.schema if getattr(field, "schema", field) == CONF_CAPTURE_GRAPHQL_DIAGNOSTICS
         )
         assert capture_field.default() is False
+
+    def test_options_schema_accepts_blank_tod_rate_overrides(self):
+        """Blank optional TOD NumberSelectors must not raise 'expected float'.
+
+        HA OptionsFlow submits empty number boxes as None (or sometimes ""), and
+        vol.Optional(..., default=None) also inserts None when the key is omitted.
+        Sync settings Submit must succeed so diagnostic capture and other options
+        can be saved (#5 comment).
+        """
+        entry = MagicMock()
+        entry.options = {}
+        entry.data = {}
+        schema = _options_schema(entry)
+        base = {
+            CONF_POLLING_INTERVAL: 4,
+            CONF_POLLING_INTERVAL_UNIT: PollingIntervalUnit.HOURS.value,
+            CONF_SYNC_LOCAL_TIME: DEFAULT_SYNC_LOCAL_TIME,
+            CONF_CORRECTION_WINDOW: 7,
+            CONF_HISTORY_MODE: HistoryMode.FULL.value,
+            CONF_HISTORY_START_DATE: "2019-01-01",
+            CONF_HOURLY_BACKFILL_DAYS: 90,
+            CONF_AUTO_BACKFILL: True,
+            CONF_INCLUDE_COST: True,
+            CONF_INCLUDE_DIAGNOSTICS: True,
+            CONF_CAPTURE_GRAPHQL_DIAGNOSTICS: True,
+            CONF_INCLUDE_BILLING: True,
+            CONF_DOWNLOAD_BILL_PDFS: False,
+            CONF_BILL_PDF_FORM: "detailed",
+            CONF_BILL_PDF_RETENTION: "latest",
+            CONF_BILL_PDF_ROLLING_COUNT: 12,
+            CONF_BACKFILL_CONCURRENCY: 2,
+        }
+
+        # Omitted keys (Optional defaults fill None, then must validate).
+        assert schema(dict(base))
+
+        for blank in (None, ""):
+            payload = dict(base)
+            payload.update(
+                {
+                    CONF_TOD_RATE_OFF_PEAK: blank,
+                    CONF_TOD_RATE_MID_PEAK: blank,
+                    CONF_TOD_RATE_ON_PEAK: blank,
+                    CONF_TOD_RATE_BASIC_SERVICE: blank,
+                }
+            )
+            validated = schema(payload)
+            assert validated[CONF_CAPTURE_GRAPHQL_DIAGNOSTICS] is True
+            assert validated[CONF_TOD_RATE_OFF_PEAK] in (None, "")
+            assert validated[CONF_TOD_RATE_MID_PEAK] in (None, "")
+            assert validated[CONF_TOD_RATE_ON_PEAK] in (None, "")
+            assert validated[CONF_TOD_RATE_BASIC_SERVICE] in (None, "")
+
+        with_rates = dict(base)
+        with_rates.update(
+            {
+                CONF_TOD_RATE_OFF_PEAK: 0.0893,
+                CONF_TOD_RATE_MID_PEAK: 0.167,
+                CONF_TOD_RATE_ON_PEAK: 0.4313,
+                CONF_TOD_RATE_BASIC_SERVICE: 0.12,
+            }
+        )
+        validated_rates = schema(with_rates)
+        assert validated_rates[CONF_TOD_RATE_OFF_PEAK] == pytest.approx(0.0893)
+        assert validated_rates[CONF_TOD_RATE_ON_PEAK] == pytest.approx(0.4313)
+
+    @pytest.mark.asyncio
+    async def test_options_settings_saves_with_blank_tod_rates(self):
+        flow = PGEOptionsFlow()
+        entry = MagicMock()
+        entry.entry_id = "entry1"
+        entry.options = {}
+        entry.data = {}
+        flow.hass = MagicMock()
+        flow.handler = "entry1"
+        flow.hass.config_entries.async_get_known_entry = MagicMock(return_value=entry)
+
+        result = await flow.async_step_settings(
+            {
+                CONF_POLLING_INTERVAL: 4,
+                CONF_POLLING_INTERVAL_UNIT: PollingIntervalUnit.HOURS.value,
+                CONF_SYNC_LOCAL_TIME: DEFAULT_SYNC_LOCAL_TIME,
+                CONF_CORRECTION_WINDOW: 7,
+                CONF_HISTORY_MODE: HistoryMode.FULL.value,
+                CONF_HISTORY_START_DATE: "2019-01-01",
+                CONF_HOURLY_BACKFILL_DAYS: 90,
+                CONF_AUTO_BACKFILL: True,
+                CONF_INCLUDE_COST: True,
+                CONF_INCLUDE_DIAGNOSTICS: True,
+                CONF_CAPTURE_GRAPHQL_DIAGNOSTICS: True,
+                CONF_INCLUDE_BILLING: True,
+                CONF_DOWNLOAD_BILL_PDFS: False,
+                CONF_BILL_PDF_FORM: "detailed",
+                CONF_BILL_PDF_RETENTION: "latest",
+                CONF_BILL_PDF_ROLLING_COUNT: 12,
+                CONF_BACKFILL_CONCURRENCY: 2,
+                CONF_TOD_RATE_OFF_PEAK: None,
+                CONF_TOD_RATE_MID_PEAK: "",
+                CONF_TOD_RATE_ON_PEAK: None,
+                CONF_TOD_RATE_BASIC_SERVICE: "",
+            }
+        )
+        assert result["type"] == "create_entry"
+        assert result["data"][CONF_CAPTURE_GRAPHQL_DIAGNOSTICS] is True
+        assert result["data"][CONF_TOD_RATE_OFF_PEAK] is None
+        assert result["data"][CONF_TOD_RATE_MID_PEAK] is None
+        assert result["data"][CONF_TOD_RATE_ON_PEAK] is None
+        assert result["data"][CONF_TOD_RATE_BASIC_SERVICE] is None
 
     @pytest.mark.asyncio
     async def test_options_init_shows_menu(self):

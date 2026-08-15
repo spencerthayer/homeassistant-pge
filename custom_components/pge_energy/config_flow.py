@@ -450,6 +450,22 @@ class PGEConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
 
+class OptionalNumberSelector(NumberSelector):
+    """Number selector that treats blank/None as unset (returns None).
+
+    Bare ``NumberSelector`` raises ``expected float`` for empty OptionsFlow
+    boxes. Sync settings had four optional TOD rate fields that blocked Submit
+    whenever those boxes were left blank (the common case).
+    """
+
+    def __call__(self, data: Any) -> float | None:
+        if data is None:
+            return None
+        if isinstance(data, str) and not data.strip():
+            return None
+        return super().__call__(data)
+
+
 def _clean_tod_rate(raw: Any) -> float | None:
     """Coerce an optional TOD rate override; empty/unset/None → None."""
     if raw is None:
@@ -465,6 +481,19 @@ def _clean_tod_rate(raw: Any) -> float | None:
     if isinstance(raw, (int, float)) and raw > 0:
         return float(raw)
     return None
+
+
+def _optional_tod_rate_selector() -> OptionalNumberSelector:
+    """TOD rate override number box; blank keeps portal/default rates."""
+    return OptionalNumberSelector(
+        NumberSelectorConfig(
+            min=0.01,
+            max=10.0,
+            step="any",
+            mode=NumberSelectorMode.BOX,
+            unit_of_measurement="USD/kWh",
+        )
+    )
 
 
 def _options_schema(entry: config_entries.ConfigEntry) -> vol.Schema:
@@ -619,47 +648,19 @@ def _options_schema(entry: config_entries.ConfigEntry) -> vol.Schema:
             vol.Optional(
                 CONF_TOD_RATE_OFF_PEAK,
                 default=get_entry_option(entry, CONF_TOD_RATE_OFF_PEAK, None),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=0.01,
-                    max=10.0,
-                    mode=NumberSelectorMode.BOX,
-                    unit_of_measurement="USD/kWh",
-                )
-            ),
+            ): _optional_tod_rate_selector(),
             vol.Optional(
                 CONF_TOD_RATE_MID_PEAK,
                 default=get_entry_option(entry, CONF_TOD_RATE_MID_PEAK, None),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=0.01,
-                    max=10.0,
-                    mode=NumberSelectorMode.BOX,
-                    unit_of_measurement="USD/kWh",
-                )
-            ),
+            ): _optional_tod_rate_selector(),
             vol.Optional(
                 CONF_TOD_RATE_ON_PEAK,
                 default=get_entry_option(entry, CONF_TOD_RATE_ON_PEAK, None),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=0.01,
-                    max=10.0,
-                    mode=NumberSelectorMode.BOX,
-                    unit_of_measurement="USD/kWh",
-                )
-            ),
+            ): _optional_tod_rate_selector(),
             vol.Optional(
                 CONF_TOD_RATE_BASIC_SERVICE,
                 default=get_entry_option(entry, CONF_TOD_RATE_BASIC_SERVICE, None),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=0.01,
-                    max=10.0,
-                    mode=NumberSelectorMode.BOX,
-                    unit_of_measurement="USD/kWh",
-                )
-            ),
+            ): _optional_tod_rate_selector(),
         }
     )
 
