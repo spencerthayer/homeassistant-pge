@@ -340,8 +340,7 @@ def _log_discovery_summary(
     else:
         detail_part = f"detail_soft_fail={detail_error or 'unknown'}"
     _LOGGER.debug(
-        "PGE account discovery: totalAccounts=%r hasInactive=%r groups=%s "
-        "defaults=%s %s merged=%s last4=%s",
+        "PGE account discovery: totalAccounts=%r hasInactive=%r groups=%s defaults=%s %s merged=%s last4=%s",
         meta.get("totalAccounts"),
         meta.get("hasInactiveAccounts"),
         group_summaries or "[]",
@@ -407,9 +406,7 @@ async def _discover_accounts(
     detail_ids: list[str] | None = None
     detail_error: str | None = None
     try:
-        detail_person, detail_ids = await _enumerate_accounts_via_detail_list(
-            session, access_token, headers=headers
-        )
+        detail_person, detail_ids = await _enumerate_accounts_via_detail_list(session, access_token, headers=headers)
         if person_id is None and detail_person:
             person_id = detail_person
     except Exception as exc:  # noqa: BLE001 - soft-fail; never regress single-account login

@@ -532,4 +532,3 @@ class TestAccountDiscoveryMerge:
                 refresh_credential=None,
             )
         assert result.account_ids == ["1111111111", "2222222222", "3333333333"]
-
