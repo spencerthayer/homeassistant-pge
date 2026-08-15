@@ -91,7 +91,7 @@
           "auto_backfill": "Auto backfill on setup",
           "include_cost": "Import cost statistics",
           "include_diagnostics": "Include diagnostic sensors",
-          "capture_graphql_diagnostics": "Enable diagnostic capture (alpha)",
+          "capture_graphql_diagnostics": "Enable diagnostic capture",
           "include_billing": "Import billing & programs",
           "download_bill_pdfs": "Download bill PDFs",
           "bill_pdf_form": "Bill PDF form",
@@ -204,7 +204,9 @@
       "bill_pdf_public_purpose_charge": { "name": "Bill PDF public purpose charge" },
       "tod_period": { "name": "Time of Day period" },
       "tod_price": { "name": "Time of Day rate" },
-      "tod_vs_basic_savings": { "name": "TOD vs Basic savings" }
+      "tod_vs_basic_savings": { "name": "TOD vs Basic savings" },
+      "next_ptr_event_date": { "name": "Next PTR event date" },
+      "net_metering": { "name": "Net metering" }
     },
     "binary_sensor": {
       "autopay": { "name": "Auto Pay" },
@@ -213,7 +215,9 @@
       "program_green_future": { "name": "Green Future" },
       "program_time_of_day": { "name": "Time of Day" },
       "program_smart_thermostat": { "name": "Smart thermostat" },
-      "program_habitat_support": { "name": "Habitat Support" }
+      "program_habitat_support": { "name": "Habitat Support" },
+      "program_smart_charging": { "name": "EV Smart Charging" },
+      "program_smart_battery": { "name": "Smart Battery Pilot" }
     }
   }
 }

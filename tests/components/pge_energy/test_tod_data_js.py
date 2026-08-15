@@ -25,6 +25,8 @@ def test_data_js_exports_tod_schedule_helpers():
         "export function isTodOffPeakDay",
         "export function todPeriodForPacific",
         "export function bucketTodByPeriod",
+        "export function computeTodPlanCompare",
+        "export function todEnrollmentVerdict",
         "export function todWeekDays",
     ):
         assert export in source
@@ -55,11 +57,26 @@ def test_panel_ships_tod_section_and_render():
     import_block = source[:import_end]
     assert "TOD_PERIODS" in import_block
     assert "TOD_PERIOD_LABELS" in import_block
+    assert "computeTodPlanCompare" in import_block
+    assert "todEnrollmentVerdict" in import_block
     # next_transition_at arrives as an ISO string from WS — must Date()-coerce.
     assert "pacificParts(new Date(nextAt))" in source
-    # Imported cost is USD; avg rate column is labeled ¢/kWh.
+    # Imported cost is USD; avg billed column is labeled ¢/kWh.
     assert "(c / kw) * 100" in source
-    assert "estimate >= 0" in source
-    assert "Math.abs(estimate)" in source
+    assert "If enrolled in Time of Day (local estimate)" in source
+    assert "Would cost about" in source
+    assert "Would save about" in source
+    assert "tod-compare-verdict" in source
+    assert "How this was calculated" in source
+    assert "TOD-priced" in source
+    assert 'data-persist="tod_compare"' in source
+    assert "data-tod-range" in source
+    assert 'aria-label="TOD estimate range"' in source
+    assert "_resolveTodRange(" in source
+    assert '_todRangeKey = "last_cycle"' in source
+    assert "!this._todRangeTouched" in source
+    assert "independent of Usage" in source
+    assert 'aria-pressed="' in source
+    assert "imported cost ÷ kWh" in source
     assert "._todWeekGrid()" in source
     assert 'class="tod-cell' in source

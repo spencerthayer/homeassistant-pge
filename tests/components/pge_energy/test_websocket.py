@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
+from custom_components.pge_energy.billing_models import RateCompareSnapshot, TodSnapshot
 from custom_components.pge_energy.const import (
     CONF_ACCOUNT_ID,
     CONF_ACCOUNT_KEY,
@@ -13,6 +14,7 @@ from custom_components.pge_energy.const import (
 from custom_components.pge_energy.coordinator import PGECoordinator
 from custom_components.pge_energy.models import SyncProgressSnapshot
 from custom_components.pge_energy.websocket import (
+    _tod_payload,
     async_setup_websocket,
     websocket_accounts,
     websocket_sync_subscribe,
@@ -139,3 +141,50 @@ def test_websocket_sync_subscribe_pushes_and_tears_down():
 
     # Teardown
     connection.subscriptions[9]()
+
+
+def test_tod_payload_prefers_legacy_savings_total():
+    hass = MagicMock()
+    coord = _make_coordinator(hass)
+    coord.tod_snapshot = TodSnapshot(savings_total=12.5)
+    coord.rate_compare_snapshot = RateCompareSnapshot(attributes={"savings": 25.0})
+    payload = _tod_payload(coord)
+    assert payload["savings_total"] == 12.5
+    assert payload["savings_source"] == "pricing_plan"
+    assert payload["rate_compare"]["savings"] == 25.0
+
+
+def test_tod_payload_falls_back_to_rate_compare_savings():
+    hass = MagicMock()
+    coord = _make_coordinator(hass)
+    coord.tod_snapshot = None
+    coord.rate_compare_snapshot = RateCompareSnapshot(
+        fetched_at=datetime(2026, 8, 10, 16, tzinfo=UTC),
+        attributes={
+            "savings": 25.0,
+            "touTotal": 150.0,
+            "basicTotal": 175.0,
+            "comparisonPeriod": "2026-01 to 2026-07",
+        },
+    )
+    payload = _tod_payload(coord)
+    assert payload["savings_total"] == 25.0
+    assert payload["savings_source"] == "rate_compare"
+    assert payload["rate_compare"] == {
+        "savings": 25.0,
+        "tou_total": 150.0,
+        "basic_total": 175.0,
+        "comparison_period": "2026-01 to 2026-07",
+        "fetched_at": "2026-08-10T16:00:00+00:00",
+    }
+
+
+def test_tod_payload_empty_rate_compare_hidden():
+    hass = MagicMock()
+    coord = _make_coordinator(hass)
+    coord.tod_snapshot = None
+    coord.rate_compare_snapshot = RateCompareSnapshot()
+    payload = _tod_payload(coord)
+    assert payload["savings_total"] is None
+    assert payload["savings_source"] is None
+    assert payload["rate_compare"] is None

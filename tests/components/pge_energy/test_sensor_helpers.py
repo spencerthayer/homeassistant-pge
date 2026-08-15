@@ -103,6 +103,8 @@ class TestStatisticLinkedAttributes:
         assert attrs["entity_statistic_id"] == "sensor.pge_1122334455_energy"
         assert attrs["account_id"] == "1122334455"
         assert sensor.unique_id.endswith(ENTITY_UNIQUE_ENERGY)
+        assert sensor.name == "Consumption"
+        assert sensor.suggested_object_id == "energy"
         assert sensor.native_value == 1234.5
 
     def test_hourly_energy_is_measurement(self):

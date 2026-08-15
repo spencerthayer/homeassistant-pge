@@ -15,7 +15,7 @@ Settings → Devices & Services → **Portland General Electric Energy Usage** �
 | Auto backfill | on | Continues tiered history after each successful poll until the window is complete. |
 | Include cost | on | Import interval cost into statistics / sensors. |
 | Include diagnostics | on | Expose diagnostic sensors (auth expiry, last API error, sync progress, etc.). |
-| Enable diagnostic capture (alpha) (`capture_graphql_diagnostics`) | off | Temporary v0.7.3 PGE GraphQL contract capture for issue #5. Logs bounded sanitized interval rows plus one best-effort schema discovery request per integration load. Usage values remain private; enable only while testing and disable afterward. Does not alter imports or statistics. |
+| Enable diagnostic capture (`capture_graphql_diagnostics`) | off | Bounded PGE GraphQL contract capture for issue #5 / program probes. Logs sanitized interval rows plus allowlisted schema discovery. Usage values remain private; enable only while testing and disable afterward. Does not alter imports or statistics. |
 | Import billing & programs (`include_billing`) | on | Soft-fail billing/programs sync after usage poll. |
 | Download bill PDFs (`download_bill_pdfs`) | off | Opt-in portal PDF fetch to `www/pge_energy/…` (`/local/…`). Requires `include_billing`. Parsing and 18 `_bill_pdf_*` statistics import run automatically when enabled. |
 | Bill PDF form (`bill_pdf_form`) | `detailed` | `detailed` or `simplified` (maps to portal REST flags). |

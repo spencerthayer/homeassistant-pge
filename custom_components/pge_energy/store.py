@@ -89,6 +89,18 @@ class ImportStoreData:
     # Last-good portal Time of Day pricing snapshot (rates/savings). Additive:
     # keeps the offline rates card warm across reloads without a version bump.
     tod_snapshot: dict[str, Any] | None = None
+    # Last-good net-metering statement fields (diagnostic strings until UAT).
+    net_metering_snapshot: dict[str, Any] | None = None
+    # Last-good TOD vs Basic rate-compare aggregates (diagnostic).
+    rate_compare_snapshot: dict[str, Any] | None = None
+    # Last-good tip/billing sensor snapshots so cold-boot soft-fail does not
+    # leave entities at ``unknown`` when history/checkpoints alone exist.
+    account_snapshot: dict[str, Any] | None = None
+    programs_snapshot: dict[str, Any] | None = None
+    tracker_estimates: dict[str, Any] | None = None
+    tip_intervals: list[dict[str, Any]] = field(default_factory=list)
+    last_successful_update: str | None = None
+    newest_interval: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -100,6 +112,7 @@ class ImportStoreData:
         if not data:
             return cls()
         started_raw = data.get("sync_started_at")
+        tip_raw = data.get("tip_intervals")
         return cls(
             schema_version=int(data.get("schema_version", STORAGE_VERSION)),
             account_key=str(data.get("account_key", "")),
@@ -135,6 +148,14 @@ class ImportStoreData:
             bill_pdf_last_success=data.get("bill_pdf_last_success"),
             bill_pdf_last_error=data.get("bill_pdf_last_error"),
             tod_snapshot=_load_tod_snapshot(data),
+            net_metering_snapshot=_load_dict_snapshot(data, "net_metering_snapshot"),
+            rate_compare_snapshot=_load_dict_snapshot(data, "rate_compare_snapshot"),
+            account_snapshot=_load_dict_snapshot(data, "account_snapshot"),
+            programs_snapshot=_load_dict_snapshot(data, "programs_snapshot"),
+            tracker_estimates=_load_dict_snapshot(data, "tracker_estimates"),
+            tip_intervals=list(tip_raw) if isinstance(tip_raw, list) else [],
+            last_successful_update=data.get("last_successful_update"),
+            newest_interval=data.get("newest_interval"),
         )
 
 
@@ -146,10 +167,12 @@ def _load_bill_pdf_index(data: dict[str, Any]) -> dict[str, BillPdfIndexEntry]:
 
 
 def _load_tod_snapshot(data: dict[str, Any]) -> dict[str, Any] | None:
-    raw = data.get("tod_snapshot")
-    if not raw:
-        return None
-    if not isinstance(raw, dict):
+    return _load_dict_snapshot(data, "tod_snapshot")
+
+
+def _load_dict_snapshot(data: dict[str, Any], key: str) -> dict[str, Any] | None:
+    raw = data.get(key)
+    if not raw or not isinstance(raw, dict):
         return None
     return dict(raw)
 

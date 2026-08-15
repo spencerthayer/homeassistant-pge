@@ -16,9 +16,11 @@ from .billing_models import (
     EnergyTrackerEstimates,
     LedgerEvent,
     LedgerEventType,
+    NetMeteringSnapshot,
     ProgramEnrollment,
     ProgramsSnapshot,
-    TodSnapshot,
+    RateCompareSnapshot,
+    sanitize_rate_compare_attrs,
 )
 from .exceptions import (
     PGEAuthenticationError,
@@ -186,6 +188,10 @@ query getPeakTimeRebateEnrollmentDetails($params: PeakTimeRebateEnrollmentDetail
     cardType
     totalEarnedCredit
     activePTRSeason
+    peakTimeEvents { eventDate eventEarnedCredit }
+    seasonalDates { summer { start end } winter { start end } }
+    lastPTRSeason
+    nextPTRSeason
   }
 }
 """
@@ -195,6 +201,11 @@ query getTimeOfDayEnrollmentDetails($params: TimeOfDayEnrollmentDetailsParams!) 
   getTimeOfDayEnrollmentDetails(params: $params) {
     isEnrolled
     cardType
+    annualLookBackEarnedCredit
+    offPeakCharges
+    midPeakCharges
+    onPeakCharges
+    planSavings
   }
 }
 """
@@ -208,13 +219,52 @@ query getSmartThermostatEnrollmentDetails($params: SmartThermostatEnrollmentDeta
 }
 """
 
-# Best-effort TOD pricing discovery (speculative op/param names — see the
-# ``DATA_CONTRACT.md`` TOD section). Soft-fail into the offline defaults when the
-# portal does not expose it; parser tolerates missing/renamed fields.
-GET_TIME_OF_DAY_PRICING_DETAILS = """
-query getTimeOfDayPricingDetails($params: TimeOfDayPricingDetailsParams!) {
-  getTimeOfDayPricingDetails(params: $params) {
-    offPeakRate midPeakRate onPeakRate basicServiceRate todVsBasicSavings
+GET_SMART_CHARGING_ENROLLMENT_DETAILS = """
+query getSmartChargingEnrollmentDetails($params: SmartChargingEnrollmentDetailsParams!) {
+  getSmartChargingEnrollmentDetails(params: $params) {
+    enrollmentStatus
+    cardType
+    lastSeasonEarnedCredit
+    activeSeason { name start end }
+  }
+}
+"""
+
+GET_SMART_BATTERY_DETAILS = """
+query getSmartBatteryDetails($params: SmartBatteryDetailsParams!) {
+  getSmartBatteryDetails(params: $params) {
+    isEnrolled
+    cardType
+    currentBillCreditAmount
+    currentBillKwh
+    ytdCreditAmount
+    ytdKwh
+    peakTimeSeason { seasonCategory season startDate endDate }
+  }
+}
+"""
+
+GET_NET_METERING_DETAILS = """
+query getNetMeteringDetails($params: NetMeteringDetailsParams!) {
+  getNetMeteringDetails(params: $params) {
+    isEnrolled
+    cardType
+    currentBalance
+    lastStatementCredit
+    annualTrueUpDate
+    yearToDateGeneration
+    yearToDateExport
+  }
+}
+"""
+
+GET_RATE_COMPARE = """
+query getRateCompare($params: RateCompareParams!) {
+  getRateCompare(params: $params) {
+    touTotal
+    basicTotal
+    savings
+    comparisonPeriod
   }
 }
 """
@@ -677,51 +727,43 @@ class PGEBillingApiClient:
             previous_period_kwh=_safe_float(previous.get("totalKwh")),
         )
 
-    # -- Time of Day pricing -------------------------------------------------
+    # -- Net metering (gated, diagnostic) ------------------------------------
 
-    async def get_tod_pricing(
+    async def get_net_metering_details(
         self,
-        encrypted_account_number: str,
+        encrypted_account_id: str,
         encrypted_premise_id: str,
-        encrypted_sa_id: str,
-    ) -> TodSnapshot:
-        """Best-effort portal TOD rates + savings for the offline rate card.
-
-        Discovery-only: the operation/field names are speculative. The parser
-        tolerates missing nested fields and returns a partial (possibly empty)
-        snapshot, but raises :class:`PGESchemaError` when the top-level
-        ``getTimeOfDayPricingDetails`` object is missing or not a dict. Callers
-        soft-fail into the offline defaults.
-        """
-        del encrypted_premise_id  # shared premise not needed for this op
-        params = {
-            "encryptedAccountNumber": encrypted_account_number,
-            "encryptedServiceAgreementId": encrypted_sa_id,
-        }
+    ) -> NetMeteringSnapshot:
+        """Best-effort net-metering detail; all fields kept as diagnostic strings."""
         data = await self._post_graphql(
-            GET_TIME_OF_DAY_PRICING_DETAILS,
-            {"params": params},
-            "getTimeOfDayPricingDetails",
+            GET_NET_METERING_DETAILS,
+            {
+                "params": {
+                    "encryptedAccountId": encrypted_account_id,
+                    "encryptedPremiseId": encrypted_premise_id,
+                }
+            },
+            "getNetMeteringDetails",
         )
-        raw = data.get("getTimeOfDayPricingDetails")
-        if not isinstance(raw, dict):
-            raise PGESchemaError("Response missing data.getTimeOfDayPricingDetails")
-        rates: dict[str, float] = {}
-        for period, field_name in (
-            ("off_peak", "offPeakRate"),
-            ("mid_peak", "midPeakRate"),
-            ("on_peak", "onPeakRate"),
-        ):
-            value = _safe_float(raw.get(field_name))
-            if value is not None and value > 0:
-                rates[period] = value
-        return TodSnapshot(
-            rates=rates,
-            basic_rate=_safe_float(raw.get("basicServiceRate")),
-            savings_total=_safe_float(raw.get("todVsBasicSavings")),
-            fetched_at=datetime.now(UTC),
-            attributes=dict(raw),
+        raw = data.get("getNetMeteringDetails")
+        attrs = dict(raw) if isinstance(raw, dict) else {}
+        return NetMeteringSnapshot(fetched_at=datetime.now(UTC), attributes=attrs)
+
+    # -- Rate compare (TOD vs Basic aggregates) -----------------------------
+
+    async def get_rate_compare(
+        self,
+        account_number: str,
+    ) -> RateCompareSnapshot:
+        """Best-effort rate comparison; diagnostic only — never derive period rates."""
+        data = await self._post_graphql(
+            GET_RATE_COMPARE,
+            {"params": {"accountNumber": account_number}},
+            "getRateCompare",
         )
+        raw = data.get("getRateCompare")
+        attrs = sanitize_rate_compare_attrs(dict(raw)) if isinstance(raw, dict) else {}
+        return RateCompareSnapshot(fetched_at=datetime.now(UTC), attributes=attrs)
 
     # -- Programs -----------------------------------------------------------
 
@@ -748,20 +790,32 @@ class PGEBillingApiClient:
         renewables = [self._parse_program_enrollment(item) for item in (status.get("renewables") or [])]
 
         snapshot_attrs: dict[str, object] = {}
-        peak_time_rebates_enrolled = _program_list_enrolled(
-            energy_shifting,
-            ("peak time", "peak_time", "peak-time", "peaktime", "rebate"),
-        )
-        green_future_enrolled = _program_list_enrolled(
-            renewables, ("green future", "green_future", "green source", "renewable")
-        )
-        time_of_day_enrolled = _program_list_enrolled(
-            energy_shifting, ("time of day", "time_of_day", "time-of-day", "tod")
-        )
-        smart_thermostat_enrolled = _program_list_enrolled(
-            energy_shifting, ("smart thermostat", "smart_thermostat", "thermostat")
-        )
+        ptr_keywords = ("peak time", "peak_time", "peak-time", "peaktime", "rebate")
+        green_future_keywords = ("green future", "green_future", "green source", "renewable")
+        tod_keywords = ("time of day", "time_of_day", "time-of-day", "tod")
+        smart_thermostat_keywords = ("smart thermostat", "smart_thermostat", "thermostat")
+        peak_time_rebates_enrolled = _program_list_enrolled(energy_shifting, ptr_keywords)
+        peak_time_rebates_eligible = _program_list_eligible(energy_shifting, ptr_keywords)
+        green_future_enrolled = _program_list_enrolled(renewables, green_future_keywords)
+        green_future_eligible = _program_list_eligible(renewables, green_future_keywords)
+        time_of_day_enrolled = _program_list_enrolled(energy_shifting, tod_keywords)
+        time_of_day_eligible = _program_list_eligible(energy_shifting, tod_keywords)
+        smart_thermostat_enrolled = _program_list_enrolled(energy_shifting, smart_thermostat_keywords)
+        smart_thermostat_eligible = _program_list_eligible(energy_shifting, smart_thermostat_keywords)
         habitat_support_enrolled = _program_list_enrolled(renewables + energy_shifting, ("habitat",))
+        habitat_support_eligible = _program_list_eligible(renewables + energy_shifting, ("habitat",))
+        smart_charging_match = _program_list_lookup(
+            energy_shifting,
+            ("ev_smart_charging", "ev smart charging", "smart charging", "ev charging"),
+        )
+        smart_charging_enrolled = smart_charging_match.is_enrolled if smart_charging_match else None
+        smart_charging_eligible = smart_charging_match.is_eligible if smart_charging_match else None
+        smart_battery_match = _program_list_lookup(
+            energy_shifting,
+            ("smart_battery_pilot", "smart battery pilot", "smart battery", "battery pilot"),
+        )
+        smart_battery_enrolled = smart_battery_match.is_enrolled if smart_battery_match else None
+        smart_battery_eligible = smart_battery_match.is_eligible if smart_battery_match else None
         green_future_pct: float | None = None
 
         # Best-effort detail ops: swallow individual failures into a partial
@@ -776,14 +830,22 @@ class PGEBillingApiClient:
             },
         )
         if peak is not None:
-            status_text = str(peak.get("enrollmentStatus") or "").lower()
-            if status_text:
-                peak_time_rebates_enrolled = status_text == "enrolled"
+            status_parsed = _safe_bool(peak.get("enrollmentStatus"))
+            if status_parsed is not None:
+                peak_time_rebates_enrolled = status_parsed
             else:
                 enrolled = _safe_bool(peak.get("isEnrolled"))
                 if enrolled is not None:
                     peak_time_rebates_enrolled = enrolled
-            snapshot_attrs["peak_time_rebate"] = peak
+            peak_enriched = dict(peak)
+            peak_enriched["peak_time_events"] = normalize_ptr_events(peak.get("peakTimeEvents"))
+            seasonal = peak.get("seasonalDates")
+            if isinstance(seasonal, dict):
+                peak_enriched["seasonal_dates"] = seasonal
+            for season_key in ("lastPTRSeason", "nextPTRSeason", "activePTRSeason"):
+                if peak.get(season_key) is not None:
+                    peak_enriched[season_key] = peak[season_key]
+            snapshot_attrs["peak_time_rebate"] = peak_enriched
 
         renew_detail = await self._best_effort_detail(
             GET_RENEWABLES_ENROLLMENT_DETAILS,
@@ -814,6 +876,7 @@ class PGEBillingApiClient:
             enrolled = _safe_bool(tod_detail.get("isEnrolled"))
             if enrolled is not None:
                 time_of_day_enrolled = enrolled
+            snapshot_attrs["tod_enrollment_detail"] = tod_detail
 
         thermostat_detail = await self._best_effort_detail(
             GET_SMART_THERMOSTAT_ENROLLMENT_DETAILS,
@@ -825,16 +888,51 @@ class PGEBillingApiClient:
             if enrolled is not None:
                 smart_thermostat_enrolled = enrolled
 
+        smart_charging_detail = await self._best_effort_detail(
+            GET_SMART_CHARGING_ENROLLMENT_DETAILS,
+            "getSmartChargingEnrollmentDetails",
+            {"encryptedAccountNumber": encrypted_account_number},
+        )
+        if smart_charging_detail is not None:
+            sc_status = _safe_bool(smart_charging_detail.get("enrollmentStatus"))
+            if sc_status is not None:
+                smart_charging_enrolled = sc_status
+            else:
+                sc_enrolled = _safe_bool(smart_charging_detail.get("isEnrolled"))
+                if sc_enrolled is not None:
+                    smart_charging_enrolled = sc_enrolled
+            snapshot_attrs["smart_charging_detail"] = smart_charging_detail
+
+        smart_battery_detail = await self._best_effort_detail(
+            GET_SMART_BATTERY_DETAILS,
+            "getSmartBatteryDetails",
+            {"encryptedServiceAgreementId": encrypted_sa_id},
+        )
+        if smart_battery_detail is not None:
+            sb_enrolled = _safe_bool(smart_battery_detail.get("isEnrolled"))
+            if sb_enrolled is not None:
+                smart_battery_enrolled = sb_enrolled
+            snapshot_attrs["smart_battery_detail"] = smart_battery_detail
+
         return ProgramsSnapshot(
             energy_shifting=energy_shifting,
             renewables=renewables,
             ytd_flex_load_earnings=_safe_float(status.get("ytdFlexLoadEarnings")),
             on_bill_flex_load_earnings=_safe_float(status.get("onBillFlexLoadEarnings")),
             peak_time_rebates_enrolled=peak_time_rebates_enrolled,
+            peak_time_rebates_eligible=peak_time_rebates_eligible,
             green_future_enrolled=green_future_enrolled,
+            green_future_eligible=green_future_eligible,
             time_of_day_enrolled=time_of_day_enrolled,
+            time_of_day_eligible=time_of_day_eligible,
             smart_thermostat_enrolled=smart_thermostat_enrolled,
+            smart_thermostat_eligible=smart_thermostat_eligible,
             habitat_support_enrolled=habitat_support_enrolled,
+            habitat_support_eligible=habitat_support_eligible,
+            smart_charging_enrolled=smart_charging_enrolled,
+            smart_charging_eligible=smart_charging_eligible,
+            smart_battery_enrolled=smart_battery_enrolled,
+            smart_battery_eligible=smart_battery_eligible,
             green_future_pct=green_future_pct,
             attributes=snapshot_attrs,
         )
@@ -844,7 +942,7 @@ class PGEBillingApiClient:
         attributes = {k: v for k, v in item.items() if k not in known}
         return ProgramEnrollment(
             program_name=str(item.get("programName") or ""),
-            is_enrolled=bool(_safe_bool(item.get("isEnrolled"))),
+            is_enrolled=_safe_bool(item.get("isEnrolled")),
             is_eligible=_safe_bool(item.get("isEligible")),
             attributes=attributes,
         )
@@ -877,12 +975,93 @@ def _program_list_enrolled(
     programs: list[ProgramEnrollment],
     keywords: tuple[str, ...],
 ) -> bool | None:
-    """Return enrollment for the first program whose name matches a keyword."""
+    """Return enrollment for matched programs (tri-state).
+
+    ``True`` if any match is explicitly enrolled, ``False`` if any match is
+    explicitly not enrolled (and none enrolled), else ``None`` when unmatched
+    or all matched rows leave enrollment null.
+    """
+    saw_false = False
     matched = False
     for program in programs:
         name = program.program_name.lower()
         if any(keyword in name for keyword in keywords):
             matched = True
-            if program.is_enrolled:
+            if program.is_enrolled is True:
                 return True
-    return False if matched else None
+            if program.is_enrolled is False:
+                saw_false = True
+    if not matched:
+        return None
+    return False if saw_false else None
+
+
+def _program_list_eligible(
+    programs: list[ProgramEnrollment],
+    keywords: tuple[str, ...],
+) -> bool | None:
+    """Return eligibility for matched programs (tri-state).
+
+    ``True`` if any match is explicitly eligible, ``False`` if any match is
+    explicitly ineligible (and none eligible), else ``None`` when unmatched
+    or all matched rows leave eligibility null.
+    """
+    saw_false = False
+    matched = False
+    for program in programs:
+        name = program.program_name.lower()
+        if any(keyword in name for keyword in keywords):
+            matched = True
+            if program.is_eligible is True:
+                return True
+            if program.is_eligible is False:
+                saw_false = True
+    if not matched:
+        return None
+    return False if saw_false else None
+
+
+def _program_list_lookup(
+    programs: list[ProgramEnrollment],
+    keywords: tuple[str, ...],
+) -> ProgramEnrollment | None:
+    """Return the first matching ProgramEnrollment (preserves is_eligible)."""
+    for program in programs:
+        name = program.program_name.lower()
+        if any(keyword in name for keyword in keywords):
+            return program
+    return None
+
+
+def normalize_ptr_events(raw_events: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Sort, dedupe, and filter malformed PTR event entries.
+
+    Returns a list of ``{"event_date": "YYYY-MM-DD", "event_earned_credit": float|None}``
+    sorted ascending by date, with duplicate dates removed (first occurrence wins).
+    """
+    if not raw_events:
+        return []
+    seen: set[str] = set()
+    clean: list[dict[str, Any]] = []
+    for entry in raw_events:
+        if not isinstance(entry, dict):
+            continue
+        raw_date = entry.get("eventDate")
+        if not raw_date:
+            continue
+        text = str(raw_date).strip()
+        parsed = _parse_date(text)
+        if parsed is None:
+            continue
+        iso = parsed.strftime("%Y-%m-%d")
+        if iso in seen:
+            continue
+        seen.add(iso)
+        clean.append(
+            {
+                "event_date": iso,
+                "event_earned_credit": _safe_float(entry.get("eventEarnedCredit")),
+            }
+        )
+    clean.sort(key=lambda e: e["event_date"])
+    return clean

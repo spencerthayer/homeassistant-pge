@@ -110,16 +110,18 @@ Published statistics:
 
 | Direction | External statistic | Notes |
 | --- | --- | --- |
-| Grid import | `pge_energy:<account_key>_consumption` | non-negative; HA Energy “imported from grid” |
+| Grid import | `pge_energy:<account_key>_consumption` | non-negative; HA Energy “imported from grid”; display name `PGE <account> consumption` |
 | Grid export | `pge_energy:<account_key>_return` | non-negative; HOURLY signed rows only |
 | Import cost | `pge_energy:<account_key>_cost` | `max(0, amount)` |
 | Export compensation | `pge_energy:<account_key>_compensation` | only when hourly `kwh < 0` and `amount < 0` |
 
 A one-time Store-gated migration (`signed_usage_split_migration_done`) rewrites proven fine-grained negative `_consumption` / `_cost` states into `_return` / `_compensation`. Coarse monthly lumps are left alone when source grain cannot be proven.
 
-`getNetMeteringDetails(...).monthlyBill.excessGeneration` remains deferred — units/period boundaries are not reconciled against interval data.
+**Panel projection (v0.9.1):** `/pge` never mutates recorder series. `projectDirectionalUsage` builds a view model at each grain: grid flow = `consumption − return` (positive import / negative export); net interval amount = `cost − compensation` only when the selected range contains at least one **positive** compensation credit (`> 0`), otherwise import cost. A zero-only compensation series stays in import-cost mode. Missing compensation for a whole range is not treated as zero credit. This is an interval estimate — not PGE’s statement credit bank (`getNetMeteringDetails` monthly buckets are published separately as diagnostic fields).
 
-The default-off `capture_graphql_diagnostics` alpha switch remains available for follow-up captures; it does not change production import.
+`getNetMeteringDetails` statement/credit-bucket fields are fetched best-effort when solar return history or a net-metering program row is present; units/signs stay diagnostic until generating-account UAT confirms them. They must not rewrite `_cost` / `_compensation`.
+
+The default-off `capture_graphql_diagnostics` switch remains available for follow-up captures; it does not change production import.
 
 ---
 
@@ -242,19 +244,49 @@ Backs the portal “Current Use” card (est. current charges, billing-cycle day
 - **Probe:** packaged CLI `billing-snapshot` / live portal Current Use card (maintainer notes in `docs/LIVE_TESTING.md`).
 - **HA import:** fetched in `billing_sync` after the ledger, soft-failing to the previous value; surfaced as sensors (`est_current_charges`, `est_next_bill_min`/`_max`, `billing_cycle_day`, `billing_cycle_total_days`) and panel “PGE est.” cards. No statistics are published — these are estimates that get revised daily.
 
-### `getTimeOfDayPricingDetails` — Time of Day rate card (v0.9.0+, speculative)
+### `getTimeOfDayPricingDetails` — REMOVED (v0.9.1)
 
-- **Purpose:** current E-TOU rate card (per-period ¢/kWh) and total `basic_service` rate for the account. Used by the `tod_pricing` module, the three `tod_*` sensors, and the panel **Time of Day** section.
-- **Variables:** `{ params: { encryptedAccountNumber } }` from `getAccountDetailList.accounts[]` for the bound entry.
-- **Fields:** `timeOfUseRates` (period / price) plus a `basicService` / basic rate field. Treat this op as **speculative** — the GraphQL field names are portal-documented, not yet verified end-to-end against a live enrolled account.
-- **Failure policy:** the op is best-effort and **cannot fail the billing sync**. `_async_fetch_tod_snapshot` catches PGE errors and generic exceptions, logs at debug, and returns the last-good snapshot (re-persisted) so the previous rate card survives.
-- **Resolution chain:** account overrides (`tod_rate_off_peak`/`_mid_peak`/`_on_peak`/`_basic_service`) → last portal rate card → built-in defaults (`DEFAULT_TOD_RATES` / `DEFAULT_BASIC_RATE`). Period definitions, holiday rules, and the offline engine live in `tod_schedule.py`; resolution in `tod_pricing.resolve_tod_rates`.
+This speculative GraphQL operation was never verified against a live portal and has been removed. The `get_tod_pricing` API method and its billing-sync caller `_async_fetch_tod_snapshot` no longer exist.
+
+- **Resolution chain:** account overrides (`tod_rate_off_peak`/`_mid_peak`/`_on_peak`/`_basic_service`) → retained last-good portal `TodSnapshot` (when present; restored from the Store by `async_load_store`, no live op populates it in v0.9.1) → built-in defaults (`DEFAULT_TOD_RATES` / `DEFAULT_BASIC_RATE`). Period definitions, holiday rules, and the offline engine live in `tod_schedule.py`; resolution in `tod_pricing.resolve_tod_rates`.
+- **Replacement ops:** `getTimeOfDayEnrollmentDetails` now carries `annualLookBackEarnedCredit`, `offPeakCharges`, `midPeakCharges`, `onPeakCharges`, `planSavings` as diagnostic attributes on the TOD binary sensor. `getRateCompare` (params: `{ accountNumber }`) returns `touTotal`, `basicTotal`, `savings`, `comparisonPeriod` — persisted as a diagnostic `RateCompareSnapshot` on the coordinator; its `savings` aggregate powers the `tod_vs_basic_savings` sensor fallback and the panel's official “PGE TOD vs Basic savings” block (see below). Neither op is used to derive per-period ¢/kWh rates.
+
+### `getRateCompare` (`RateCompareParams!`) — v0.9.1+
+
+- **Purpose:** aggregate TOD vs Basic cost comparison (diagnostic + portal savings surface).
+- **Variables:** `{ params: { accountNumber } }` — plaintext account number (not encrypted).
+- **Fields:** `touTotal`, `basicTotal`, `savings`, `comparisonPeriod`.
+- **Consumers (v0.9.1):** `savings` feeds `sensor.pge_*_tod_vs_basic_savings` when the legacy pricing-plan `savings_total` snapshot is absent, the `tod.rate_compare` block of the `pge_energy/accounts` websocket payload, and the official “PGE TOD vs Basic savings” card on `/pge#tod`. Per-period rates are never derived from these aggregates.
+- **Panel local estimate (v0.9.2+):** `/pge#tod` does **not** use `getRateCompare` totals for the local hero. `computeTodPlanCompare` prices the selected window’s imported hourly kWh at effective TOD rates and compares that to **billed imported cost** (not to `DEFAULT_BASIC_RATE` × kWh). Inferred ¢/kWh is billed ÷ kWh. `todEnrollmentVerdict` drives the hero (**Would cost about $X more** / **Would save about $X** when not enrolled; **Costing** / **Saving** versus Basic when enrolled). The estimate window is chosen in `#tod` (`_todRangeKey`, default `last_cycle`) and does not follow the Usage chart range. The collapsed “How this was calculated” table still shows the rate-card TOD vs Basic model as “$X more” / “$X cheaper” (never a signed savings figure). Energy charges only — fees/taxes/adjustments omitted. Official portal savings remain the separate green card.
+- **Failure policy:** best-effort; soft-fails to last-good `RateCompareSnapshot`. A null/missing payload, or a payload whose fields are all null, parses as an empty/blank snapshot and **does not** overwrite a previously valid snapshot.
+
+### `getSmartChargingEnrollmentDetails` (`SmartChargingEnrollmentDetailsParams!`) — v0.9.1+
+
+- **Purpose:** EV Smart Charging program detail.
+- **Variables:** `{ params: { encryptedAccountNumber } }`.
+- **Fields:** `enrollmentStatus`, `cardType`, `lastSeasonEarnedCredit`, `activeSeason { name start end }`.
+- **Failure policy:** best-effort program detail; soft-fails to `None`.
+
+### `getSmartBatteryDetails` (`SmartBatteryDetailsParams!`) — v0.9.1+
+
+- **Purpose:** Smart Battery Pilot program detail.
+- **Variables:** `{ params: { encryptedServiceAgreementId } }`.
+- **Fields:** `isEnrolled`, `cardType`, `currentBillCreditAmount`, `currentBillKwh`, `ytdCreditAmount`, `ytdKwh`, `peakTimeSeason { seasonCategory season startDate endDate }`.
+- **Failure policy:** best-effort; no monetary/kWh sensors are derived — fields are diagnostic attributes only.
+
+### `getNetMeteringDetails` (`NetMeteringDetailsParams!`) — v0.9.1+
+
+- **Purpose:** net-metering account detail (diagnostic, gated on solar return history).
+- **Variables:** `{ params: { encryptedAccountId, encryptedPremiseId } }`.
+- **Fields:** `isEnrolled`, `cardType`, `currentBalance`, `lastStatementCredit`, `annualTrueUpDate`, `yearToDateGeneration`, `yearToDateExport`.
+- **Failure policy:** best-effort; soft-fails to last-good. Only called when lifetime return > 0 or a net-metering program row exists. A null/missing payload, or a payload whose fields are all null, parses as an empty/blank snapshot and **does not** overwrite a previously valid snapshot. All fields are raw diagnostic attributes until UAT validates units.
 
 ### Programs
 
 - **Status:** `getProgramsEnrollmentStatusDetails` with `{ encryptedAccountNumber, encryptedPremiseId, encryptedSaId }`.
-- **Detail ops (best-effort):** Peak Time (`encryptedAccountNumber` + `ptrMockServerDate: ""`), Renewables (`encryptedServiceAgreementId`), TOD (`encryptedAccountNumber` + `encryptedServiceAgreementId`), Smart Thermostat (`encryptedAccountNumber`).
-- **HA import:** enrollment flags + YTD / on-bill flex earnings; dual-publish mean series for YTD savings. Bill PDF download is opt-in (`download_bill_pdfs`, v0.7+).
+- **Detail ops (best-effort):** Peak Time (`encryptedAccountNumber` + `ptrMockServerDate: ""`; extended v0.9.1 with `peakTimeEvents`, `seasonalDates`, `lastPTRSeason`, `nextPTRSeason`), Renewables (`encryptedServiceAgreementId`), TOD (`encryptedAccountNumber` + `encryptedServiceAgreementId`; extended v0.9.1 with `annualLookBackEarnedCredit`, `offPeakCharges`, `midPeakCharges`, `onPeakCharges`, `planSavings`), Smart Thermostat (`encryptedAccountNumber`), EV Smart Charging (`encryptedAccountNumber`, v0.9.1+), Smart Battery Pilot (`encryptedServiceAgreementId`, v0.9.1+).
+- **Program matching:** status list keyword matching plus `_program_list_lookup` for Smart Charging (`EV_SMART_CHARGING` aliases) and Smart Battery (`SMART_BATTERY_PILOT` aliases). Every program row preserves `is_eligible` from the enrollment status list; per-program eligibility (`*_eligible`) is surfaced as an `is_eligible` attribute on each program binary sensor (PTR, Green Future, TOD, Smart Thermostat, Habitat Support, Smart Charging, Smart Battery) so the panel can distinguish "Eligible" from "Not enrolled".
+- **HA import:** enrollment flags + YTD / on-bill flex earnings; dual-publish mean series for YTD savings. `next_ptr_event_date` sensor exposes the nearest future PTR event from sorted/deduped `peakTimeEvents`. Bill PDF download is opt-in (`download_bill_pdfs`, v0.7+).
 
 ### Bill PDF REST / normalized parsing (shipped v0.7.0)
 

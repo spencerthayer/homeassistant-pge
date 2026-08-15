@@ -16,7 +16,13 @@ from homeassistant.helpers import aiohttp_client
 
 from .bill_pdf_sync import async_sync_bill_pdfs, index_bill_from_ledger_event, index_bill_from_snapshot
 from .billing_api import PGEBillingApiClient
-from .billing_models import BillingFreshness, EnergyTrackerEstimates, LedgerEvent, TodSnapshot
+from .billing_models import (
+    BillingFreshness,
+    EnergyTrackerEstimates,
+    LedgerEvent,
+    NetMeteringSnapshot,
+    RateCompareSnapshot,
+)
 from .billing_statistics import (
     async_import_billing_snapshot,
     async_import_ledger_events,
@@ -42,6 +48,7 @@ from .store import async_save_import_state
 
 if TYPE_CHECKING:
     from .coordinator import PGECoordinator
+    from .store import ImportStoreData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -134,19 +141,28 @@ async def async_run_billing_sync(
         else:
             _LOGGER.debug("Skipping programs — encrypted premise/SA id missing")
 
-        # 5) Time of Day pricing snapshot (soft-fail; keeps last good) -------
-        if encrypted_account_number and encrypted_sa_id:
-            tod_snapshot = await _async_fetch_tod_snapshot(
+        # 5) Net metering (gated on solar return history or net-metering program row)
+        if encrypted_account_number and encrypted_premise_id:
+            net_metering = await _async_fetch_net_metering(
                 client,
+                coordinator,
                 encrypted_account_number=encrypted_account_number,
-                encrypted_premise_id=encrypted_premise_id or "",
-                encrypted_sa_id=encrypted_sa_id,
-                previous=coordinator.tod_snapshot,
+                encrypted_premise_id=encrypted_premise_id,
             )
-            if tod_snapshot is not None:
-                await coordinator.async_set_tod_snapshot(tod_snapshot)
-        else:
-            _LOGGER.debug("Skipping TOD pricing — encrypted account/SA id missing")
+            if net_metering is not None:
+                coordinator.net_metering_snapshot = net_metering
+                store.net_metering_snapshot = net_metering.to_dict()
+
+        # 5b) Rate compare (TOD vs Basic aggregate diagnostic)
+        if account_id:
+            rate_compare = await _async_fetch_rate_compare(
+                client,
+                account_number=account_id,
+                previous=coordinator.rate_compare_snapshot,
+            )
+            if rate_compare is not None:
+                coordinator.rate_compare_snapshot = rate_compare
+                store.rate_compare_snapshot = rate_compare.to_dict()
 
         # 6) Lifetime totals + freshness ----------------------------------
         payments, billed = await async_refresh_billing_lifetime_totals(hass, account_key)
@@ -160,6 +176,8 @@ async def async_run_billing_sync(
         coordinator.billing_freshness = BillingFreshness(last_success=success, last_error=None)
         store.billing_last_success = success.isoformat()
         store.billing_last_error = None
+        # Persist account/programs/tracker so cold-boot soft-fail keeps sensors warm.
+        _persist_warm_snapshots(coordinator, store)
         await async_save_import_state(hass, entry.entry_id, store)
     except Exception as exc:  # noqa: BLE001 - billing is soft-fail by design
         message = str(exc)
@@ -169,10 +187,32 @@ async def async_run_billing_sync(
             last_success=coordinator.billing_freshness.last_success,
             last_error=message,
         )
+        # Keep any snapshots fetched before the failure so a restart plus failed
+        # poll cannot drop account/programs/tracker sensors back to unknown.
+        _persist_warm_snapshots(coordinator, store)
         try:
             await async_save_import_state(hass, entry.entry_id, store)
         except Exception:  # pragma: no cover - store failure is non-fatal
             _LOGGER.debug("Failed to persist billing_last_error", exc_info=True)
+
+
+def _persist_warm_snapshots(coordinator: PGECoordinator, store: ImportStoreData) -> None:
+    """Copy last-good account/programs/tracker snapshots into the import Store."""
+    if coordinator.account_snapshot is not None:
+        store.account_snapshot = coordinator.account_snapshot.to_dict()
+    if coordinator.programs_snapshot is not None:
+        store.programs_snapshot = coordinator.programs_snapshot.to_dict()
+    if coordinator.tracker_estimates is not None:
+        store.tracker_estimates = coordinator.tracker_estimates.to_dict()
+
+
+def _snapshot_has_values(snapshot: NetMeteringSnapshot | RateCompareSnapshot) -> bool:
+    """True when a fetched snapshot carries at least one non-null field.
+
+    GraphQL commonly returns requested keys with ``null`` values; such a payload
+    must not replace the retained last-good snapshot.
+    """
+    return any(value is not None for value in snapshot.attributes.values())
 
 
 async def _async_fetch_tracker_estimates(
@@ -203,25 +243,27 @@ async def _async_fetch_tracker_estimates(
         return previous
 
 
-async def _async_fetch_tod_snapshot(
+async def _async_fetch_net_metering(
     client: PGEBillingApiClient,
+    coordinator: PGECoordinator,
     *,
     encrypted_account_number: str,
     encrypted_premise_id: str,
-    encrypted_sa_id: str,
-    previous: TodSnapshot | None,
-) -> TodSnapshot | None:
-    """Best-effort portal TOD rates; keep the last-good snapshot on failure.
-
-    The op is speculative (discovery), so any failure here must never abort the
-    rest of billing sync nor blank already-cached rates.
-    """
+) -> NetMeteringSnapshot | None:
+    """Gated net-metering fetch: only runs when solar export evidence exists."""
+    has_return = coordinator.lifetime_return_kwh is not None and coordinator.lifetime_return_kwh > 0
+    has_nm_program = False
+    if coordinator.programs_snapshot is not None:
+        for prog in coordinator.programs_snapshot.energy_shifting + coordinator.programs_snapshot.renewables:
+            name = prog.program_name.lower().replace("-", "_").replace(" ", "_")
+            if "net_meter" in name or "netmeter" in name:
+                has_nm_program = True
+                break
+    if not has_return and not has_nm_program:
+        return coordinator.net_metering_snapshot
     try:
-        fetched = await client.get_tod_pricing(
-            encrypted_account_number,
-            encrypted_premise_id,
-            encrypted_sa_id,
-        )
+        # GraphQL still uses encryptedAccountId; value is the encrypted account number.
+        snapshot = await client.get_net_metering_details(encrypted_account_number, encrypted_premise_id)
     except (
         PGEGraphQLError,
         PGESchemaError,
@@ -229,14 +271,44 @@ async def _async_fetch_tod_snapshot(
         PGERateLimitError,
         PGEAuthorizationError,
     ) as exc:
-        _LOGGER.debug("TOD pricing unavailable: %s", exc)
+        _LOGGER.debug("Net metering details unavailable: %s", exc)
+        return coordinator.net_metering_snapshot
+    except Exception as exc:  # noqa: BLE001
+        _LOGGER.debug("Net metering fetch failed: %s", exc)
+        return coordinator.net_metering_snapshot
+    if not snapshot.attributes or not _snapshot_has_values(snapshot):
+        # A null/absent getNetMeteringDetails payload parses to an empty or
+        # all-null snapshot; keep the last-good diagnostic data instead.
+        return coordinator.net_metering_snapshot
+    return snapshot
+
+
+async def _async_fetch_rate_compare(
+    client: PGEBillingApiClient,
+    *,
+    account_number: str,
+    previous: RateCompareSnapshot | None,
+) -> RateCompareSnapshot | None:
+    """Best-effort rate comparison; diagnostic only."""
+    try:
+        snapshot = await client.get_rate_compare(account_number)
+    except (
+        PGEGraphQLError,
+        PGESchemaError,
+        PGEConnectionError,
+        PGERateLimitError,
+        PGEAuthorizationError,
+    ) as exc:
+        _LOGGER.debug("Rate compare unavailable: %s", exc)
         return previous
-    except Exception as exc:  # noqa: BLE001 - speculative op must never abort billing sync
-        _LOGGER.debug("TOD pricing fetch failed unexpectedly: %s", exc)
+    except Exception as exc:  # noqa: BLE001
+        _LOGGER.debug("Rate compare fetch failed: %s", exc)
         return previous
-    if not fetched.rates and fetched.basic_rate is None and fetched.savings_total is None:
+    if not snapshot.attributes or not _snapshot_has_values(snapshot):
+        # A null/absent getRateCompare payload parses to an empty or
+        # all-null snapshot; keep the last-good comparison instead.
         return previous
-    return fetched
+    return snapshot
 
 
 async def _async_page_ledger(
