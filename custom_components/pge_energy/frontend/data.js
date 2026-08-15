@@ -351,6 +351,17 @@ export function formatSignedKwh(value, { signed = false } = {}) {
   if (signed && n < 0) return `${Math.abs(n).toFixed(2)} kWh`;
   return `${Number(n.toFixed(2))} kWh`;
 }
+
+/**
+ * Clipboard payload for an At a glance KPI tile (label / value / optional delta).
+ * Omits empty parts and collapses whitespace so sparklines never pollute the copy.
+ */
+export function formatKpiClipboardText({ label, value, delta } = {}) {
+  const parts = [label, value, delta]
+    .map((part) => (part == null ? "" : String(part).replace(/\s+/g, " ").trim()))
+    .filter((part) => part.length > 0);
+  return parts.join("\n");
+}
 const DAY_MS = 24 * HOUR_MS;
 
 /**

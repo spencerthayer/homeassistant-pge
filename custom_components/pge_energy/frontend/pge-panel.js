@@ -21,6 +21,7 @@ import {
   computeUsageAccounting,
   countSeriesPoints,
   fetchStatisticSeries,
+  formatKpiClipboardText,
   formatRangeLabel,
   formatSignedUsd,
   invalidateStatsCache,
@@ -43,7 +44,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.9.10";
+} from "./data.js?v=0.9.11";
 import {
   createBarChart,
   createLineChart,
@@ -53,9 +54,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.9.10";
-import { sparklineSvg } from "./svg-helpers.js?v=0.9.10";
-import { applyPanelTheme } from "./theme.js?v=0.9.10";
+} from "./charts.js?v=0.9.11";
+import { sparklineSvg } from "./svg-helpers.js?v=0.9.11";
+import { applyPanelTheme } from "./theme.js?v=0.9.11";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -159,6 +160,12 @@ const STYLE = `
     border-color 180ms ease;
   will-change: transform;
 }
+#kpis .kpi { cursor: pointer; }
+.kpi:focus-visible {
+  /* Keep a real outline for keyboard / forced-colors; do not set outline: none. */
+  outline: 2px solid var(--primary-color, Highlight);
+  outline-offset: 2px;
+}
 .kpi .label { font-size: 0.75rem; color: var(--secondary-text-color); }
 .kpi .value {
   font-size: 1.35rem; font-weight: 650; margin: 4px 0; color: var(--primary-text-color);
@@ -173,6 +180,7 @@ const STYLE = `
   opacity: 0.92;
 }
 .kpi:hover,
+.kpi:focus,
 .kpi:focus-within {
   transform: translateY(-3px);
   background: color-mix(
@@ -186,11 +194,19 @@ const STYLE = `
     0 1px 0 color-mix(in srgb, var(--primary-text-color) 4%, transparent);
 }
 .kpi:hover .value,
+.kpi:focus .value,
 .kpi:focus-within .value { transform: scale(1.03); transform-origin: left center; }
 .kpi:hover svg,
+.kpi:focus svg,
 .kpi:focus-within svg {
   opacity: 1;
   filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--primary-text-color) 18%, transparent));
+}
+.kpi.copied {
+  border-color: var(--primary-color, #2a78d6);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--primary-color, #2a78d6) 45%, transparent),
+    0 6px 16px color-mix(in srgb, var(--primary-color, #2a78d6) 18%, transparent);
 }
 .kpi.status-good { border-left-color: var(--pge-status-good); }
 .kpi.status-warn { border-left-color: var(--pge-status-warn); }
@@ -202,28 +218,28 @@ const STYLE = `
 .kpi.kpi-estimate.kpi-dual .value {
   font-size: 1.15rem !important;
 }
-.kpi.status-good:hover, .kpi.status-good:focus-within {
+.kpi.status-good:hover, .kpi.status-good:focus, .kpi.status-good:focus-within {
   box-shadow:
     0 6px 16px color-mix(in srgb, var(--pge-status-good) 22%, transparent),
     0 0 0 1px color-mix(in srgb, var(--pge-status-good) 28%, transparent);
 }
-.kpi.status-warn:hover, .kpi.status-warn:focus-within,
-.kpi.kpi-statement:hover, .kpi.kpi-statement:focus-within {
+.kpi.status-warn:hover, .kpi.status-warn:focus, .kpi.status-warn:focus-within,
+.kpi.kpi-statement:hover, .kpi.kpi-statement:focus, .kpi.kpi-statement:focus-within {
   box-shadow:
     0 6px 16px color-mix(in srgb, var(--pge-series-cost) 22%, transparent),
     0 0 0 1px color-mix(in srgb, var(--pge-series-cost) 28%, transparent);
 }
-.kpi.status-critical:hover, .kpi.status-critical:focus-within {
+.kpi.status-critical:hover, .kpi.status-critical:focus, .kpi.status-critical:focus-within {
   box-shadow:
     0 6px 16px color-mix(in srgb, var(--pge-status-critical) 22%, transparent),
     0 0 0 1px color-mix(in srgb, var(--pge-status-critical) 28%, transparent);
 }
-.kpi.kpi-usage:hover, .kpi.kpi-usage:focus-within {
+.kpi.kpi-usage:hover, .kpi.kpi-usage:focus, .kpi.kpi-usage:focus-within {
   box-shadow:
     0 6px 16px color-mix(in srgb, var(--pge-series-kwh) 22%, transparent),
     0 0 0 1px color-mix(in srgb, var(--pge-series-kwh) 28%, transparent);
 }
-.kpi.kpi-estimate:hover, .kpi.kpi-estimate:focus-within {
+.kpi.kpi-estimate:hover, .kpi.kpi-estimate:focus, .kpi.kpi-estimate:focus-within {
   box-shadow:
     0 6px 16px color-mix(in srgb, var(--pge-series-savings) 22%, transparent),
     0 0 0 1px color-mix(in srgb, var(--pge-series-savings) 28%, transparent);
@@ -1758,6 +1774,73 @@ class PgeEnergyPanel extends HTMLElement {
         <div class="kpi"><div class="label">Last payment</div><div class="value">${this._fmt(lastPayment, "", true)}</div><div class="delta">${this._escape(this._fmtDate(lastPaymentDate) || "—")}</div></div>
       </div>
     `;
+    this._bindGlanceKpiClipboard(el);
+  }
+
+  /** Wire At a glance KPI tiles to copy label/value/delta on click or Enter/Space. */
+  _bindGlanceKpiClipboard(root) {
+    if (!root) return;
+    root.querySelectorAll(".kpi").forEach((kpi) => {
+      kpi.setAttribute("tabindex", "0");
+      kpi.setAttribute("role", "button");
+      const labelText = (kpi.querySelector(".label")?.textContent || "").trim();
+      kpi.setAttribute(
+        "aria-label",
+        labelText ? `Copy ${labelText}` : "Copy KPI value"
+      );
+      kpi.title = "Click to copy";
+      const copy = async () => {
+        const text = formatKpiClipboardText({
+          label: kpi.querySelector(".label")?.textContent,
+          value: kpi.querySelector(".value")?.textContent,
+          delta: kpi.querySelector(".delta")?.textContent,
+        });
+        if (!text) return;
+        const ok = await this._copyText(text);
+        if (!ok) return;
+        kpi.classList.add("copied");
+        kpi.title = "Copied!";
+        window.setTimeout(() => {
+          kpi.classList.remove("copied");
+          kpi.title = "Click to copy";
+        }, 1200);
+      };
+      kpi.addEventListener("click", () => {
+        void copy();
+      });
+      kpi.addEventListener("keydown", (ev) => {
+        if (ev.key !== "Enter" && ev.key !== " ") return;
+        ev.preventDefault();
+        void copy();
+      });
+    });
+  }
+
+  /** Best-effort clipboard write; falls back to a temporary textarea. */
+  async _copyText(text) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (_err) {
+      /* fall through */
+    }
+    let ta;
+    try {
+      ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      return document.execCommand("copy");
+    } catch (_err) {
+      return false;
+    } finally {
+      ta?.remove();
+    }
   }
 
   /** Drop chart wrappers whose canvas lives under any of the given hosts. */
