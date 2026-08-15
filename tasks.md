@@ -32,7 +32,7 @@
 - [x] Copilot PR loop iter 13: enroll parse/Store null round-trip; peak-hour import guard; PTR DATE; DST yesterday; positive-credit docs
 - [x] HITL merge PR #21 (`2dfb6a3`); HACS release [`v0.9.9`](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.9.9); asked [@NinjaNife](https://github.com/NinjaNife) + [@spencerthayer](https://github.com/spencerthayer) to UAT on [#5](https://github.com/spencerthayer/homeassistant-pge/issues/5#issuecomment-5300448116)
 - [x] Fix Sync settings Submit `expected float` on blank TOD rate overrides (blocks diagnostic capture save); ship PATCH `v0.9.10`
-- [ ] At a glance KPI click-to-copy (label/value/delta); ship PATCH `v0.9.11` (HITL squash-merge + release when approved)
+- [x] At a glance KPI click-to-copy (label/value/delta); ship PATCH [`v0.9.11`](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.9.11) (HITL squash-merge PR #24)
 
 ## Programs / net metering / TOD — v0.9.1
 
