@@ -153,7 +153,6 @@ const STYLE = `
   border-left-color: transparent;
   transform: translateY(0);
   box-shadow: none;
-  outline: none;
   transition:
     transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
     box-shadow 180ms cubic-bezier(0.22, 1, 0.36, 1),
@@ -162,6 +161,11 @@ const STYLE = `
   will-change: transform;
 }
 #kpis .kpi { cursor: pointer; }
+.kpi:focus-visible {
+  /* Keep a real outline for keyboard / forced-colors; do not set outline: none. */
+  outline: 2px solid var(--primary-color, Highlight);
+  outline-offset: 2px;
+}
 .kpi .label { font-size: 0.75rem; color: var(--secondary-text-color); }
 .kpi .value {
   font-size: 1.35rem; font-weight: 650; margin: 4px 0; color: var(--primary-text-color);
@@ -1822,19 +1826,20 @@ class PgeEnergyPanel extends HTMLElement {
     } catch (_err) {
       /* fall through */
     }
+    let ta;
     try {
-      const ta = document.createElement("textarea");
+      ta = document.createElement("textarea");
       ta.value = text;
       ta.setAttribute("readonly", "");
       ta.style.position = "fixed";
       ta.style.left = "-9999px";
       document.body.appendChild(ta);
       ta.select();
-      const ok = document.execCommand("copy");
-      ta.remove();
-      return ok;
+      return document.execCommand("copy");
     } catch (_err) {
       return false;
+    } finally {
+      ta?.remove();
     }
   }
 
