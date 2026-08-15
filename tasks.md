@@ -30,7 +30,7 @@
 - [x] Review nits: persist tip before statistics-import soft-fail; `hasCompensation` requires `v > 0`
 - [x] Copilot PR loop iter 12: program list eligibility/enrollment preserve null (tri-state) instead of coerced False
 - [x] Copilot PR loop iter 13: enroll parse/Store null round-trip; peak-hour import guard; PTR DATE; DST yesterday; positive-credit docs
-- [ ] HITL merge PR #21; HITL HACS release `v0.9.9`; comment on [#5](https://github.com/spencerthayer/homeassistant-pge/issues/5)
+- [x] HITL merge PR #21 (`2dfb6a3`); HACS release [`v0.9.9`](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.9.9); asked [@NinjaNife](https://github.com/NinjaNife) + [@spencerthayer](https://github.com/spencerthayer) to UAT on [#5](https://github.com/spencerthayer/homeassistant-pge/issues/5#issuecomment-5300448116)
 
 ## Programs / net metering / TOD — v0.9.1
 
