@@ -215,12 +215,24 @@ The default-off `capture_graphql_diagnostics` switch remains available for follo
 
 Same Apigee endpoint (`https://apix.portlandgeneral.com/pge-graphql`) and bearer as usage. Prefer portal Origin/Referer (`https://portlandgeneral.com`). Implemented in `billing_api.py`.
 
+### Account discovery (credential setup / renew)
+
+Credential login discovers which account numbers belong to the login **before** usage validation:
+
+1. `getAccountInfo` — returns `accountMeta` plus each group's `defaultAccount.accountNumber` only (non-default accounts are not selected by the document).
+2. `getAccountDetailList` with `groupId: "ALL_ACCTS"` and `accountStatus: "ACTIVE"` — portal account-switcher source; returns every ACTIVE `accounts[].accountNumber` (paging limit 50).
+3. Merge: union of defaults + detail-list rows (exact-string dedupe, defaults first). Soft-fail detail-list errors and keep defaults so single-account flows never regress.
+4. Config flow still requires the user-entered number to match a discovered id (exact or digits-only). Empty discovery still accepts the typed value for usage validation.
+
+**Caveat:** discovery keeps `accountStatus: "ACTIVE"`. Inactive/closed accounts that remain browsable on the portal may still fail with `account_not_found` until a separate status strategy is justified.
+
 ### `getAccountDetailList` (`AccountDetailListParams!`)
 
-- **Purpose:** account summary, latest bill details, Auto Pay / paperless flags, encrypted account / person / premise / SA ids.
+- **Purpose:** account summary, latest bill details, Auto Pay / paperless flags, encrypted account / person / premise / SA ids; also used to **enumerate ACTIVE accounts** during credential discovery (`portal_auth`).
 - **Typical variables:** `{ accountStatus: "ACTIVE", groupId: "ALL_ACCTS", paging, sort, filter }`.
 - **Key fields:** `billInfo.{amountDue,dueDate,lastPaymentAmount,lastPaymentDate,billDetails…}`, `autoPay.isEnrolled`, `isPaperlessBillEnrolled.result`, `premiseInfo[].encryptedPremiseId`, `saDetails[].encryptedSAId`, `viewBillAverageTemperature.currentBillingPeriod.averageTemperature`.
 - **Identity note:** AccountDetail `encryptedAccountNumber` can differ from `getAccountInfo` group defaults — prefer AccountDetail for programs/history.
+- **Multi-account:** logins with multiple ACTIVE accounts return multiple `accounts[]` rows (issue #20).
 
 ### Nested `AccountDetail.paymentHistory` (`PaymentHistoryParams`)
 

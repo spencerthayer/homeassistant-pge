@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 
+from .billing_api import GET_ACCOUNT_DETAIL_LIST, account_detail_list_params
 from .const import (
     COGNITO_RATE_LIMIT_DEFAULT_SECONDS,
     COGNITO_RATE_LIMIT_LOCKOUT_SECONDS,
@@ -244,7 +245,35 @@ async def _apigee_exchange_id_token(
     return token, _parse_expires_at(payload.get("expires_at"))
 
 
+def _account_number_last4(value: str) -> str:
+    """Sanitized account fingerprint for diagnostics (never log full numbers)."""
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    if not digits:
+        return "????"
+    if len(digits) <= 4:
+        return digits
+    return digits[-4:]
+
+
+def _merge_account_ids(*groups: list[str]) -> list[str]:
+    """Union account numbers in encounter order (exact-string dedupe)."""
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for acct in group:
+            if not isinstance(acct, str) or not acct or acct in seen:
+                continue
+            seen.add(acct)
+            merged.append(acct)
+    return merged
+
+
 def _extract_accounts(account_info: dict[str, Any]) -> tuple[str | None, list[str]]:
+    """Collect defaultAccount numbers from getAccountInfo groups.
+
+    ``getAccountInfo`` only returns each group's defaultAccount — non-default
+    accounts on the same login are invisible here (see getAccountDetailList).
+    """
     person = account_info.get("encryptedPersonId")
     person_id = person if isinstance(person, str) and person else None
     account_ids: list[str] = []
@@ -263,6 +292,88 @@ def _extract_accounts(account_info: dict[str, Any]) -> tuple[str | None, list[st
             if person_id is None and isinstance(enc_person, str) and enc_person:
                 person_id = enc_person
     return person_id, account_ids
+
+
+def _extract_detail_list_accounts(detail_list: dict[str, Any]) -> tuple[str | None, list[str]]:
+    """Collect accountNumber values from getAccountDetailList.accounts[]."""
+    person_id: str | None = None
+    account_ids: list[str] = []
+    accounts = detail_list.get("accounts") or []
+    if not isinstance(accounts, list):
+        return person_id, account_ids
+    for row in accounts:
+        if not isinstance(row, dict):
+            continue
+        acct = row.get("accountNumber")
+        if isinstance(acct, str) and acct and acct not in account_ids:
+            account_ids.append(acct)
+        enc_person = row.get("encryptedPersonId")
+        if person_id is None and isinstance(enc_person, str) and enc_person:
+            person_id = enc_person
+    return person_id, account_ids
+
+
+def _log_discovery_summary(
+    *,
+    account_meta: dict[str, Any] | None,
+    groups: list[Any] | None,
+    default_ids: list[str],
+    detail_ids: list[str] | None,
+    merged_ids: list[str],
+    detail_error: str | None,
+) -> None:
+    """Bounded sanitized discovery diagnostics (last-4 only; no ciphertexts)."""
+    meta = account_meta if isinstance(account_meta, dict) else {}
+    group_rows = groups if isinstance(groups, list) else []
+    group_summaries: list[str] = []
+    for group in group_rows:
+        if not isinstance(group, dict):
+            continue
+        n_declared = group.get("numberOfAccounts")
+        default = group.get("defaultAccount") if isinstance(group.get("defaultAccount"), dict) else {}
+        default_acct = default.get("accountNumber") if isinstance(default, dict) else None
+        last4 = _account_number_last4(default_acct) if isinstance(default_acct, str) else "none"
+        group_summaries.append(f"declared={n_declared!r}/default_last4={last4}")
+    if detail_ids is not None:
+        detail_last4 = [_account_number_last4(a) for a in detail_ids]
+        detail_part = f"detail_count={len(detail_ids)} last4={detail_last4}"
+    else:
+        detail_part = f"detail_soft_fail={detail_error or 'unknown'}"
+    _LOGGER.debug(
+        "PGE account discovery: totalAccounts=%r hasInactive=%r groups=%s "
+        "defaults=%s %s merged=%s last4=%s",
+        meta.get("totalAccounts"),
+        meta.get("hasInactiveAccounts"),
+        group_summaries or "[]",
+        len(default_ids),
+        detail_part,
+        len(merged_ids),
+        [_account_number_last4(a) for a in merged_ids],
+    )
+
+
+async def _enumerate_accounts_via_detail_list(
+    session: aiohttp.ClientSession,
+    access_token: str,
+    *,
+    headers: dict[str, str],
+) -> tuple[str | None, list[str]]:
+    """Enumerate ACTIVE accounts via the portal account-switcher op."""
+    body = {
+        "operationName": "getAccountDetailList",
+        "query": GET_ACCOUNT_DETAIL_LIST,
+        "variables": {"params": account_detail_list_params()},
+    }
+    status, payload = await _post_json(session, GRAPHQL_URL, headers=headers, body=body)
+    classify_challenge(payload)
+    if status >= 400:
+        raise PGEAuthenticationError(f"PGE account detail list failed (HTTP {status})")
+    if payload.get("errors"):
+        raise PGEAuthenticationError("PGE account detail list GraphQL errors")
+    detail = (payload.get("data") or {}).get("getAccountDetailList")
+    if not isinstance(detail, dict):
+        raise PGEAuthenticationError("PGE account detail list returned no getAccountDetailList")
+    return _extract_detail_list_accounts(detail)
 
 
 async def _discover_accounts(
@@ -291,7 +402,33 @@ async def _discover_accounts(
     info = (payload.get("data") or {}).get("getAccountInfo")
     if not isinstance(info, dict):
         raise PGEAuthenticationError("PGE account discovery returned no getAccountInfo")
-    return _extract_accounts(info)
+    person_id, default_ids = _extract_accounts(info)
+
+    detail_ids: list[str] | None = None
+    detail_error: str | None = None
+    try:
+        detail_person, detail_ids = await _enumerate_accounts_via_detail_list(
+            session, access_token, headers=headers
+        )
+        if person_id is None and detail_person:
+            person_id = detail_person
+    except Exception as exc:  # noqa: BLE001 - soft-fail; never regress single-account login
+        detail_error = type(exc).__name__
+        _LOGGER.debug(
+            "PGE getAccountDetailList enumeration soft-failed; using getAccountInfo defaults only",
+            exc_info=True,
+        )
+
+    merged = _merge_account_ids(default_ids, detail_ids or [])
+    _log_discovery_summary(
+        account_meta=info.get("accountMeta") if isinstance(info.get("accountMeta"), dict) else None,
+        groups=info.get("groups") if isinstance(info.get("groups"), list) else None,
+        default_ids=default_ids,
+        detail_ids=detail_ids,
+        merged_ids=merged,
+        detail_error=detail_error,
+    )
+    return person_id, merged
 
 
 async def _login_with_password(

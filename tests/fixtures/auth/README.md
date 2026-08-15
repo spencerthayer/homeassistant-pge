@@ -14,7 +14,9 @@ Sanitized PGE credential-login fixtures for `portal_auth` / CLI tests.
 | `cognito_mfa_challenge.json` | Observed MFA challenge (`SMS_MFA`) |
 | `cognito_refresh_token_auth.json` | Cognito `REFRESH_TOKEN_AUTH` renewal |
 | `apigee_token_success.json` | Apigee `pg-token-implicit-aws` exchange |
-| `graphql_get_account_info.json` | Account discovery GraphQL shape |
+| `graphql_get_account_info.json` | Account discovery GraphQL shape (`getAccountInfo` defaults) |
+| `graphql_get_account_info_two_accounts_one_default.json` | Multi-account login where only the group default is returned |
+| `graphql_get_account_detail_list_two_accounts.json` | `getAccountDetailList(ALL_ACCTS)` rows used to complete discovery |
 
 ## Rules
 

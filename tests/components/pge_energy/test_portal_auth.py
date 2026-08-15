@@ -13,6 +13,9 @@ from custom_components.pge_energy.exceptions import (
 )
 from custom_components.pge_energy.portal_auth import (
     _classify_cognito_error,
+    _extract_accounts,
+    _extract_detail_list_accounts,
+    _merge_account_ids,
     async_login_or_refresh,
     classify_challenge,
 )
@@ -312,3 +315,221 @@ class TestLoginOrRefresh:
             )
         assert result.access_token == "apigee-from-password"
         assert result.refresh_credential == "refresh-from-password"
+
+
+class TestAccountDiscoveryMerge:
+    def test_merge_preserves_order_and_dedupes(self):
+        assert _merge_account_ids(["111"], ["111", "222"], ["333", "222"]) == ["111", "222", "333"]
+
+    def test_extract_defaults_ignores_non_default_shape(self):
+        person, ids = _extract_accounts(
+            {
+                "encryptedPersonId": "enc-person",
+                "accountMeta": {"totalAccounts": 2, "hasInactiveAccounts": False},
+                "groups": [
+                    {
+                        "numberOfAccounts": 2,
+                        "defaultAccount": {"accountNumber": "1122334455"},
+                    }
+                ],
+            }
+        )
+        assert person == "enc-person"
+        assert ids == ["1122334455"]
+
+    def test_extract_detail_list_collects_all_rows(self):
+        person, ids = _extract_detail_list_accounts(
+            {
+                "totalCount": 2,
+                "accounts": [
+                    {"accountNumber": "1122334455", "encryptedPersonId": "enc-a"},
+                    {"accountNumber": "9988776655", "encryptedPersonId": "enc-b"},
+                ],
+            }
+        )
+        assert person == "enc-a"
+        assert ids == ["1122334455", "9988776655"]
+
+    @pytest.mark.asyncio
+    async def test_login_merges_non_default_detail_list_account(self):
+        """Issue #20: second ACTIVE account is only on getAccountDetailList."""
+        session = _mock_session_post(
+            [
+                (
+                    200,
+                    {
+                        "AuthenticationResult": {
+                            "IdToken": "id.jwt.token",
+                            "AccessToken": "access.jwt.token",
+                            "RefreshToken": "refresh-token-value",
+                            "ExpiresIn": 3600,
+                            "TokenType": "Bearer",
+                        }
+                    },
+                ),
+                (200, {"access_token": "apigee-bearer", "expires_at": 1893456000}),
+                (
+                    200,
+                    {
+                        "data": {
+                            "getAccountInfo": {
+                                "encryptedPersonId": "enc-person",
+                                "accountMeta": {"totalAccounts": 2, "hasInactiveAccounts": False},
+                                "groups": [
+                                    {
+                                        "groupId": "g1",
+                                        "numberOfAccounts": 2,
+                                        "isDefault": True,
+                                        "defaultAccount": {
+                                            "accountNumber": "1122334455",
+                                            "encryptedPersonId": "enc-person",
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    },
+                ),
+                (
+                    200,
+                    {
+                        "data": {
+                            "getAccountDetailList": {
+                                "totalCount": 2,
+                                "accounts": [
+                                    {"accountNumber": "1122334455", "encryptedPersonId": "enc-person"},
+                                    {"accountNumber": "9988776655", "encryptedPersonId": "enc-person"},
+                                ],
+                            }
+                        }
+                    },
+                ),
+            ]
+        )
+        with patch(
+            "custom_components.pge_energy.portal_auth.aiohttp.ClientSession",
+            return_value=session,
+        ):
+            result = await async_login_or_refresh(
+                email="user@example.com",
+                password="secret",
+                refresh_credential=None,
+            )
+        assert result.account_ids == ["1122334455", "9988776655"]
+        assert session.post.call_count == 4
+
+    @pytest.mark.asyncio
+    async def test_login_soft_fails_detail_list_keeps_defaults(self):
+        session = _mock_session_post(
+            [
+                (
+                    200,
+                    {
+                        "AuthenticationResult": {
+                            "IdToken": "id.jwt.token",
+                            "AccessToken": "access.jwt.token",
+                            "RefreshToken": "refresh-token-value",
+                            "ExpiresIn": 3600,
+                            "TokenType": "Bearer",
+                        }
+                    },
+                ),
+                (200, {"access_token": "apigee-bearer", "expires_at": 1893456000}),
+                (
+                    200,
+                    {
+                        "data": {
+                            "getAccountInfo": {
+                                "encryptedPersonId": "enc-person",
+                                "groups": [
+                                    {
+                                        "defaultAccount": {
+                                            "accountNumber": "1122334455",
+                                            "encryptedPersonId": "enc-person",
+                                        }
+                                    }
+                                ],
+                            }
+                        }
+                    },
+                ),
+                (500, {"errors": [{"message": "boom"}]}),
+            ]
+        )
+        with patch(
+            "custom_components.pge_energy.portal_auth.aiohttp.ClientSession",
+            return_value=session,
+        ):
+            result = await async_login_or_refresh(
+                email="user@example.com",
+                password="secret",
+                refresh_credential=None,
+            )
+        assert result.account_ids == ["1122334455"]
+
+    @pytest.mark.asyncio
+    async def test_login_multi_group_defaults_plus_detail_list(self):
+        session = _mock_session_post(
+            [
+                (
+                    200,
+                    {
+                        "AuthenticationResult": {
+                            "IdToken": "id.jwt.token",
+                            "AccessToken": "access.jwt.token",
+                            "RefreshToken": "refresh-token-value",
+                            "ExpiresIn": 3600,
+                            "TokenType": "Bearer",
+                        }
+                    },
+                ),
+                (200, {"access_token": "apigee-bearer", "expires_at": 1893456000}),
+                (
+                    200,
+                    {
+                        "data": {
+                            "getAccountInfo": {
+                                "encryptedPersonId": "enc-person",
+                                "accountMeta": {"totalAccounts": 3, "hasInactiveAccounts": False},
+                                "groups": [
+                                    {
+                                        "numberOfAccounts": 1,
+                                        "defaultAccount": {"accountNumber": "1111111111"},
+                                    },
+                                    {
+                                        "numberOfAccounts": 2,
+                                        "defaultAccount": {"accountNumber": "2222222222"},
+                                    },
+                                ],
+                            }
+                        }
+                    },
+                ),
+                (
+                    200,
+                    {
+                        "data": {
+                            "getAccountDetailList": {
+                                "totalCount": 3,
+                                "accounts": [
+                                    {"accountNumber": "1111111111"},
+                                    {"accountNumber": "2222222222"},
+                                    {"accountNumber": "3333333333"},
+                                ],
+                            }
+                        }
+                    },
+                ),
+            ]
+        )
+        with patch(
+            "custom_components.pge_energy.portal_auth.aiohttp.ClientSession",
+            return_value=session,
+        ):
+            result = await async_login_or_refresh(
+                email="user@example.com",
+                password="secret",
+                refresh_credential=None,
+            )
+        assert result.account_ids == ["1111111111", "2222222222", "3333333333"]
+

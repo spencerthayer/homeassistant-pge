@@ -1,5 +1,16 @@
 # Tasks
 
+## Multi-account discovery — issue #20
+
+- [x] Root cause: `getAccountInfo` only surfaces each group's `defaultAccount`; non-default accounts never enter config-flow matching (`account_not_found`)
+- [x] Broaden discovery: merge `getAccountDetailList(ALL_ACCTS, ACTIVE)` account numbers with `getAccountInfo` defaults (soft-fail detail list)
+- [x] Sanitized DEBUG discovery diagnostics (counts + last-4 only)
+- [x] Fixtures/tests: two-accounts-one-default, detail-list soft-fail, multi-group, digits-only second account, unknown still rejected
+- [x] Docs: `AUTH_DISCOVERY.md`, `DATA_CONTRACT.md`; VERSION `9.10.0`
+- [ ] Green CI on PR; live HA single-account UAT; reporter multi-account UAT
+- [ ] HITL merge + HITL HACS release `v9.10.0` (do not publish without approval)
+- [ ] Comment on [#20](https://github.com/spencerthayer/homeassistant-pge/issues/20) after release
+
 ## Grid import/export — issue #5
 
 - [x] Ship default-off GraphQL diagnostic capture and collect NinjaNife's generating-account logs

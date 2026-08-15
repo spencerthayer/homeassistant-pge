@@ -380,8 +380,13 @@ def _normalize_account_digits(value: str) -> str:
     return digits.lstrip("0") or ("0" if digits else "")
 
 
-def _account_detail_list_params(*, limit: int = 50) -> dict[str, Any]:
-    """Shared AccountDetailList params; high limit covers multi-account logins."""
+def account_detail_list_params(*, limit: int = 50) -> dict[str, Any]:
+    """Shared AccountDetailList params; high limit covers multi-account logins.
+
+    Used by billing sync and by credential account discovery (portal_auth).
+    ``accountStatus: ACTIVE`` matches the portal account switcher for billable
+    accounts; inactive/closed numbers are intentionally omitted.
+    """
     return {
         "accountStatus": "ACTIVE",
         "groupId": "ALL_ACCTS",
@@ -389,6 +394,10 @@ def _account_detail_list_params(*, limit: int = 50) -> dict[str, Any]:
         "sort": {"direction": "ASC", "sort": "DEFAULT"},
         "filter": {"filterBy": "", "operator": "STARTSWITH"},
     }
+
+
+# Compat alias for existing callers.
+_account_detail_list_params = account_detail_list_params
 
 
 def _select_account(
