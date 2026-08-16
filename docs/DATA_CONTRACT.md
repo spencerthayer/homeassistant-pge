@@ -198,10 +198,10 @@ The default-off `capture_graphql_diagnostics` switch remains available for follo
 
 - **Setup validation:** HOURLY yesterday (not short DAILY).
 - **Poll / correction:** HOURLY one local day per request; clip starts to `[day_start, day_end)`.
-  - Scheduled poll (default every **4 hours** from **00:00** America/Los_Angeles) always re-fetches the correction window.
+  - Scheduled poll (default every **4 hours** from **00:00** America/Los_Angeles) always re-fetches the correction window, including while history backfill is importing older days (`import_lock` serializes writes; do not skip the fetch).
   - If yesterday’s hourly is still gap/empty (PGE not finished publishing), **still import any hours returned**, demote the day from `completed_local_dates`, and **catch up every 2 hours** until yesterday validates complete — do not leave a stale daily midnight lump until the next grid slot.
 - **History backfill (tiered):**
-  1. HOURLY for newest `hourly_backfill_days`
+  1. HOURLY for newest `hourly_backfill_days` (newest incomplete local day first — do not walk 2019→yesterday while the tip stalls)
   2. DAILY for older gaps (request windows padded to ≥31 days)
   3. MONTHLY via `get_monthly_usage_paged` from **yesterday** back through the gap; mark days before the oldest period complete (no PGE history); mark billing-period-covered days complete even if month-start statistic import conflicts with finer hourly rows
   - **Do not import MONTHLY into `_consumption`/`_cost` when that calendar month already has any completed finer day** — still close the gap days. Parking a full billing-period total on month-start atop hourly rows double-counts (live: 2025-09-01 showed 677 kWh = 648 monthly lump + ~29 hourly).

@@ -628,6 +628,9 @@ async def _async_run_backfill(
         finally:
             coordinator.set_backfill_state(False, generation=generation)
             coordinator.set_backfill_task(None, generation=generation)
+            if not hass.is_stopping:
+                # Do not wait for the next 4h grid slot after a long history job.
+                await coordinator.async_request_refresh()
     finally:
         coordinator.reset_backfill_run_generation(token)
 

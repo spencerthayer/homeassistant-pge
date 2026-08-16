@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,15 +18,17 @@ from custom_components.pge_energy import (
     _start_backfill_task,
     async_unload_entry,
 )
-from custom_components.pge_energy.backfill import async_backfill_range
+from custom_components.pge_energy.backfill import _async_backfill_hourly, async_backfill_range
 from custom_components.pge_energy.const import (
     DOMAIN,
     SYNC_STATUS_BACKFILLING,
     SYNC_STATUS_FAILED,
 )
 from custom_components.pge_energy.coordinator import PGECoordinator
-from custom_components.pge_energy.statistics import async_wait_recorder_queue
+from custom_components.pge_energy.models import UsageInterval, UsageResolution, UsageResponse
+from custom_components.pge_energy.statistics import ImportBaselineResult, async_wait_recorder_queue
 from custom_components.pge_energy.store import ImportStoreData, async_save_import_state
+from custom_components.pge_energy.time_util import local_day_bounds, today_local
 
 
 def _make_coordinator() -> PGECoordinator:
@@ -55,6 +58,7 @@ def _make_coordinator() -> PGECoordinator:
     coord = PGECoordinator(hass, entry, auth, client)
     coord._import_store = ImportStoreData(account_key="keykeykeykeykeyk")
     coord.async_update_listeners = MagicMock()
+    coord.async_request_refresh = AsyncMock()
     hass.data[DOMAIN][entry.entry_id] = coord
     return coord
 
@@ -81,15 +85,66 @@ def test_backfill_task_sites_use_background_task():
 
 
 @pytest.mark.asyncio
-async def test_poll_defers_while_backfill_in_progress():
+async def test_poll_fetches_correction_window_while_backfill_in_progress():
+    """History backfill must not freeze the tip: correction polls still fetch."""
     coord = _make_coordinator()
     coord.set_backfill_state(True)
     coord._recent_intervals = []
     coord.data = {"intervals": [], "stale": False}
-    with patch.object(coord, "async_get_usage_with_auth_retry", AsyncMock()) as usage:
+    yesterday = today_local() - timedelta(days=1)
+    day_start, _ = local_day_bounds(yesterday)
+    hour = UsageInterval(
+        account_key="keykeykeykeykeyk",
+        resolution=UsageResolution.HOURLY,
+        start=day_start,
+        end=day_start + timedelta(hours=1),
+        kwh=Decimal("0.5"),
+        amount=Decimal("0.1"),
+        temperature=None,
+        usage_status="kWh-Delivered",
+        interval_size=None,
+        source_timestamp=None,
+    )
+
+    async def fake_usage(start, end, resolution=UsageResolution.HOURLY):
+        day = start.astimezone(day_start.tzinfo).date()
+        if day == yesterday:
+            return UsageResponse(
+                resolution=UsageResolution.HOURLY,
+                intervals=[hour],
+                total_kwh=None,
+                total_cost=None,
+                is_tod=None,
+                acct_type=None,
+            )
+        return UsageResponse(
+            resolution=UsageResolution.HOURLY,
+            intervals=[],
+            total_kwh=None,
+            total_cost=None,
+            is_tod=None,
+            acct_type=None,
+        )
+
+    coord.async_get_usage_with_auth_retry = AsyncMock(side_effect=fake_usage)
+    with (
+        patch(
+            "custom_components.pge_energy.coordinator.async_import_with_baseline",
+            AsyncMock(return_value=ImportBaselineResult(1)),
+        ),
+        patch(
+            "custom_components.pge_energy.coordinator.async_save_import_state",
+            AsyncMock(),
+        ),
+        patch(
+            "custom_components.pge_energy.coordinator.async_run_billing_sync",
+            AsyncMock(),
+        ),
+    ):
         payload = await coord._async_poll_usage()
-    usage.assert_not_awaited()
-    assert payload.get("stale") is True
+    assert coord.async_get_usage_with_auth_retry.await_count >= 1
+    assert payload.get("stale") is not True
+    assert coord.freshness.newest_interval == hour.end
 
 
 @pytest.mark.asyncio
@@ -595,3 +650,67 @@ async def test_boot_repair_clears_restored_refreshing():
     ):
         await coord.async_load_store()
     assert coord.sync_progress.status == SYNC_STATUS_FAILED
+
+
+@pytest.mark.asyncio
+async def test_hourly_backfill_fetches_newest_incomplete_day_first():
+    """Yesterday must not wait behind a 365-day oldest-first walk."""
+    store = ImportStoreData(account_key="key")
+    older = date(2026, 8, 10)
+    mid = date(2026, 8, 11)
+    newer = date(2026, 8, 12)
+    fetched: list[date] = []
+
+    async def fake_fetch(_coord, day: date):
+        fetched.append(day)
+        return day, []
+
+    coord = _make_coordinator()
+    coord._import_store = store
+    coord.entry.options = {"backfill_concurrency": 1}
+    coord.update_sync_progress = MagicMock()
+    with (
+        patch(
+            "custom_components.pge_energy.backfill.async_fetch_hourly_day",
+            fake_fetch,
+        ),
+        patch(
+            "custom_components.pge_energy.backfill.async_save_import_state",
+            AsyncMock(),
+        ),
+        patch(
+            "custom_components.pge_energy.coordinator.async_save_import_state",
+            AsyncMock(),
+        ),
+        patch(
+            "custom_components.pge_energy.backfill.BACKFILL_DELAY_BETWEEN_CHUNKS",
+            0,
+        ),
+    ):
+        await _async_backfill_hourly(coord.hass, coord.entry.entry_id, coord, older, newer)
+    assert fetched == [newer, mid, older]
+
+
+@pytest.mark.asyncio
+async def test_backfill_exit_requests_tip_refresh():
+    """After history backfill ends, do not wait until the next 4h grid slot."""
+    coord = _make_coordinator()
+    coord.async_request_refresh = AsyncMock()
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    end = datetime(2026, 8, 2, tzinfo=UTC)
+    with (
+        patch(
+            "custom_components.pge_energy.async_backfill_range",
+            AsyncMock(),
+        ),
+        patch(
+            "custom_components.pge_energy.async_run_billing_sync",
+            AsyncMock(),
+        ),
+        patch(
+            "custom_components.pge_energy.async_save_import_state",
+            AsyncMock(),
+        ),
+    ):
+        await _async_run_backfill(coord.hass, coord.entry.entry_id, coord, start, end)
+    coord.async_request_refresh.assert_awaited()

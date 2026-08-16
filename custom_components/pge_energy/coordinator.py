@@ -872,15 +872,17 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.force_release_backfill("Backfill task terminated unexpectedly")
             return self._retained_poll_payload()
 
-        # Do not contend for import_lock while a backfill is importing the same days.
-        if self._backfill_in_progress or self._backfill_reserved:
-            _LOGGER.debug("Skipping scheduled poll while backfill is in progress")
-            return self._retained_poll_payload()
-
+        # Correction-window polls still run during history backfill. Skipping them
+        # froze latest_available_interval for hours while hourly backfill walked
+        # oldest days first. Fetch is lock-free; import_lock serializes recorder
+        # writes with backfill chunks (never hass.async_block_till_done).
         tracking = self._refresh_job_active
+        backfill_running = self._backfill_in_progress or self._backfill_reserved
         try:
-            # Short-lived bearer: force a fresh login at the start of each poll.
-            await self.auth_manager.ensure_valid_token(force=self.auth_manager.auth_mode == "credential")
+            # Short-lived bearer: force a fresh login at the start of each poll
+            # unless backfill already holds a live token (avoid extra Cognito load).
+            force_login = self.auth_manager.auth_mode == "credential" and not backfill_running
+            await self.auth_manager.ensure_valid_token(force=force_login)
             self.persist_auth_to_entry()
             self._reauth_requested = False
         except PGEMfaUnsupportedError as exc:
