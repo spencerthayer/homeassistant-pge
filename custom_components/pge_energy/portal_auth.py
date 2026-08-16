@@ -342,6 +342,8 @@ def _log_discovery_summary(
     detail_error: str | None,
 ) -> None:
     """Bounded sanitized discovery diagnostics (last-4 only; no ciphertexts)."""
+    if not _LOGGER.isEnabledFor(logging.DEBUG):
+        return
     meta = account_meta if isinstance(account_meta, dict) else {}
     group_rows = groups if isinstance(groups, list) else []
     group_summaries: list[str] = []
