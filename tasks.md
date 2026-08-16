@@ -7,9 +7,9 @@
 - [x] Sanitized DEBUG discovery diagnostics (counts + last-4 only)
 - [x] Fixtures/tests: two-accounts-one-default, detail-list soft-fail, multi-group, digits-only second account, unknown still rejected
 - [x] Copilot review hardening (PR #25): gate detail-list on `accountMeta.totalAccounts`, fail-closed MFA/CAPTCHA on the detail-list call, minimal discovery GraphQL document (no billing overfetch)
-- [x] Docs: `AUTH_DISCOVERY.md`, `DATA_CONTRACT.md`; VERSION `9.10.0`
+- [x] Docs: `AUTH_DISCOVERY.md`, `DATA_CONTRACT.md`; VERSION `0.9.12`
 - [ ] Green CI on PR; live HA single-account UAT; reporter multi-account UAT
-- [ ] HITL merge + HITL HACS release `v9.10.0` (do not publish without approval)
+- [ ] HITL squash/merge PR #25 → `Release` workflow publishes `v0.9.12` Latest when the tag is missing
 - [ ] Comment on [#20](https://github.com/spencerthayer/homeassistant-pge/issues/20) after release
 
 ## Grid import/export — issue #5

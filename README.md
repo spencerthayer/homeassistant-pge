@@ -53,7 +53,7 @@ PGE publishes usage **once overnight**, so a "stuck" latest interval near `01:00
 ### HACS (recommended)
 
 1. HACS → **⋯** → **Custom repositories**, add `https://github.com/spencerthayer/homeassistant-pge` with category **Integration**.
-2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `9.10.0`).
+2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.9.12`).
 3. Restart Home Assistant.
 
 ### Manual
