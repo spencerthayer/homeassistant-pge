@@ -9,7 +9,7 @@
 - [x] Tests: `test_poll_fetches_correction_window_while_backfill_in_progress`, newest-first hourly, post-backfill refresh
 - [x] Docs: `ARCHITECTURE.md`, `DATA_CONTRACT.md`, `HA_SETTINGS_HISTORY.md`; VERSION `0.9.13`
 - [x] Live HA `/pge`: `latest_available_interval` `2026-08-16T08:00:00Z` (Aug 16, 1:00 AM PT) matches portal/GraphQL tip; `last_successful_update` advanced on this boot; yesterday 17.03 kWh; sync complete; panel `?v=0.9.13`
-- [ ] HITL: commit/push + green CI + GitHub Release `v0.9.13` (do not publish without approval)
+- [x] HITL GitHub Release [`v0.9.13`](https://github.com/spencerthayer/homeassistant-pge/releases/tag/v0.9.13) Latest from `b700992` (CI `test`/`hassfest`/`hacs` green; leftover `9.9.10`/`0.9.12` branch tips merged keeping 0.9.13)
 
 ## Multi-account discovery — issue #20
 
