@@ -6,6 +6,7 @@
 - [x] Broaden discovery: merge `getAccountDetailList(ALL_ACCTS, ACTIVE)` account numbers with `getAccountInfo` defaults (soft-fail detail list)
 - [x] Sanitized DEBUG discovery diagnostics (counts + last-4 only)
 - [x] Fixtures/tests: two-accounts-one-default, detail-list soft-fail, multi-group, digits-only second account, unknown still rejected
+- [x] Copilot review hardening (PR #25): gate detail-list on `accountMeta.totalAccounts`, fail-closed MFA/CAPTCHA on the detail-list call, minimal discovery GraphQL document (no billing overfetch)
 - [x] Docs: `AUTH_DISCOVERY.md`, `DATA_CONTRACT.md`; VERSION `9.10.0`
 - [ ] Green CI on PR; live HA single-account UAT; reporter multi-account UAT
 - [ ] HITL merge + HITL HACS release `v9.10.0` (do not publish without approval)

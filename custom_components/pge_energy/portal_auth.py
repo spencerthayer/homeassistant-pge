@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 
-from .billing_api import GET_ACCOUNT_DETAIL_LIST, account_detail_list_params
+from .billing_api import account_detail_list_params
 from .const import (
     COGNITO_RATE_LIMIT_DEFAULT_SECONDS,
     COGNITO_RATE_LIMIT_LOCKOUT_SECONDS,
@@ -76,6 +76,16 @@ query getAccountInfo($params: GetAccountInfoParams) {
       }
     }
   }
+}
+"""
+
+# Minimal getAccountDetailList for account discovery. The full billing document
+# (billInfo/autoPay/premise/temperature) is overfetch on the auth path and would
+# pull billing data on every login/renewal. Keep the field selection one-line:
+# multiline selections have been observed to trip Apigee/WAF 403s.
+_GET_ACCOUNT_DETAIL_LIST_MINIMAL = """
+query getAccountDetailList($params: AccountDetailListParams!) {
+  getAccountDetailList(params: $params) { totalCount accounts { accountNumber encryptedPersonId } }
 }
 """
 
@@ -313,6 +323,15 @@ def _extract_detail_list_accounts(detail_list: dict[str, Any]) -> tuple[str | No
     return person_id, account_ids
 
 
+def _total_accounts_from_meta(account_meta: dict[str, Any] | None) -> int | None:
+    """accountMeta.totalAccounts as int; None when absent or non-numeric."""
+    value = account_meta.get("totalAccounts") if isinstance(account_meta, dict) else None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _log_discovery_summary(
     *,
     account_meta: dict[str, Any] | None,
@@ -337,8 +356,10 @@ def _log_discovery_summary(
     if detail_ids is not None:
         detail_last4 = [_account_number_last4(a) for a in detail_ids]
         detail_part = f"detail_count={len(detail_ids)} last4={detail_last4}"
+    elif detail_error is None:
+        detail_part = "detail_skipped=totalAccounts_covered_by_defaults"
     else:
-        detail_part = f"detail_soft_fail={detail_error or 'unknown'}"
+        detail_part = f"detail_soft_fail={detail_error}"
     _LOGGER.debug(
         "PGE account discovery: totalAccounts=%r hasInactive=%r groups=%s defaults=%s %s merged=%s last4=%s",
         meta.get("totalAccounts"),
@@ -360,10 +381,11 @@ async def _enumerate_accounts_via_detail_list(
     """Enumerate ACTIVE accounts via the portal account-switcher op."""
     body = {
         "operationName": "getAccountDetailList",
-        "query": GET_ACCOUNT_DETAIL_LIST,
+        "query": _GET_ACCOUNT_DETAIL_LIST_MINIMAL,
         "variables": {"params": account_detail_list_params()},
     }
-    status, payload = await _post_json(session, GRAPHQL_URL, headers=headers, body=body)
+    request_headers = {**headers, "Authorization": f"Bearer {access_token}"}
+    status, payload = await _post_json(session, GRAPHQL_URL, headers=request_headers, body=body)
     classify_challenge(payload)
     if status >= 400:
         raise PGEAuthenticationError(f"PGE account detail list failed (HTTP {status})")
@@ -402,23 +424,33 @@ async def _discover_accounts(
     if not isinstance(info, dict):
         raise PGEAuthenticationError("PGE account discovery returned no getAccountInfo")
     person_id, default_ids = _extract_accounts(info)
+    account_meta = info.get("accountMeta") if isinstance(info.get("accountMeta"), dict) else None
+    total_accounts = _total_accounts_from_meta(account_meta)
 
     detail_ids: list[str] | None = None
     detail_error: str | None = None
-    try:
-        detail_person, detail_ids = await _enumerate_accounts_via_detail_list(session, access_token, headers=headers)
-        if person_id is None and detail_person:
-            person_id = detail_person
-    except Exception as exc:  # noqa: BLE001 - soft-fail; never regress single-account login
-        detail_error = type(exc).__name__
-        _LOGGER.debug(
-            "PGE getAccountDetailList enumeration soft-failed; using getAccountInfo defaults only",
-            exc_info=True,
-        )
+    # Gate on accountMeta.totalAccounts: when the portal reports that the group defaults already
+    # cover every account, skip the extra round-trip (common single-account case; tokens renew
+    # often). Unknown totalAccounts stays conservative and still enumerates.
+    if total_accounts is None or total_accounts > len(default_ids):
+        try:
+            detail_person, detail_ids = await _enumerate_accounts_via_detail_list(
+                session, access_token, headers=headers
+            )
+            if person_id is None and detail_person:
+                person_id = detail_person
+        except (PGEMfaUnsupportedError, PGECaptchaUnsupportedError):
+            raise  # MFA/CAPTCHA stay fail-closed; never soft-fail a challenge
+        except Exception as exc:  # noqa: BLE001 - soft-fail; never regress single-account login
+            detail_error = type(exc).__name__
+            _LOGGER.debug(
+                "PGE getAccountDetailList enumeration soft-failed; using getAccountInfo defaults only",
+                exc_info=True,
+            )
 
     merged = _merge_account_ids(default_ids, detail_ids or [])
     _log_discovery_summary(
-        account_meta=info.get("accountMeta") if isinstance(info.get("accountMeta"), dict) else None,
+        account_meta=account_meta,
         groups=info.get("groups") if isinstance(info.get("groups"), list) else None,
         default_ids=default_ids,
         detail_ids=detail_ids,

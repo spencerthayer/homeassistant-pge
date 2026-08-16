@@ -220,8 +220,8 @@ Same Apigee endpoint (`https://apix.portlandgeneral.com/pge-graphql`) and bearer
 Credential login discovers which account numbers belong to the login **before** usage validation:
 
 1. `getAccountInfo` — returns `accountMeta` plus each group's `defaultAccount.accountNumber` only (non-default accounts are not selected by the document).
-2. `getAccountDetailList` with `groupId: "ALL_ACCTS"` and `accountStatus: "ACTIVE"` — portal account-switcher source; returns every ACTIVE `accounts[].accountNumber` (paging limit 50).
-3. Merge: union of defaults + detail-list rows (exact-string dedupe, defaults first). Soft-fail detail-list errors and keep defaults so single-account flows never regress.
+2. `getAccountDetailList` with `groupId: "ALL_ACCTS"` and `accountStatus: "ACTIVE"` — portal account-switcher source; returns every ACTIVE `accounts[].accountNumber` (paging limit 50). **Gated:** skipped when `accountMeta.totalAccounts` is known and ≤ the number of discovered group defaults (common single-account case — avoids an extra round-trip on every login/renewal); unknown `totalAccounts` still enumerates. Discovery uses a **minimal** document (`totalCount`, `accounts { accountNumber encryptedPersonId }`) — the full billing document stays with billing sync.
+3. Merge: union of defaults + detail-list rows (exact-string dedupe, defaults first). Soft-fail transient detail-list errors and keep defaults so single-account flows never regress; MFA/CAPTCHA challenges on the detail-list call fail closed (`PGEMfaUnsupportedError` / `PGECaptchaUnsupportedError`).
 4. Config flow still requires the user-entered number to match a discovered id (exact or digits-only). Empty discovery still accepts the typed value for usage validation.
 
 **Caveat:** discovery keeps `accountStatus: "ACTIVE"`. Inactive/closed accounts that remain browsable on the portal may still fail with `account_not_found` until a separate status strategy is justified.

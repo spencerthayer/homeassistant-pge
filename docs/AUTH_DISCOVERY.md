@@ -8,8 +8,8 @@ Protocol notes for the unofficial Portland General Electric portal login chain u
 2. Exchange Cognito `IdToken` at Apigee `pg-token-implicit-aws/token` → short-lived bearer + `expires_at`.
 3. GraphQL account discovery with the Apigee bearer:
    - `getAccountInfo` → encrypted person id + each group's `defaultAccount` number.
-   - `getAccountDetailList` (`groupId: ALL_ACCTS`, `accountStatus: ACTIVE`) → full ACTIVE account list for the login.
-   - Merge (union, defaults first) so non-default accounts on a shared login are selectable in config flow. Soft-fail the detail-list call and keep `getAccountInfo` defaults if enumeration fails.
+   - `getAccountDetailList` (`groupId: ALL_ACCTS`, `accountStatus: ACTIVE`) → full ACTIVE account list for the login, via a minimal document (`totalCount`, `accounts { accountNumber encryptedPersonId }`). Gated on `accountMeta.totalAccounts`: skipped when the group defaults already cover every account (single-account logins avoid the extra round-trip); unknown `totalAccounts` still enumerates.
+   - Merge (union, defaults first) so non-default accounts on a shared login are selectable in config flow. Soft-fail transient detail-list errors and keep `getAccountInfo` defaults; MFA/CAPTCHA challenges on the detail-list call fail closed.
 4. Runtime renewal prefers password re-login when stored; falls back to `REFRESH_TOKEN_AUTH` only on recoverable credential auth errors (not throttle).
 
 MFA / CAPTCHA challenges fail closed (`PGEMfaUnsupportedError` / `PGECaptchaUnsupportedError`).
