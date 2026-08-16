@@ -38,12 +38,10 @@
           "accounts": [
             {
               "accountNumber": "1122334455",
-              "encryptedAccountNumber": "<ENCRYPTED_ACCOUNT_NUMBER_PRIMARY>",
               "encryptedPersonId": "<ENCRYPTED_PERSON_ID>"
             },
             {
               "accountNumber": "9988776655",
-              "encryptedAccountNumber": "<ENCRYPTED_ACCOUNT_NUMBER_SECONDARY>",
               "encryptedPersonId": "<ENCRYPTED_PERSON_ID>"
             }
           ]
