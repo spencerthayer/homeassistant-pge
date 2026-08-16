@@ -19,7 +19,13 @@
       "order": 3,
       "name": "graphql_get_account_info",
       "fixture": "graphql_get_account_info.json",
-      "role": "Discover encryptedPersonId and accountNumber list"
+      "role": "Discover encryptedPersonId and defaultAccount numbers"
+    },
+    {
+      "order": 3.5,
+      "name": "graphql_get_account_detail_list",
+      "fixture": "graphql_get_account_detail_list_two_accounts.json",
+      "role": "Enumerate ACTIVE accounts (ALL_ACCTS); merge with getAccountInfo defaults"
     },
     {
       "order": 4,

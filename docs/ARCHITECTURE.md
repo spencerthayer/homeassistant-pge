@@ -46,7 +46,7 @@ flowchart TD
 ### Authentication (production)
 
 1. Setup collects **email + password + account number** (required). Same login may create multiple entries with different account numbers; separate logins each get their own entry.
-2. `portal_auth` login (Cognito `USER_PASSWORD_AUTH` → Apigee bearer → `getAccountInfo`); match the entered account number to discovered accounts (exact or digits-only).
+2. `portal_auth` login (Cognito `USER_PASSWORD_AUTH` → Apigee bearer → `getAccountInfo` defaults merged with `getAccountDetailList` ACTIVE accounts, gated on `accountMeta.totalAccounts`); match the entered account number to discovered accounts (exact or digits-only).
 3. Validate with HOURLY yesterday `GetUsageCompare`; persist email, renewal secret (or password fallback), account id, person id, and a stable `account_key` derived from the account number. Best-effort AccountDetail discovery also persists encrypted account / premise / SA ids for programs and ledger. Entry unique id is account-scoped (`pge_account_<id>`). Title/device name: `PGE <accountnum>` (entity ids use the account number; Energy statistic ids use `account_key`).
 4. Keep access token in memory; renew under async lock before GraphQL calls (skew before expiry; forced 401 renew+retry on credential mode). Tokens are short-lived — password/refresh re-login may run nearly every sync.
 5. Cognito `TooManyRequests` / “Password attempts exceeded” → `PGERateLimitError` with a shared per-email cooldown (no further InitiateAuth while cooling down; no password→refresh amplify; soft-fail retains sensors without reauth UI). Concurrent `force_renew` waiters coalesce onto one login. See [`AUTH_DISCOVERY.md`](AUTH_DISCOVERY.md).

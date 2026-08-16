@@ -189,6 +189,40 @@ class TestPGEConfigFlow:
         assert result["type"] == "form"
         assert result["errors"]["base"] == "account_not_found"
 
+    @pytest.mark.asyncio
+    async def test_credential_setup_accepts_non_default_discovered_account(self):
+        """Issue #20: non-default account on the login resolves when discovery merged it."""
+        flow = PGEConfigFlow()
+        flow.hass = MagicMock()
+        login = PortalAuthResult(
+            access_token="tok",
+            encrypted_person_id="enc",
+            account_ids=["1122334455", "9988776655"],
+            expires_at=None,
+            refresh_credential="refresh",
+        )
+        with (
+            patch(
+                "custom_components.pge_energy.config_flow.portal_auth.async_login_or_refresh",
+                AsyncMock(return_value=login),
+            ),
+            patch.object(
+                flow,
+                "_async_finish_credential_entry",
+                AsyncMock(return_value={"type": "create_entry"}),
+            ) as finish,
+        ):
+            result = await flow.async_step_credential(
+                {
+                    CONF_EMAIL: "user@example.com",
+                    CONF_PASSWORD: "secret",
+                    CONF_ACCOUNT_ID: "9988-776-655",
+                }
+            )
+        assert result["type"] == "create_entry"
+        assert flow._account_id == "9988776655"
+        finish.assert_awaited_once()
+
     def test_create_credential_entry(self):
         flow = PGEConfigFlow()
         flow._token = "test_token"

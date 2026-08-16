@@ -1,0 +1,47 @@
+# Create a GitHub Release (HACS Latest) when VERSION lands on main
+# and no matching tag exists yet. Squash/merge of a version-bump PR
+# is what publishes; re-running after the tag exists is a no-op.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read integration version
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c "import json; print(json.load(open('custom_components/pge_energy/manifest.json'))['version'])")"
+          CONST_VERSION="$(python3 -c "import pathlib,re; t=pathlib.Path('custom_components/pge_energy/const.py').read_text(); print(re.search(r'^VERSION = \"([^\"]+)\"', t, re.M).group(1))")"
+          if [[ "$VERSION" != "$CONST_VERSION" ]]; then
+            echo "manifest.json version ($VERSION) != const.py VERSION ($CONST_VERSION)" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; skipping"
+            exit 0
+          fi
+          gh release create "$TAG" \
+            --target "${{ github.sha }}" \
+            --title "$TAG" \
+            --notes "HACS release \`$VERSION\` from \`${{ github.sha }}\`." \
+            --latest
