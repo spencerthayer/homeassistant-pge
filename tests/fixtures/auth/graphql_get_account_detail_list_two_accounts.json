@@ -13,6 +13,7 @@
     },
     "body": {
       "operationName": "getAccountDetailList",
+      "query": "query getAccountDetailList($params: AccountDetailListParams!) { getAccountDetailList(params: $params) { totalCount accounts { accountNumber encryptedPersonId } } }",
       "variables": {
         "params": {
           "accountStatus": "ACTIVE",
