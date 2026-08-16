@@ -44,7 +44,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.9.12";
+} from "./data.js?v=0.9.13";
 import {
   createBarChart,
   createLineChart,
@@ -54,9 +54,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.9.12";
-import { sparklineSvg } from "./svg-helpers.js?v=0.9.12";
-import { applyPanelTheme } from "./theme.js?v=0.9.12";
+} from "./charts.js?v=0.9.13";
+import { sparklineSvg } from "./svg-helpers.js?v=0.9.13";
+import { applyPanelTheme } from "./theme.js?v=0.9.13";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {

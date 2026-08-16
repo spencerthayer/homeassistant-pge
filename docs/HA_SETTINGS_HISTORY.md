@@ -24,7 +24,7 @@ Settings → Devices & Services → **Portland General Electric Energy Usage** �
 | Backfill concurrency | `2` | Parallel day fetches during backfill. |
 | TOD rate overrides (`tod_rate_off_peak` / `_mid_peak` / `_on_peak` / `_basic_service`) | blank | Optional USD/kWh overrides. Leave blank to use last portal rate, then built-in defaults. Empty boxes must validate (blank is allowed — do not require a float). |
 
-PGE publishes usage **overnight**, not continuously. A daytime-stuck **Latest available interval** near ~01:00 Pacific is expected.
+PGE publishes usage **overnight**, not continuously. A daytime-stuck **Latest available interval** near ~01:00 Pacific often means the portal has not published later hours yet — confirm against portlandgeneral.com My Energy Use (hourly) before treating it as an integration stall. A tip frozen at an older hour **while history backfill is running** was an HA skip-poll bug (fixed in 0.9.13): correction-window polls keep fetching during backfill, hourly backfill walks newest days first, and a refresh runs when backfill exits.
 
 ## History tiering
 

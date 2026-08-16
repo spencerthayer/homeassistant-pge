@@ -1,5 +1,16 @@
 # Tasks
 
+## Stale tip during history backfill — 0.9.13
+
+- [x] Root cause: scheduled poll skipped while `_backfill_in_progress`, hourly walked oldest-first (365d), next tip wait was the 4h Pacific grid — HA lagged live portal by a full published day
+- [x] Correction-window polls fetch during backfill; `import_lock` serializes recorder writes (no `hass.async_block_till_done`)
+- [x] Hourly backfill newest incomplete local day first
+- [x] `async_request_refresh` when the backfill job exits
+- [x] Tests: `test_poll_fetches_correction_window_while_backfill_in_progress`, newest-first hourly, post-backfill refresh
+- [x] Docs: `ARCHITECTURE.md`, `DATA_CONTRACT.md`, `HA_SETTINGS_HISTORY.md`; VERSION `0.9.13`
+- [x] Live HA `/pge`: `latest_available_interval` `2026-08-16T08:00:00Z` (Aug 16, 1:00 AM PT) matches portal/GraphQL tip; `last_successful_update` advanced on this boot; yesterday 17.03 kWh; sync complete; panel `?v=0.9.13`
+- [ ] HITL: commit/push + green CI + GitHub Release `v0.9.13` (do not publish without approval)
+
 ## Multi-account discovery — issue #20
 
 - [x] Root cause: `getAccountInfo` only surfaces each group's `defaultAccount`; non-default accounts never enter config-flow matching (`account_not_found`)

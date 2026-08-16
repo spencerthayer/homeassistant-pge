@@ -258,6 +258,7 @@ async def _async_backfill_hourly(
     store = coordinator.import_store
     completed = set(store.completed_local_dates)
     pending = [d for d in _iter_days(start, end) if d.isoformat() not in completed]
+    pending.reverse()  # newest closed days first so the tip cannot stall behind a 365-day walk
     if not pending:
         return
 
