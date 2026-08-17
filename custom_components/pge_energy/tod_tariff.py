@@ -190,6 +190,20 @@ def _parse_ymd(ymd: str) -> date:
     return date(int(parts[0]), int(parts[1]), int(parts[2]))
 
 
+def _safe_ymd_date(ymd: str | None) -> date | None:
+    """Parse YYYY-MM-DD string to date; return ``None`` on any failure.
+
+    Defensive helper for paths where a corrupted Store row, parser
+    regression, or unexpected JSON type should never crash the caller.
+    """
+    if not isinstance(ymd, str):
+        return None
+    try:
+        return _parse_ymd(ymd)
+    except (ValueError, TypeError):
+        return None
+
+
 def _date_of(dt: datetime | date) -> date:
     if isinstance(dt, date) and not isinstance(dt, datetime):
         return dt
@@ -252,7 +266,13 @@ def basic_comparison_rate_at(
 
 
 def _row_effective_date(row: TodTariffRow | BasicComparisonRow) -> date:
-    return _parse_ymd(row.effective_from)
+    """Sort key for merge: return the effective date, or ``date.min`` for malformed rows.
+
+    Malformed rows are ordered deterministically at the start instead of
+    crashing the sort (see :func:`_safe_ymd_date`).
+    """
+    result = _safe_ymd_date(row.effective_from)
+    return result if result is not None else date.min
 
 
 def merge_validated_catalog(

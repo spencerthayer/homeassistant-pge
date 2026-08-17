@@ -3468,7 +3468,11 @@ class PgeEnergyPanel extends HTMLElement {
       ? ` <span class="muted">(manual override for entire range)</span>`
       : "";
 
-    // Rate-card lines.
+    // Rate-card lines — these are the *current* effective-dated rate cards,
+    // not per-hour values.  The totals are computed per-hour using the
+    // catalog row effective on each slot's Pacific date (see
+    // estimatePlanCostSeries), so the rates shown here may not match the
+    // blended per-hour rates when the window crosses a tariff effective date.
     const rates = tod.rates || {};
     const rateList = TOD_PERIODS.map((p) => {
       const n = Number(rates[p]);
@@ -3548,8 +3552,8 @@ class PgeEnergyPanel extends HTMLElement {
           <table class="tod-table">
             <thead><tr><th>Line</th><th class="num">Amount</th><th class="num">Rate</th><th>What this is</th></tr></thead>
             <tbody>
-              ${line(`TOD (${this._escape(sourceLabel)})`, money(localTodTotal), this._escape(`${rateList} ¢/kWh`), "Local estimate: period kWh × effective TOD rates.")}
-              ${line(`Basic (${this._escape(basicSrc)})${basicEffNote}`, money(localBasicTotal), basicCents, `Source-backed estimate: kWh × Basic rate. ${basisNote}${exclNote}`)}
+              ${line(`TOD (${this._escape(sourceLabel)})`, money(localTodTotal), this._escape(`${rateList} ¢/kWh`), "Per-hour estimate: period kWh × effective-dated catalog rates. Rate shown is the current card; hourly rates may vary when the window crosses a tariff effective date.")}
+              ${line(`Basic (${this._escape(basicSrc)})${basicEffNote}`, money(localBasicTotal), basicCents, `Per-hour estimate: kWh × effective-dated Basic rate. Rate shown is the current card; hourly rates may vary across tariff effective dates.${basisNote}${exclNote}`)}
             </tbody>
           </table>
         </details>

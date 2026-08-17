@@ -51,6 +51,7 @@ from .time_util import PGE_TZ
 from .tod_tariff import (
     BasicComparisonRow,
     TodTariffRow,
+    _safe_ymd_date,
     bundled_basic_rows,
     bundled_tod_rows,
     merge_validated_catalog,
@@ -504,14 +505,16 @@ class TariffUpdaterCoordinator(DataUpdateCoordinator[TariffSourceUpdate]):
     def _schedule_effective_date_wakes(self) -> None:
         """Schedule wake at next future effective date."""
         now = datetime.now(UTC)
-        today = now.astimezone(PGE_TZ).date().isoformat()
+        today_date = now.astimezone(PGE_TZ).date()
         future_dates: list[str] = []
 
         for row in self._tod_rows:
-            if row.effective_from > today:
+            d = _safe_ymd_date(row.effective_from)
+            if d is not None and d > today_date:
                 future_dates.append(row.effective_from)
         for row in self._basic_rows:
-            if row.effective_from > today:
+            d = _safe_ymd_date(row.effective_from)
+            if d is not None and d > today_date:
                 future_dates.append(row.effective_from)
 
         if not future_dates:
@@ -528,13 +531,12 @@ class TariffUpdaterCoordinator(DataUpdateCoordinator[TariffSourceUpdate]):
             return
 
         next_future = min(future_dates)
-        try:
-            # Convert Pacific date to the correct UTC instant.
-            parts = next_future.split("-")
+        d = _safe_ymd_date(next_future)
+        if d is not None:
             pacific_midnight = datetime(
-                int(parts[0]),
-                int(parts[1]),
-                int(parts[2]),
+                d.year,
+                d.month,
+                d.day,
                 hour=0,
                 minute=0,
                 tzinfo=PGE_TZ,
@@ -545,5 +547,3 @@ class TariffUpdaterCoordinator(DataUpdateCoordinator[TariffSourceUpdate]):
                 if self._wake_timer is not None:
                     self._wake_timer.cancel()
                 self._wake_timer = self.hass.loop.call_later(delay, self._on_wake_timer)
-        except (ValueError, TypeError):
-            pass
