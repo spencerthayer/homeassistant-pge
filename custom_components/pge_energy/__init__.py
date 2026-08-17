@@ -67,6 +67,7 @@ from .statistics import (
     setup_statistics_sensors,
 )
 from .store import async_save_import_state, discard_store_cache
+from .tariff_updater import TariffUpdaterCoordinator
 from .time_util import iter_local_days, today_local
 from .websocket import async_setup_websocket
 
@@ -182,6 +183,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
 
     async_setup_websocket(hass)
     await async_setup_panel(hass)
+
+    # Domain-global tariff updater (shared by all PGE entries).
+    tariff_key = f"{DOMAIN}_tariff_updater"
+    tariff_coord = hass.data.get(DOMAIN, {}).get(tariff_key)
+    if tariff_coord is None:
+        tariff_coord = TariffUpdaterCoordinator(hass)
+        hass.data[DOMAIN][tariff_key] = tariff_coord
+    await tariff_coord.async_start(entry)
 
     # Never await PGE network / recorder drains inside async_setup_entry —
     # that deadlocks HA bootstrap (entry waits on I/O; bootstrap waits on entry).
@@ -689,10 +698,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
+        # Stop domain-global tariff updater after platforms unload successfully.
+        tariff_key = f"{DOMAIN}_tariff_updater"
+        tariff_coord = hass.data.get(DOMAIN, {}).get(tariff_key)
+        if tariff_coord is not None:
+            await tariff_coord.async_stop(entry)
         discard_store_cache(entry.entry_id)
         hass.data[DOMAIN].pop(entry.entry_id, None)
         remaining = [key for key, value in hass.data.get(DOMAIN, {}).items() if isinstance(value, PGECoordinator)]
         if not remaining:
+            # Clean up domain-global tariff updater when last entry unloads.
+            tariff_coord = hass.data.get(DOMAIN, {}).get(tariff_key)
+            if tariff_coord is not None:
+                hass.data[DOMAIN].pop(tariff_key, None)
             hass.data.pop(DOMAIN, None)
             async_teardown_panel(hass)
             if hass.services.has_service(DOMAIN, "refresh"):
@@ -700,6 +718,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool
                 hass.services.async_remove(DOMAIN, "backfill")
                 hass.services.async_remove(DOMAIN, "retry_failed_ranges")
                 hass.services.async_remove(DOMAIN, "reset_import_checkpoint")
+                if hass.services.has_service(DOMAIN, "refresh_tariffs"):
+                    hass.services.async_remove(DOMAIN, "refresh_tariffs")
     return unload_ok
 
 

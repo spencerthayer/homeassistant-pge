@@ -14,10 +14,15 @@ import {
   TOD_PERIOD_LABELS,
   TOD_PERIODS,
   accountingPlan,
+  aggregateEstimatedCostSeries,
   bucketTodByPeriod,
   clampToPublishedEnd,
   computeTodPlanCompare,
+  detectFlatPortalRates,
+  estimatePlanCostSeries,
+  formatSignedKwh,
   todEnrollmentVerdict,
+  reconcilePlanComparison,
   computeUsageAccounting,
   countSeriesPoints,
   fetchStatisticSeries,
@@ -44,7 +49,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.9.13";
+} from "./data.js?v=0.10.0";
 import {
   createBarChart,
   createLineChart,
@@ -54,9 +59,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.9.13";
-import { sparklineSvg } from "./svg-helpers.js?v=0.9.13";
-import { applyPanelTheme } from "./theme.js?v=0.9.13";
+} from "./charts.js?v=0.10.0";
+import { sparklineSvg } from "./svg-helpers.js?v=0.10.0";
+import { applyPanelTheme } from "./theme.js?v=0.10.0";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -702,6 +707,7 @@ details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 
   }
   .badge.on { color: var(--pge-status-good); border-color: var(--pge-status-good); }
   .badge.off { color: var(--secondary-text-color); }
+  .badge.unknown { color: var(--secondary-text-color); border-style: dashed; }
   .kpi.tod-off_peak { border-left-color: var(--pge-tod-off); }
   .kpi.tod-mid_peak { border-left-color: var(--pge-tod-mid); }
   .kpi.tod-on_peak { border-left-color: var(--pge-tod-on); }
@@ -2993,6 +2999,8 @@ class PgeEnergyPanel extends HTMLElement {
     return {
       kwh: bucketTodByPeriod(kwhSeries),
       cost: bucketTodByPeriod(costSeries),
+      kwhSeries,
+      costSeries,
       hasCost: seriesCostCoverageComplete(kwhSeries, costSeries),
       window,
     };
@@ -3119,13 +3127,7 @@ class PgeEnergyPanel extends HTMLElement {
     }
     const tod = account.tod;
     const e = account.entity_ids;
-    const todProgramState = this._hass?.states?.[e.program_time_of_day];
-    const enrolled =
-      !todProgramState ||
-      todProgramState.state === "unknown" ||
-      todProgramState.state === "unavailable"
-        ? null
-        : todProgramState.state === "on";
+    const enrolled = tod.enrolled ?? null;
     const period = tod.period || "off_peak";
     const rateUsd = Number(tod.rates?.[period]);
     const rateCents = Number.isFinite(rateUsd) ? rateUsd * 100 : null;
@@ -3153,43 +3155,36 @@ class PgeEnergyPanel extends HTMLElement {
     const sourceHint = `Rates: ${sourceLabel}${fetched}`;
     this._ensureTodRangeKey();
 
+    // Catalog data from the domain tariff updater (effective-dated).
+    const catalogs = tod.catalogs || {};
+    const todCatalog = catalogs.tod || [];
+    const basicCatalog = catalogs.basic || [];
+    const tariffStatus = tod.tariff_status || {};
+    const hasCatalog = todCatalog.length > 0 && basicCatalog.length > 0;
+
     let usageHtml = "";
     let savingsHtml = "";
     let windowNote = "";
     try {
-      const { kwh, cost, hasCost, window } = await this._todUsageByPeriod();
+      const { kwh, cost, kwhSeries, costSeries, hasCost, window } = await this._todUsageByPeriod();
       if (gen !== this._todRenderGen) return;
       const totalKwh = kwh.off_peak + kwh.mid_peak + kwh.on_peak;
       const importedCost = cost.off_peak + cost.mid_peak + cost.on_peak;
-      const compare = computeTodPlanCompare({
-        kwh,
-        cost,
-        rates: tod.rates || {},
-        basicRate: tod.basic_rate,
-        enrolled,
-        hasCost,
-      });
+
       windowNote = window.capped
         ? `Newest 60 days of ${this._escape(formatRangeLabel(window.start, window.end))} — long ranges stay capped so hourly totals stay exact.`
         : `Imported hourly intervals, ${this._escape(formatRangeLabel(window.start, window.end))}.`;
+
       if (totalKwh > 0) {
-        const priced = compare?.todPricedByPeriod || null;
-        const todHead = priced ? `<th class="num">TOD-priced</th>` : "";
-        const todFoot = priced
-          ? `<td class="num">${this._fmt(compare.todPriced, "", true)}</td>`
-          : "";
+        // Usage-by-period table (unchanged).
         const rows = TOD_PERIODS.map((p) => {
           const kw = kwh[p] || 0;
           const c = cost[p] || 0;
           const share = (kw / totalKwh) * 100;
-          const todCell = priced
-            ? `<td class="num">${this._fmt(priced[p], "", true)}</td>`
-            : "";
           return `<tr>
             <td>${TOD_PERIOD_LABELS[p]}</td>
             <td class="num">${this._fmt(kw, " kWh")}</td>
             <td class="num">${this._fmt(c, "", true)}</td>
-            ${todCell}
             <td class="num">${this._fmt(share, "%")}</td>
             <td class="num">${Number.isFinite(kw) && kw > 0 ? this._fmt((c / kw) * 100, " ¢/kWh") : "—"}</td>
           </tr>`;
@@ -3199,22 +3194,98 @@ class PgeEnergyPanel extends HTMLElement {
           <p class="muted" style="margin:0 0 8px">${windowNote}</p>
           ${this._todShareBar(kwh)}
           <table class="tod-table">
-            <thead><tr><th>Period</th><th class="num">Energy</th><th class="num">Cost</th>${todHead}<th class="num">Share</th><th class="num">Avg billed</th></tr></thead>
+            <thead><tr><th>Period</th><th class="num">Energy</th><th class="num">Cost</th><th class="num">Share</th><th class="num">Avg billed</th></tr></thead>
             <tbody>${rows}</tbody>
-            <tfoot><tr><td>Total</td><td class="num">${this._fmt(totalKwh, " kWh")}</td><td class="num">${this._fmt(importedCost, "", true)}</td>${todFoot}<td class="num">100%</td><td class="num">—</td></tr></tfoot>
+            <tfoot><tr><td>Total</td><td class="num">${this._fmt(totalKwh, " kWh")}</td><td class="num">${this._fmt(importedCost, "", true)}</td><td class="num">100%</td><td class="num">—</td></tr></tfoot>
           </table>
-          <p class="muted" style="margin:8px 0 0">Cost and avg billed are imported hourly amounts; TOD-priced is period kWh × effective TOD rates. Share uses energy.</p>
+          <p class="muted" style="margin:8px 0 0">Cost and avg billed are imported hourly amounts; share uses energy.</p>
         `;
-        savingsHtml = compare
-          ? this._todCompareHtml(
-              compare,
+
+        // Dual-source plan comparison using effective-dated catalogs.
+        if (hasCatalog) {
+          const overrideRates = tod.override_rates || null;
+          const estimate = estimatePlanCostSeries({
+            hourlyKwh: kwhSeries,
+            todCatalog,
+            basicCatalog,
+            overrideRates,
+            start: window.start,
+            end: window.end,
+          });
+          if (gen !== this._todRenderGen) return;
+
+          if (estimate.coverage.complete) {
+            const localTodTotal = estimate.todValues.reduce((s, v) => s + (v ?? 0), 0);
+            const localBasicTotal = estimate.basicValues.reduce((s, v) => s + (v ?? 0), 0);
+            const localSavings = localBasicTotal - localTodTotal;
+
+            const reconciled = reconcilePlanComparison({
+              local: {
+                todTotal: localTodTotal,
+                basicTotal: localBasicTotal,
+                savings: localSavings,
+                start: window.start,
+                end: window.end,
+                complete: true,
+              },
+              rateCompare: tod.rate_compare || null,
+              selectedRange: { start: window.start, end: window.end },
+            });
+
+            if (gen !== this._todRenderGen) return;
+
+            // Flat-rate detection (diagnostic only).
+            let flatRateDiag = null;
+            try {
+              flatRateDiag = detectFlatPortalRates({
+                hourlyKwh: kwhSeries,
+                hourlyCost: costSeries,
+                todCatalog,
+              });
+            } catch (_) {
+              /* ignore */
+            }
+
+            savingsHtml = this._todCompareHtmlDual({
+              enrolled,
+              localTodTotal,
+              localBasicTotal,
+              localSavings,
+              reconciled,
+              flatRateDiag,
               tod,
               sourceLabel,
-              formatRangeLabel(window.start, window.end)
-            )
-          : hasCost
-            ? ""
-            : `<div class="tod-counterfactual"><p class="muted" style="margin:0">Local estimate unavailable — imported cost must cover every consumption hour in this window (enable Include cost / wait for a full cost sync).</p></div>`;
+              windowLabel: formatRangeLabel(window.start, window.end),
+              todCatalog,
+              basicCatalog,
+              tariffStatus,
+              overrideRates: tod.override_rates || null,
+              overrideScope: tod.override_scope || null,
+              basicComparisonRate: tod.basic_comparison_rate,
+              basicComparisonSource: tod.basic_comparison_source,
+              basicComparisonEffectiveFrom: tod.basic_comparison_effective_from,
+              basicComparisonComponentBasis: tod.basic_comparison_component_basis,
+              basicComparisonExclusions: tod.basic_comparison_exclusions,
+            });
+          } else {
+            savingsHtml = this._todCompareHtmlCoverage(estimate.coverage, hasCost);
+          }
+        } else if (hasCost) {
+          // Fallback: no catalogs, fall back to legacy computeTodPlanCompare.
+          const compare = computeTodPlanCompare({
+            kwh,
+            cost,
+            rates: tod.rates || {},
+            basicRate: tod.basic_rate,
+            enrolled,
+            hasCost,
+          });
+          savingsHtml = compare
+            ? this._todCompareHtml(compare, tod, sourceLabel, formatRangeLabel(window.start, window.end))
+            : "";
+        } else {
+          savingsHtml = `<div class="tod-counterfactual"><p class="muted" style="margin:0">Local estimate unavailable — imported cost must cover every consumption hour in this window (enable Include cost / wait for a full cost sync).</p></div>`;
+        }
       } else {
         usageHtml = `<p class="muted">No imported hourly usage in this window yet.</p>`;
       }
@@ -3225,6 +3296,7 @@ class PgeEnergyPanel extends HTMLElement {
 
     if (gen !== this._todRenderGen) return;
 
+    // PGE portal official savings override.
     if (tod.savings_total != null) {
       const rateCompare = tod.rate_compare || null;
       const officialPeriod =
@@ -3279,10 +3351,210 @@ class PgeEnergyPanel extends HTMLElement {
         ${usageHtml}
         ${savingsHtml}
       </div>
+      ${this._tariffStatusHtml(tariffStatus, todCatalog, basicCatalog)}
     `;
     if (gen !== this._todRenderGen) return;
     this._bindPersistentDetails(el);
     this._bindTodRange(el);
+  }
+
+  _tariffStatusHtml(status, todCatalog, basicCatalog) {
+    const hasData = todCatalog.length > 0 || basicCatalog.length > 0;
+    const lastAttempt = status.last_attempt ? this._fmtDate(status.last_attempt) : "never";
+    const lastSuccess = status.last_success ? this._fmtDate(status.last_success) : "never";
+    const isStale = status.is_stale;
+    const hasStatus = status.last_attempt || status.last_success || status.is_stale !== undefined;
+    const lastError = status.last_error || null;
+    const statusBadge = !hasStatus ? `<span class="badge unknown">unknown</span>` : isStale ? `<span class="badge off">stale</span>` : `<span class="badge on">current</span>`;
+    const effectiveRow = todCatalog.length > 0 ? todCatalog[todCatalog.length - 1] : null;
+    const effectiveFrom = effectiveRow?.effective_from || null;
+    const periodLabel = effectiveFrom ? ` effective ${this._escape(effectiveFrom)}` : "";
+    return `
+      <details class="tariff-status-block"${this._detailsOpenAttr("tariff_status")}>
+        <summary>Tariff sources ${statusBadge}</summary>
+        <div class="tod-table-wrap">
+          <table class="tod-table">
+            <thead><tr><th>Source</th><th>Last check</th><th>Last success</th><th>TOD rows</th><th>Basic rows</th><th>Note</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>PGE public sources</td>
+                <td>${this._escape(lastAttempt)}</td>
+                <td>${this._escape(lastSuccess)}</td>
+                <td class="num">${todCatalog.length}</td>
+                <td class="num">${basicCatalog.length}</td>
+                <td>${lastError ? this._escape(lastError) : hasData ? `Catalog${periodLabel}` : "No catalog yet"}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        ${!hasData ? `<p class="muted" style="margin:8px 0 0">Waiting for first tariff discovery. Rates fall back to portal defaults or manual overrides.</p>` : ""}
+      </details>
+    `;
+  }
+
+  _todCompareHtmlCoverage(coverage, hasCost) {
+    if (!hasCost) {
+      return `<div class="tod-counterfactual"><p class="muted" style="margin:0">Local estimate unavailable — imported cost must cover every consumption hour in this window (enable Include cost / wait for a full cost sync).</p></div>`;
+    }
+    const note = coverage.missingRates > 0
+      ? `Missing rates for ${coverage.missingRates} hour slot${coverage.missingRates > 1 ? "s" : ""}.`
+      : coverage.missingSamples > 0
+        ? `Missing kWh samples for ${coverage.missingSamples} hour slot${coverage.missingSamples > 1 ? "s" : ""}.`
+        : "";
+    return `<div class="tod-counterfactual"><div class="label">Local plan estimate</div><p class="muted" style="margin:6px 0 0">Incomplete range — ${coverage.observedSlots} of ${coverage.expectedSlots} slots priced. ${this._escape(note)}</p></div>`;
+  }
+
+  _todCompareHtmlDual({
+    enrolled,
+    localTodTotal,
+    localBasicTotal,
+    localSavings,
+    reconciled,
+    flatRateDiag,
+    tod,
+    sourceLabel,
+    windowLabel,
+    todCatalog,
+    basicCatalog,
+    tariffStatus,
+    overrideRates,
+    overrideScope,
+    basicComparisonRate,
+    basicComparisonSource,
+    basicComparisonEffectiveFrom,
+    basicComparisonComponentBasis,
+    basicComparisonExclusions,
+  }) {
+    if (enrolled == null) {
+      return `
+      <div class="tod-counterfactual">
+        <div class="label">Local plan estimate</div>
+        <p class="muted" style="margin:6px 0 0">Enrollment unknown — wait for programs sync before comparing TOD vs Basic.</p>
+      </div>`;
+    }
+
+    const title = enrolled
+      ? "On Time of Day vs Basic"
+      : "If enrolled in Time of Day";
+    const subtitle = "Local estimate from on-device catalog";
+
+    // Verdict: is TOD saving or costing more vs Basic.
+    let verdictClass = "tod-compare-verdict";
+    let verdictText;
+    const absMoney = localSavings == null ? "—" : this._fmt(Math.abs(localSavings), "", true);
+    if (localSavings == null || !Number.isFinite(localSavings)) {
+      verdictText = enrolled
+        ? "Cannot tell yet — rates missing."
+        : "Cannot tell yet — rates missing.";
+    } else if (Math.abs(localSavings) < 0.01) {
+      verdictText = enrolled
+        ? "About the same as the Basic rate card"
+        : "About the same as billed energy";
+    } else if ((enrolled && localSavings < 0) || (!enrolled && localSavings > 0)) {
+      // Enrolled: negative savings = costing more. Not enrolled: positive savings = would save.
+      verdictClass += enrolled ? " cost-more" : " save";
+      verdictText = enrolled
+        ? `Costing about ${absMoney} more than Basic`
+        : `Would save about ${absMoney}`;
+    } else {
+      verdictClass += enrolled ? " save" : " cost-more";
+      verdictText = enrolled
+        ? `Saving about ${absMoney} versus Basic`
+        : `Would cost about ${absMoney} more`;
+    }
+
+    const hasOverride = overrideRates && overrideScope;
+    const overrideNote = hasOverride
+      ? ` <span class="muted">(manual override for entire range)</span>`
+      : "";
+
+    // Rate-card lines.
+    const rates = tod.rates || {};
+    const rateList = TOD_PERIODS.map((p) => {
+      const n = Number(rates[p]);
+      return Number.isFinite(n) ? this._fmt(n * 100, "") : "—";
+    }).join(" / ");
+
+    const basicSrc = basicComparisonSource || "offline defaults";
+    const basicCents = basicComparisonRate != null ? this._fmt(basicComparisonRate * 100, " ¢/kWh") : "—";
+    const basicEffNote = basicComparisonEffectiveFrom ? ` (eff. ${basicComparisonEffectiveFrom})` : "";
+    const basisNote = basicComparisonComponentBasis
+      ? ` Basis: ${this._escape(basicComparisonComponentBasis)}.`
+      : "";
+    const exclNote = basicComparisonExclusions
+      ? ` Exclusions: ${this._escape(basicComparisonExclusions)}.`
+      : "";
+
+    // Reconciliation block.
+    let reconHtml = "";
+    if (reconciled && reconciled.status !== "not_comparable") {
+      const statusLabel = reconciled.status === "matched" ? "Matches" : "Mismatch";
+      const statusClass = reconciled.status === "matched" ? "on" : "off";
+      const diffText = reconciled.diff != null ? this._fmt(reconciled.diff, "", true) : "—";
+      const pctText = reconciled.pctDiff != null ? ` (${(reconciled.pctDiff * 100).toFixed(1)}%)` : "";
+      reconHtml = `
+        <div class="reconciliation">
+          <span class="badge ${statusClass}">${statusLabel}</span>
+          <span class="muted">Local savings ${this._fmt(localSavings, "", true)} vs PGE official ${this._fmt(reconciled.officialSavings, "", true)} — diff ${diffText}${pctText}</span>
+        </div>
+      `;
+    } else if (reconciled && reconciled.status === "not_comparable") {
+      const reason = reconciled.diagnostics?.reason || "unavailable";
+      reconHtml = `<div class="reconciliation"><span class="badge">Not comparable</span> <span class="muted">${this._escape(reason)}</span></div>`;
+    }
+
+    // Flat-rate warning.
+    let flatHtml = "";
+    if (flatRateDiag?.status === "flat") {
+      flatHtml = `
+        <div class="tod-flat-warning">
+          <span class="badge off">Flat rates</span>
+          <span class="muted">PGE hourly portal cost looks flat across TOD periods — cost may not vary by period despite rate differences.</span>
+        </div>
+      `;
+    }
+
+    const mathNote = enrolled
+      ? `Versus the Basic rate card${windowLabel ? ` (${windowLabel})` : ""}, not a full bill.`
+      : `Versus billed energy${windowLabel ? ` (${windowLabel})` : ""}, not a full bill.`;
+    const money = (n) => (n == null ? "—" : this._fmt(n, "", true));
+    const line = (label, amount, rate, note) => `<tr>
+      <td>${label}</td>
+      <td class="num">${amount}</td>
+      <td class="num">${rate}</td>
+      <td>${note}</td>
+    </tr>`;
+    const persist = ` data-persist="tod_compare"${this._detailsOpenAttr("tod_compare")}`;
+    return `
+      <div class="tod-counterfactual dual-source">
+        <div class="label">${this._escape(title)}</div>
+        <div class="${verdictClass}">${this._escape(verdictText)}</div>
+        <div class="tod-compare-pair">
+          <div class="tod-compare-leg">
+            <div class="label">TOD estimate</div>
+            <div class="value">${localTodTotal != null ? this._fmt(localTodTotal, "", true) : "—"}</div>
+          </div>
+          <div class="tod-compare-vs">vs</div>
+          <div class="tod-compare-leg">
+            <div class="label">Basic estimate</div>
+            <div class="value">${localBasicTotal != null ? this._fmt(localBasicTotal, "", true) : "—"}</div>
+          </div>
+        </div>
+        <div class="delta">${this._escape(mathNote)} Estimate only — energy charges for imported kWh.${overrideNote}</div>
+        ${reconHtml}
+        ${flatHtml}
+        <details class="tod-compare-math"${persist}>
+          <summary>How this was calculated</summary>
+          <table class="tod-table">
+            <thead><tr><th>Line</th><th class="num">Amount</th><th class="num">Rate</th><th>What this is</th></tr></thead>
+            <tbody>
+              ${line(`TOD (${this._escape(sourceLabel)})`, money(localTodTotal), this._escape(`${rateList} ¢/kWh`), "Local estimate: period kWh × effective TOD rates.")}
+              ${line(`Basic (${this._escape(basicSrc)})${basicEffNote}`, money(localBasicTotal), basicCents, `Source-backed estimate: kWh × Basic rate. ${basisNote}${exclNote}`)}
+            </tbody>
+          </table>
+        </details>
+      </div>
+    `;
   }
 
   /**

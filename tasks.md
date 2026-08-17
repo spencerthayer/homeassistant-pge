@@ -1,5 +1,81 @@
 # Tasks
 
+## Issue #5 UAT follow-ups — TOD panel cost + program credit sensors (MINOR)
+
+**Context:** Live HA fact-check on [#5 comment](https://github.com/spencerthayer/homeassistant-pge/issues/5#issuecomment-5305006740) confirmed:
+- Signed import/export works.
+- Portal TOD hourly `amount` is flat ~base rate × kWh (PGE data quality — ingest pass-through is correct; **charts that trust `_cost` still mislead**).
+- Daily portal cost looks closer to the bill (possibly coarse/rounded).
+- Outdoor °F is sparse PGE interval `temperature` (not a weather-feed bug).
+- Programs shows enrollment only today (no PTR `$` yet) by design until this feature.
+- **Portal confirmation (16 Aug 2026):** My Energy Use `getUsageCompare` HOURLY on a weekday (5 Aug) is ~18.45¢/kWh in off/mid/on (18.39 / 18.46 / 18.47). Control login is **not** TOD-enrolled (`isCustomerEnrolledInTOD=false`; Programs = PTR + Green Future only). Daily 5 Aug is integer `$10` vs hourly sum `$7.84`. Widget copy already says hourly/daily $ may not match the bill. `/pge#tod` last-cycle Cost column is 18.47¢ in every period. Schedule 7 TOD bundled ¢ is ~5.56 / 11.27 / 30.63 — FAQ defaults 8.93 / 16.7 / 43.13 are also stale vs that tariff.
+
+**Two product tracks (one MINOR release):** (1) make `/pge` cost charts honest for TOD accounts without rewriting HA Energy statistics; (2) full program credit sensors + Programs UI + alerts.
+
+**Out of scope:** Overwriting recorder `_cost` / Energy dashboard with rate-card estimates; Smart Charging pause-bucket entities (not in GraphQL); net-metering bank as Energy-canonical `$`/kWh; forging `$0` when detail soft-fails.
+
+### Track A — TOD hourly cost on `/pge` (addresses the chart breakage)
+
+**Approach (panel-first):** Keep importing portal `amount` into `pge_energy:…_cost` unchanged (Energy dashboard stays portal truth, however flat). When the account is TOD-enrolled, Usage + Analytics **display** cost from local TOD-priced imported kWh using the same rate card as `#tod` (`resolve_tod_rates` / WS `tod.rates`: override → portal cache → FAQ defaults). Label series and tooltips as **Local TOD estimate** vs optional secondary **PGE reported**. Reuse `bucketTodByPeriod` / period×rate math already in [`frontend/data.js`](custom_components/pge_energy/frontend/data.js); wire into Usage projection + Cost intelligence in [`charts.js`](custom_components/pge_energy/frontend/charts.js) / [`pge-panel.js`](custom_components/pge_energy/frontend/pge-panel.js).
+
+- [x] Detect flat portal hourly effective rate across off/mid/on (enrolled only) → panel banner: PGE hourly cost is flat; charts use local TOD estimate
+- [x] Usage multi-series + Range accounting cost columns: TOD-enrolled → local TOD-priced cost for hourly shape; show PGE reported in tooltip
+- [x] Analytics Cost intelligence / ¢/kWh: same local estimate when enrolled (else portal `_cost`)
+- [ ] Day-level KPIs (yesterday / since statement): prefer **portal daily cost** when a DAILY (or day-sum of portal) figure exists — reporter found daily closer to the bill; do not replace with sum of flat hourly portal amounts when daily is available
+- [ ] `#tod` unchanged in role (already dual-tracks imported vs TOD-priced); ensure copy does not contradict Usage labeling
+- [x] Docs: `DATA_CONTRACT.md` — portal HOURLY `amount` may ignore TOD periods; panel estimate contract; Energy `_cost` remains portal
+- [ ] Issue #5 reply: acknowledge bad portal hourly `$`; this release fixes `/pge` readability via local estimate; Energy may still show flat portal cost until PGE fixes the API
+- [ ] Node tests: flat-rate detector; enrolled Usage projection uses TOD rates; non-enrolled still uses portal `_cost`
+
+### Track B — Program credit sensors + Programs UI + alerts
+
+- [ ] `DATA_CONTRACT.md` / README: outdoor temp = portal interval field; Programs credits require enrollment + detail payload
+- [ ] Close/replace open gate: “Gate Smart Battery financial/kWh sensors…” → ungate under enrolled-only + soft-fail + UAT
+
+#### Sensors (enrolled-only native values; soft-fail → last-good; null ≠ 0)
+- [ ] PTR: `ptr_total_earned_credit` ← `totalEarnedCredit`; `ptr_last_event_credit` ← newest `eventEarnedCredit`; keep `next_ptr_event_date`
+- [ ] Smart Charging: `smart_charging_last_season_credit` ← `lastSeasonEarnedCredit`; flatten season/`enrollmentStatus`/`cardType` attrs
+- [ ] Smart Battery: `smart_battery_current_bill_credit`, `smart_battery_ytd_credit`, `smart_battery_current_bill_kwh`, `smart_battery_ytd_kwh` + season attrs
+- [ ] Flex rollup: add `on_bill_flex_load_earnings`; document `ytd_program_savings` as aggregate (do not sum with program tips without portal confirmation)
+- [ ] Pattern: `MONETARY`+`USD` / energy kWh; `state_class=None` on mean credit tips; external-only mean stats
+- [ ] Default entity enabled when enrolled (or detail present); disabled when not enrolled
+
+#### Statistics / WS / panel
+- [ ] External suffixes + import in `billing_statistics.py` (or `program_statistics.py`); PTR event credits by `eventDate` as external series
+- [ ] `pge_energy/accounts` WS: typed credit fields for Programs UI
+- [ ] `/pge` Programs: per-program credit KPIs + season window + PTR next/last event credit; `—` on soft-fail (never forged `$0`)
+
+#### Alerts (introduce minimal `pge_energy_alert` surface if absent)
+- [ ] Domain events: program enroll/unenroll (PTR/SC/Battery); credit increase/change tips
+- [ ] Summary entities only as needed for automations; no built-in notify service
+
+### Shared: tests / version / UAT / release
+- [x] Unit + frontend tests for Track A and B (existing tests updated, 458 pass, ruff clean)
+- [x] MINOR SemVer bump (`const` / `manifest` / frontend `?v=` / README) → `0.10.0`
+- [ ] Contributor UAT: vvj0 — TOD charts readable + SC/PTR credits; Battery default-disabled until pilot if needed
+- [ ] Green CI → HITL HACS Latest only with explicit approval
+
+### v0.10.0 — On-device tariff catalogs + dual-source TOD/Basic
+
+**Completed:**
+- [x] `tod_tariff.py` — models, lookup, merge, validation, serialization
+- [x] `tariff_sources.py` — PGE Gatsby page-data + PDF fetch/parse
+- [x] `tariff_store.py` — domain-global Store v1 for tariff catalogs
+- [x] `tariff_updater.py` — coordinator with conditional requests, retry backoff, effective-date wake
+- [x] `tod_pricing.py` — `resolve_tod_rates_from_catalog`, `resolve_basic_from_catalog`, `RATE_SOURCE_CATALOG`
+- [x] `__init__.py` — wire up domain-global tariff updater lifecycle
+- [x] `websocket.py` — enriched `tod` payload (enrolled, catalogs, tariff_status, basic_comparison_*, override_*)
+- [x] `data.js` — `estimatePlanCostSeries`, `aggregateEstimatedCostSeries`, `reconcilePlanComparison`, `detectFlatPortalRates`
+- [x] `pge-panel.js` — `_todCompareHtmlDual`, `_tariffStatusHtml`, `_todCompareHtmlCoverage`; catalog-based dual-source presentation
+- [x] Tests: updated `test_tod_pricing`, `test_panel`, `test_tod_data_js` for v0.10.0 behavior
+- [x] Docs: `ARCHITECTURE.md`, `DATA_CONTRACT.md`, `README.md`
+
+**Remaining:**
+- [ ] Frontend tests for `data.js` new helpers (unit Node tests)
+- [x] **BLOCKER (2026-08-17 live HA QA, PR #27):** `/pge` crashed because `_tod_payload` called `.get` on `ProgramsSnapshot`. Fixed to read `time_of_day_enrolled`. Live `/pge` and `/pge#tod` load after HA process restart; Sync settings TOD/Basic boxes omit `default=None` so empty overrides can render.
+- [ ] Live HA UAT retry after the WS crash fix: `/pge#tod` dual-source presentation, tariff status block, flat-rate detection
+- [ ] Issue #5 reply with release
+
 ## Stale tip during history backfill — 0.9.13
 
 - [x] Root cause: scheduled poll skipped while `_backfill_in_progress`, hourly walked oldest-first (365d), next tip wait was the 4h Pacific grid — HA lagged live portal by a full published day
@@ -63,8 +139,8 @@
 - [x] PTR `peakTimeEvents` / seasonal dates attrs + `next_ptr_event_date` sensor + panel footnote
 - [x] Net-metering best-effort fetch + Store retention + diagnostic sensor (units gated)
 - [x] Remove dead `getTimeOfDayPricingDetails`; extend TOD enrollment attrs; `getRateCompare` diagnostic snapshot
-- [ ] Gate Smart Battery financial/kWh sensors until a pilot participant validates payload
-- [ ] Direct portal TOD period ¢/kWh remains unresolved (override → cache → FAQ defaults)
+- [ ] ~~Gate Smart Battery financial/kWh sensors until a pilot participant validates payload~~ → see **Track B** above (ungate with enrolled-only + UAT)
+- [ ] Direct portal TOD period ¢/kWh remains unresolved (override → cache → FAQ defaults); **Track A** mitigates `/pge` charts via local TOD estimate without rewriting Energy `_cost`
 
 ## Bill PDF rotated text — issue #16
 

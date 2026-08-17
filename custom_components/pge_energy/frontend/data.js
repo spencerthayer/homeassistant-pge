@@ -1347,3 +1347,425 @@ export function todWeekDays(today = new Date()) {
   }
   return days;
 }
+
+// ---------------------------------------------------------------------------
+// Effective-dated tariff catalog helpers (v0.10.0)
+// ---------------------------------------------------------------------------
+
+/**
+ * Select the newest TOD catalog row effective on a Pacific date.
+ * @param {string} ymd - Pacific YYYY-MM-DD
+ * @param {Array<{effective_from: string, off_peak: number, mid_peak: number, on_peak: number}>} rows
+ * @returns {object|null}
+ */
+export function todRateAt(ymd, rows) {
+  if (!rows?.length) return null;
+  let best = null;
+  for (const row of rows) {
+    if (row.effective_from <= ymd) {
+      if (!best || row.effective_from > best.effective_from) {
+        best = row;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Select the newest Basic comparison catalog row effective on a date.
+ * @param {string} ymd - Pacific YYYY-MM-DD
+ * @param {Array<{effective_from: string, rate: number, base_rate: number, schedule_125: number}>} rows
+ * @returns {object|null}
+ */
+export function basicRateAt(ymd, rows) {
+  if (!rows?.length) return null;
+  let best = null;
+  for (const row of rows) {
+    if (row.effective_from <= ymd) {
+      if (!best || row.effective_from > best.effective_from) {
+        best = row;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Exact hourly-only local TOD and Basic comparison estimates, Pacific
+ * aggregation, coverage validation, and official rate-compare reconciliation.
+ *
+ * Requires `period === "hour"`. Returns null coverage when incomplete.
+ *
+ * @param {{
+ *   hourlyKwh: {xs: number[], values: (number|null)[]},
+ *   todCatalog: Array<{effective_from: string, off_peak: number, mid_peak: number, on_peak: number}>,
+ *   basicCatalog: Array<{effective_from: string, rate: number}>,
+ *   overrideRates?: {off_peak?: number, mid_peak?: number, on_peak?: number, basic_service?: number}|null,
+ *   start: Date|string,
+ *   end: Date|string,
+ * }} opts
+ * @returns {{
+ *   xs: number[],
+ *   todValues: (number|null)[],
+ *   basicValues: (number|null)[],
+ *   savingsValues: (number|null)[],
+ *   coverage: {
+ *     expectedSlots: number,
+ *     observedSlots: number,
+ *     todPriced: number,
+ *     basicPriced: number,
+ *     missingSamples: number,
+ *     missingRates: number,
+ *     firstPriced: number|null,
+ *     lastPriced: number|null,
+ *     complete: boolean,
+ *   },
+ *   basis: {tod: object|null, basic: object|null},
+ * }}
+ */
+export function estimatePlanCostSeries({
+  hourlyKwh,
+  todCatalog,
+  basicCatalog,
+  overrideRates = null,
+  start,
+  end,
+} = {}) {
+  const startDate = start instanceof Date ? start : new Date(start);
+  const endDate = end instanceof Date ? end : new Date(end);
+  const startMs = startDate.getTime();
+  const endMs = endDate.getTime();
+
+  // Enumerate expected UTC hour starts in [start, end).
+  const expectedSlots = [];
+  for (let t = startMs; t < endMs; t += HOUR_MS) {
+    expectedSlots.push(Math.floor(t / 1000));
+  }
+  const expectedSet = new Set(expectedSlots);
+
+  // Build import kWh map from hourly series.
+  const kwhMap = _seriesMap(hourlyKwh);
+
+  // Determine if overrides apply to the whole range.
+  const hasOverride = overrideRates
+    && typeof overrideRates === "object"
+    && (
+      (overrideRates.off_peak != null && overrideRates.off_peak > 0)
+      || (overrideRates.mid_peak != null && overrideRates.mid_peak > 0)
+      || (overrideRates.on_peak != null && overrideRates.on_peak > 0)
+      || (overrideRates.basic_service != null && overrideRates.basic_service > 0)
+    );
+
+  // When overrides exist, require all three TOD bands + basic.
+  let overrideTodRates = null;
+  let overrideBasicRate = null;
+  if (hasOverride) {
+    const or = overrideRates;
+    if (
+      or.off_peak != null && or.off_peak > 0
+      && or.mid_peak != null && or.mid_peak > 0
+      && or.on_peak != null && or.on_peak > 0
+      && or.basic_service != null && or.basic_service > 0
+    ) {
+      overrideTodRates = { off_peak: or.off_peak, mid_peak: or.mid_peak, on_peak: or.on_peak };
+      overrideBasicRate = or.basic_service;
+    }
+  }
+
+  const xs = [];
+  const todValues = [];
+  const basicValues = [];
+  const savingsValues = [];
+  let observedSlots = 0;
+  let todPriced = 0;
+  let basicPriced = 0;
+  let missingSamples = 0;
+  let missingRates = 0;
+  let firstPriced = null;
+  let lastPriced = null;
+
+  // Track which catalog rows we use for basis reporting.
+  let activeTodRow = null;
+  let activeBasicRow = null;
+
+  for (const slotSec of expectedSlots) {
+    const slotDate = new Date(slotSec * 1000);
+    const { ymd, hour } = pacificParts(slotSec);
+    const period = todPeriodForPacific(ymd, hour);
+
+    // Get import kWh for this slot.
+    const kwhVal = kwhMap.get(slotSec);
+    if (kwhVal == null || !Number.isFinite(kwhVal) || kwhVal < 0) {
+      missingSamples++;
+      continue;
+    }
+    observedSlots++;
+
+    xs.push(slotSec);
+
+    // Resolve TOD rate for this slot.
+    let todRate = null;
+    if (overrideTodRates) {
+      todRate = overrideTodRates[period];
+    } else {
+      const row = todRateAt(ymd, todCatalog);
+      if (row) {
+        todRate = row[period];
+        activeTodRow = row;
+      }
+    }
+
+    // Resolve Basic rate for this slot.
+    let basicRate = null;
+    if (overrideBasicRate != null) {
+      basicRate = overrideBasicRate;
+    } else {
+      const row = basicRateAt(ymd, basicCatalog);
+      if (row) {
+        basicRate = row.rate;
+        activeBasicRow = row;
+      }
+    }
+
+    if (todRate == null || !Number.isFinite(todRate) || todRate <= 0) {
+      todValues.push(null);
+    } else {
+      const cost = kwhVal * todRate;
+      todValues.push(cost);
+      todPriced++;
+      if (firstPriced == null) firstPriced = slotSec;
+      lastPriced = slotSec;
+    }
+
+    if (basicRate == null || !Number.isFinite(basicRate) || basicRate <= 0) {
+      basicValues.push(null);
+    } else {
+      basicValues.push(kwhVal * basicRate);
+      basicPriced++;
+    }
+
+    // Count slot once if either rate is missing
+    if (todValues[todValues.length - 1] == null || basicValues[basicValues.length - 1] == null) {
+      missingRates++;
+    }
+
+    // Savings = Basic − TOD (positive = TOD cheaper).
+    const todV = todValues[todValues.length - 1];
+    const basicV = basicValues[basicValues.length - 1];
+    if (todV != null && basicV != null) {
+      savingsValues.push(basicV - todV);
+    } else {
+      savingsValues.push(null);
+    }
+  }
+
+  const complete = observedSlots === expectedSlots.length
+    && todPriced === observedSlots
+    && basicPriced === observedSlots;
+
+  return {
+    xs,
+    todValues,
+    basicValues,
+    savingsValues,
+    coverage: {
+      expectedSlots: expectedSlots.length,
+      observedSlots,
+      todPriced,
+      basicPriced,
+      missingSamples,
+      missingRates,
+      firstPriced,
+      lastPriced,
+      complete,
+    },
+    basis: {
+      tod: activeTodRow || null,
+      basic: activeBasicRow || null,
+    },
+  };
+}
+
+/**
+ * Aggregate a complete estimated hourly series to day or month grain.
+ * Only accepts complete series; incomplete returns null.
+ *
+ * @param {{xs: number[], todValues: (number|null)[], basicValues: (number|null)[], savingsValues: (number|null)[], coverage: {complete: boolean}}} series
+ * @param {"hour"|"day"|"month"} period
+ * @returns {{xs: number[], todValues: number[], basicValues: number[], savingsValues: number[]} | null}
+ */
+export function aggregateEstimatedCostSeries(series, period) {
+  if (!series?.coverage?.complete) return null;
+  if (period === "hour") {
+    return {
+      xs: series.xs,
+      todValues: series.todValues.map((v) => v ?? 0),
+      basicValues: series.basicValues.map((v) => v ?? 0),
+      savingsValues: series.savingsValues.map((v) => v ?? 0),
+    };
+  }
+
+  const bucketFn = period === "month" ? _pacificMonthKey : (t) => pacificYmd(new Date(t * 1000));
+  const buckets = new Map();
+
+  for (let i = 0; i < series.xs.length; i++) {
+    const t = series.xs[i];
+    const key = bucketFn(t);
+    if (!key) continue;
+    const row = buckets.get(key) || { tod: 0, basic: 0, savings: 0 };
+    row.tod += series.todValues[i] ?? 0;
+    row.basic += series.basicValues[i] ?? 0;
+    row.savings += series.savingsValues[i] ?? 0;
+    buckets.set(key, row);
+  }
+
+  const keys = [...buckets.keys()].sort();
+  return {
+    xs: keys.map((k) => {
+      // Convert bucket key back to epoch seconds (Pacific midnight UTC).
+      const d = pacificMidnightUtc(k);
+      return Math.floor(d.getTime() / 1000);
+    }),
+    todValues: keys.map((k) => buckets.get(k).tod),
+    basicValues: keys.map((k) => buckets.get(k).basic),
+    savingsValues: keys.map((k) => buckets.get(k).savings),
+  };
+}
+
+// Named constants for reconciliation tolerance.
+export const RECONCILIATION_ABS_TOLERANCE = 1.0;
+export const RECONCILIATION_PCT_TOLERANCE = 0.05;
+
+/**
+ * Reconcile local plan-choice estimates against PGE's official getRateCompare
+ * aggregate for its declared period.
+ *
+ * @param {{
+ *   local: {todTotal: number|null, basicTotal: number|null, savings: number|null, start: Date|string, end: Date|string, complete: boolean},
+ *   rateCompare?: {savings?: number|null, tou_total?: number|null, basic_total?: number|null, comparison_period?: string|null}|null,
+ *   selectedRange?: {start: Date|string, end: Date|string},
+ * }} opts
+ * @returns {{status: "matched"|"mismatch"|"not_comparable", localSavings: number|null, officialSavings: number|null, diff: number|null, pctDiff: number|null, diagnostics: object}}
+ */
+export function reconcilePlanComparison({ local, rateCompare, selectedRange } = {}) {
+  if (!local?.complete) {
+    return { status: "not_comparable", localSavings: null, officialSavings: null, diff: null, pctDiff: null, diagnostics: { reason: "local_incomplete" } };
+  }
+  if (local.savings == null || !Number.isFinite(local.savings)) {
+    return { status: "not_comparable", localSavings: null, officialSavings: null, diff: null, pctDiff: null, diagnostics: { reason: "no_local_savings" } };
+  }
+  if (!rateCompare?.comparison_period || rateCompare.savings == null) {
+    return { status: "not_comparable", localSavings: local.savings, officialSavings: null, diff: null, pctDiff: null, diagnostics: { reason: "no_official_data" } };
+  }
+
+  const officialSavings = Number(rateCompare.savings);
+  const localSavings = Number(local.savings);
+  if (!Number.isFinite(officialSavings)) {
+    return { status: "not_comparable", localSavings, officialSavings: null, diff: null, pctDiff: null, diagnostics: { reason: "official_not_finite" } };
+  }
+
+  // Check if period matches exactly.
+  const periodMatch = local.start && local.end
+    && _periodMatchesRange(rateCompare.comparison_period, local.start, local.end);
+
+  if (!periodMatch) {
+    return { status: "not_comparable", localSavings, officialSavings, diff: null, pctDiff: null, diagnostics: { reason: "period_mismatch", official_period: rateCompare.comparison_period } };
+  }
+
+  const diff = Math.abs(localSavings - officialSavings);
+  const pctDiff = Math.abs(officialSavings) > 0.001 ? diff / Math.abs(officialSavings) : null;
+  const signDisagree = (localSavings > 0) !== (officialSavings > 0);
+  const exceedsAbs = diff > RECONCILIATION_ABS_TOLERANCE;
+  const exceedsPct = pctDiff != null && pctDiff > RECONCILIATION_PCT_TOLERANCE;
+
+  if (signDisagree || exceedsAbs || exceedsPct) {
+    return { status: "mismatch", localSavings, officialSavings, diff, pctDiff, diagnostics: { signDisagree, exceedsAbs, exceedsPct } };
+  }
+
+  return { status: "matched", localSavings, officialSavings, diff, pctDiff, diagnostics: {} };
+}
+
+function _periodMatchesRange(periodStr, start, end) {
+  // Conservative: only match if the period string contains dates matching our range.
+  if (!periodStr) return false;
+  const startYmd = pacificYmd(start instanceof Date ? start : new Date(start));
+  const endDate = end instanceof Date ? end : new Date(end);
+  // Exclusive end → inclusive last day is the day before.
+  const endInclusive = new Date(endDate.getTime() - 1);
+  const endYmd = pacificYmd(endInclusive);
+  return periodStr.includes(startYmd) && periodStr.includes(endYmd);
+}
+
+/**
+ * Detect whether PGE's hourly portal cost is flat (doesn't vary by TOD period).
+ * Controls warning copy only — never selects or mutates a cost series.
+ *
+ * @param {{
+ *   hourlyKwh: {xs: number[], values: (number|null)[]},
+ *   hourlyCost: {xs: number[], values: (number|null)[]},
+ *   todCatalog: Array<{effective_from: string, off_peak: number, mid_peak: number, on_peak: number}>,
+ * }} opts
+ * @returns {{status: "flat"|"varied"|"insufficient", diagnostics?: object}}
+ */
+export function detectFlatPortalRates({ hourlyKwh, hourlyCost, todCatalog } = {}) {
+  const kWh_MIN = 0.05;
+  const MIN_SAMPLES_PER_BAND = 3;
+  const FLAT_TOLERANCE = 0.02; // 2¢/kWh spread tolerance
+  const EXPECTED_SPREAD_MIN = 0.10; // Expected catalog spread must be > 10¢
+
+  // Build timestamp → {kwh, cost, period} triples.
+  const kwhMap = _seriesMap(hourlyKwh);
+  const costMap = _seriesMap(hourlyCost);
+
+  const byPeriod = { off_peak: [], mid_peak: [], on_peak: [] };
+
+  for (const [t, kwh] of kwhMap) {
+    if (!Number.isFinite(kwh) || kwh < kWh_MIN) continue;
+    const cost = costMap.get(t);
+    if (cost == null || !Number.isFinite(cost) || cost < 0) continue;
+
+    const { ymd, hour } = pacificParts(t);
+    const period = todPeriodForPacific(ymd, hour);
+    const rate = kwh > 0 ? cost / kwh : null;
+    if (rate != null && Number.isFinite(rate)) {
+      byPeriod[period].push(rate);
+    }
+  }
+
+  const bands = TOD_PERIODS.filter((p) => byPeriod[p].length >= MIN_SAMPLES_PER_BAND);
+  if (bands.length < 2) {
+    return { status: "insufficient", diagnostics: { bandsWithSamples: bands.length } };
+  }
+
+  // Compute median rate per band.
+  const medians = {};
+  for (const p of bands) {
+    medians[p] = _median(byPeriod[p]);
+  }
+
+  const allMedians = bands.map((p) => medians[p]);
+  const observedSpread = Math.max(...allMedians) - Math.min(...allMedians);
+
+  // Expected spread from catalog — use the date of the first data sample
+  // so the correct effective-dated row is selected (not today's).
+  // hourlyKwh.xs values are epoch seconds.
+  const firstTs = hourlyKwh?.xs?.[0];
+  const catalogDate = firstTs != null ? pacificYmd(new Date(firstTs * 1000)) : pacificYmd();
+  const catalogRow = todRateAt(catalogDate, todCatalog);
+  if (!catalogRow) {
+    return { status: "insufficient", diagnostics: { reason: "no_catalog_row" } };
+  }
+  const expectedSpread = catalogRow.on_peak - catalogRow.off_peak;
+
+  if (observedSpread < FLAT_TOLERANCE && expectedSpread > EXPECTED_SPREAD_MIN) {
+    return {
+      status: "flat",
+      diagnostics: { observedSpread, expectedSpread, medians, bands },
+    };
+  }
+
+  return {
+    status: "varied",
+    diagnostics: { observedSpread, expectedSpread, medians, bands },
+  };
+}

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
-from custom_components.pge_energy.billing_models import RateCompareSnapshot, TodSnapshot
+from custom_components.pge_energy.billing_models import ProgramsSnapshot, RateCompareSnapshot, TodSnapshot
 from custom_components.pge_energy.const import (
     CONF_ACCOUNT_ID,
     CONF_ACCOUNT_KEY,
@@ -14,6 +14,7 @@ from custom_components.pge_energy.const import (
 from custom_components.pge_energy.coordinator import PGECoordinator
 from custom_components.pge_energy.models import SyncProgressSnapshot
 from custom_components.pge_energy.websocket import (
+    _tod_enrolled_from_programs,
     _tod_payload,
     async_setup_websocket,
     websocket_accounts,
@@ -188,3 +189,50 @@ def test_tod_payload_empty_rate_compare_hidden():
     assert payload["savings_total"] is None
     assert payload["savings_source"] is None
     assert payload["rate_compare"] is None
+
+
+def test_tod_enrolled_from_programs_snapshot_dataclass():
+    """Live coordinators store ProgramsSnapshot, not a program-id mapping."""
+    assert _tod_enrolled_from_programs(None) is None
+    assert _tod_enrolled_from_programs(ProgramsSnapshot(time_of_day_enrolled=False)) is False
+    assert _tod_enrolled_from_programs(ProgramsSnapshot(time_of_day_enrolled=True)) is True
+    assert _tod_enrolled_from_programs(ProgramsSnapshot()) is None
+
+
+def test_tod_payload_survives_programs_snapshot_dataclass():
+    """Regression: treating ProgramsSnapshot as a dict crashed /pge (Unknown error)."""
+    hass = MagicMock()
+    hass.data = {}
+    coord = _make_coordinator(hass)
+    coord.programs_snapshot = ProgramsSnapshot(time_of_day_enrolled=False)
+    payload = _tod_payload(coord)
+    assert payload["enrolled"] is False
+
+
+def test_websocket_accounts_with_programs_snapshot():
+    hass = MagicMock()
+    coord = _make_coordinator(hass)
+    coord.programs_snapshot = ProgramsSnapshot(time_of_day_enrolled=False)
+    hass.data = {DOMAIN: {"entry1": coord}}
+
+    connection = MagicMock()
+    device = MagicMock()
+    device.id = "device-1"
+
+    with (
+        patch(
+            "custom_components.pge_energy.websocket.dr.async_get",
+            return_value=MagicMock(async_get_device=MagicMock(return_value=device)),
+        ),
+        patch(
+            "custom_components.pge_energy.websocket.er.async_get",
+            return_value=MagicMock(
+                async_get_entity_id=MagicMock(side_effect=lambda platform, domain, uid: f"{platform}.{uid}")
+            ),
+        ),
+    ):
+        websocket_accounts(hass, connection, {"id": 11, "type": f"{DOMAIN}/accounts"})
+
+    connection.send_result.assert_called_once()
+    _msg_id, payload = connection.send_result.call_args.args
+    assert payload["accounts"][0]["tod"]["enrolled"] is False

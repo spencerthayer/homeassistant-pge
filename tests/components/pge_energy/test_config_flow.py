@@ -283,6 +283,10 @@ class TestPGEOptionsFlow:
         assert CONF_CAPTURE_GRAPHQL_DIAGNOSTICS in flat_keys
         assert CONF_INCLUDE_BILLING in flat_keys
         assert CONF_BACKFILL_CONCURRENCY in flat_keys
+        assert CONF_TOD_RATE_OFF_PEAK in flat_keys
+        assert CONF_TOD_RATE_MID_PEAK in flat_keys
+        assert CONF_TOD_RATE_ON_PEAK in flat_keys
+        assert CONF_TOD_RATE_BASIC_SERVICE in flat_keys
         capture_field = next(
             field for field in schema.schema if getattr(field, "schema", field) == CONF_CAPTURE_GRAPHQL_DIAGNOSTICS
         )

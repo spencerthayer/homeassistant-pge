@@ -53,7 +53,7 @@ PGE publishes usage **once overnight**, so a "stuck" latest interval near `01:00
 ### HACS (recommended)
 
 1. HACS → **⋯** → **Custom repositories**, add `https://github.com/spencerthayer/homeassistant-pge` with category **Integration**.
-2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.9.13`).
+2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.10.0`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -166,11 +166,13 @@ Every usage series is available in **both** forms:
 | Latest available interval                  | Newest PGE interval end                                   |
 | Time of Day period / rate                  | Current E-TOU period (`off_peak`/`mid_peak`/`on_peak`) + ¢/kWh rate (v0.9.0+) |
 | TOD vs Basic savings                      | Cumulative $ saved vs basic rate (v0.9.0+)                |
+| On-device tariff catalogs                 | Effective-dated TOD + Basic rates auto-discovered from PGE public sources (v0.10.0+) |
+| Local plan estimates                      | Dual-source TOD vs Basic cost estimates with official reconciliation (v0.10.0+) |
 | Authentication expiration / Last API error | Diagnostics (disabled by default)                         |
 
 Billing sensors expose `external_statistic_id` and `entity_statistic_id` for automations and custom cards. Full billing/programs sensor and PDF-statistics catalogs: [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md).
 
-Time-of-Day rates are resolved per poll: account-specific overrides → last portal rate card (best-effort GraphQL) → built-in defaults. Set overrides under Configure → **Sync settings** → **Time of Day rates** (`tod_rate_off_peak` / `_mid_peak` / `_on_peak` / `_basic_service`).
+Time-of-Day rates are resolved per poll: manual overrides → effective-dated on-device catalog (auto-discovered from PGE public sources) → last portal rate card (best-effort GraphQL) → built-in defaults. Set overrides under Configure → **Sync settings** → **Time of Day rates** (`tod_rate_off_peak` / `_mid_peak` / `_on_peak` / `_basic_service`).
 
 ---
 

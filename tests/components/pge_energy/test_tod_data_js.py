@@ -59,6 +59,9 @@ def test_panel_ships_tod_section_and_render():
     assert "TOD_PERIOD_LABELS" in import_block
     assert "computeTodPlanCompare" in import_block
     assert "todEnrollmentVerdict" in import_block
+    assert "estimatePlanCostSeries" in import_block
+    assert "reconcilePlanComparison" in import_block
+    assert "detectFlatPortalRates" in import_block
     # next_transition_at arrives as an ISO string from WS — must Date()-coerce.
     assert "pacificParts(new Date(nextAt))" in source
     # Imported cost is USD; avg billed column is labeled ¢/kWh.
@@ -68,7 +71,11 @@ def test_panel_ships_tod_section_and_render():
     assert "Would save about" in source
     assert "tod-compare-verdict" in source
     assert "How this was calculated" in source
-    assert "TOD-priced" in source
+    # v0.10.0: catalog-based dual-source presentation.
+    assert "dual-source" in source
+    assert "TOD estimate" in source
+    assert "Basic estimate" in source
+    assert "tariff-status-block" in source
     assert 'data-persist="tod_compare"' in source
     assert "data-tod-range" in source
     assert 'aria-label="TOD estimate range"' in source
@@ -77,6 +84,5 @@ def test_panel_ships_tod_section_and_render():
     assert "!this._todRangeTouched" in source
     assert "independent of Usage" in source
     assert 'aria-pressed="' in source
-    assert "imported cost ÷ kWh" in source
     assert "._todWeekGrid()" in source
     assert 'class="tod-cell' in source
