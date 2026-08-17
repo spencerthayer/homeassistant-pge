@@ -39,7 +39,7 @@ flowchart TD
 1. **PGE Portal** (external): Login + GraphQL. MFA/CAPTCHA unsupported.
 2. **Home Assistant** (trusted): Config entry storage, Store for backfill state, recorder.
 3. **Stable `account_key`**: New installs derive an opaque key from the PGE account number so delete/re-add keeps the same `pge_energy:<account_key>_*` statistic ids. Persisted keys survive person-ID/token rotation and are never recomputed from renewable secrets. Entry removal clears that entry's external statistics (see [#10](https://github.com/spencerthayer/homeassistant-pge/issues/10)).
-4. **Local CLI / UAT**: Optional `.env` + packaged CLI (`docs/LIVE_TESTING.md`); HA owner login is separate from PGE portal credentials.
+4. **Local CLI / UAT**: Optional `.env` + development CLI at `scripts/cli.py` (`docs/LIVE_TESTING.md`); HA owner login is separate from PGE portal credentials.
 
 ## Runtime Flows
 
@@ -101,7 +101,7 @@ Implemented in `backfill.py` + helpers in `options.py`; wired from `__init__.py`
 
 | Script    | Role                                                                                                                           |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `./scripts/start.sh` | Resume latest `outputs/ha_live/20*` (or `current`); refresh `pge_energy` symlink; daemonize `.venv/bin/hass`; wait for `:8123` |
+| `./scripts/start.sh` | Resume latest `outputs/ha_live/20*` (or `current`); refresh `pge_energy` symlink; daemonize system `hass`; wait for `:8123` |
 | `./scripts/stop.sh`  | SIGTERM/SIGKILL live hass; clear pid; confirm port closed                                                                      |
 
 Bare `homeassistant.restart` from the UI **exits** this process (no Supervisor) — use `./scripts/stop.sh` && `./scripts/start.sh` to reload custom component code.
@@ -126,7 +126,7 @@ Bare `homeassistant.restart` from the UI **exits** this process (no Supervisor) 
 | `store.py` | Versioned per-entry import state (+ billing ledger checkpoint) |
 | `config_flow.py` | Credential setup (email/password/account number), reauth, OptionsFlow |
 | `day_validation.py` | Hourly local-day clip/validate (boundary hour) |
-| `cli.py` | Offline login/renew/validate/fetch + billing-snapshot/history/programs |
+| `scripts/cli.py` | Offline login/renew/validate/fetch + billing-snapshot/history/programs |
 | `panel_settings.py` | Domain Store `pge_energy.panel` for integration-wide panel chrome (load/save/normalize/validate); default landing sections include `tod` (Time of Day) |
 | `panel.py` | Static paths once + locked setup/apply/teardown for `/pge` from Store settings; optional sidebar chrome; passes `config.default_section` to the frontend; never reads/writes user-store `sidebar` (`panelOrder` / `hiddenPanels`) |
 | `websocket.py` | Admin WS: `pge_energy/accounts`, `pge_energy/sync/subscribe` (credential-free); account payload includes a `tod` block (period, rate, next transition, sources, savings) + sensor roles `tod_period`/`tod_price`/`tod_vs_basic_savings` |

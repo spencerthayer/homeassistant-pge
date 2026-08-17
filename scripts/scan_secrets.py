@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Fail if known secret patterns or real account identifiers appear in the repo.
 
-Personal identifiers are never hardcoded here. When a local ``.env`` exists,
-its account/email values are loaded at runtime and scanned for as forbidden
-literals (so deleting ``.env`` also removes those checks).
+Personal identifiers are never hardcoded here. Environment variables (injected
+by the dev container or CI) are checked at runtime and scanned for as forbidden
+literals.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -34,46 +35,42 @@ SKIP_DIRS = {
     ".cursor",
     "outputs",  # local HA UAT / live state (gitignored)
 }
-ALLOW_EMAIL_PATHS = {
-    "AUTH_DISCOVERY.md",  # may document example.com patterns only
-}
 SKIP_FILES = {
     ".env",
     "scripts/scan_secrets.py",
 }
-
-
-def _parse_dotenv(text: str) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        if line.startswith("export "):
-            line = line[len("export ") :].strip()
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-            value = value[1:-1]
-        values[key] = value
-    return values
+IGNORED_PLACEHOLDERS = {
+    "user@example.com",
+    "your-password",
+    "0000000000",
+    "0",
+    "1234567890",
+}
 
 
 def _forbidden_from_env() -> tuple[str, ...]:
-    """Load personal identifiers from local .env only (never committed literals)."""
-    env_path = ROOT / ".env"
-    if not env_path.is_file():
-        return ()
-    try:
-        values = _parse_dotenv(env_path.read_text(encoding="utf-8"))
-    except OSError:
-        return ()
+    """Load personal identifiers from environment variables (injected by devcontainer or CI)."""
     found: list[str] = []
-    for key in ("account_number", "PGE_ACCOUNT_ID", "PGE_ACCOUNT_HINT", "email", "PGE_EMAIL", "username"):
-        value = (values.get(key) or "").strip()
-        if value and value not in found:
-            found.append(value)
+    ignored_lower = {p.lower() for p in IGNORED_PLACEHOLDERS}
+    for key in (
+        "account_number",
+        "PGE_ACCOUNT_ID",
+        "PGE_ACCOUNT_HINT",
+        "email",
+        "PGE_EMAIL",
+        "username",
+        "PGE_USERNAME",
+        "PGE_PASSWORD",
+        "PGE_REFRESH_CREDENTIAL",
+    ):
+        raw_val = os.environ.get(key, "")
+        clean_val = raw_val.strip(" '\"\t\r\n")
+        if not clean_val:
+            continue
+        if clean_val.lower() in ignored_lower or raw_val.strip().lower() in ignored_lower:
+            continue
+        if clean_val not in found:
+            found.append(clean_val)
     return tuple(found)
 
 
@@ -96,12 +93,12 @@ def main() -> int:
             continue
         for lit in forbidden:
             if lit in text:
-                hits.append(f"{rel}: forbidden local .env value leaked")
+                hits.append(f"{rel}: forbidden local environment value leaked")
         if JWTISH.search(text) and "sanitize" not in path.name:
             hits.append(f"{rel}: JWT-like token")
         if OPAQUE_SECRET.search(text) and "sanitize" not in path.name:
             hits.append(f"{rel}: opaque session/refresh secret")
-        if EMAILISH.search(text) and rel not in ALLOW_EMAIL_PATHS:
+        if EMAILISH.search(text):
             # Allow synthetic example.com / test fixtures only.
             for match in EMAILISH.finditer(text):
                 if match.group(0).lower().endswith("@example.com"):

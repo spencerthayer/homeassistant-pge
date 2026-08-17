@@ -18,7 +18,7 @@ Sanitized DEBUG diagnostics log discovery counts and account-number last-4 digit
 
 ## Cognito rate limits (live probe 2026-07-29)
 
-Probe script: `scripts/probe_cognito_rate_limit.py` (opt-in `--env-file`, hard stop, ≤25 InitiateAuth calls). Stop live HA before probing.
+Probe script: `scripts/probe_cognito_rate_limit.py` (reads `PGE_EMAIL` / `PGE_PASSWORD` from environment variables, hard stop, ≤25 InitiateAuth calls). Stop live HA before probing.
 
 ### Observed
 

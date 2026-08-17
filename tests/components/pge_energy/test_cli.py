@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.pge_energy import cli, portal_auth
+from custom_components.pge_energy import portal_auth
 from custom_components.pge_energy.exceptions import (
     PGEAuthenticationError,
     PGEDiscoveryIncompleteError,
@@ -15,6 +15,7 @@ from custom_components.pge_energy.exceptions import (
 )
 from custom_components.pge_energy.models import UsageInterval, UsageResolution, UsageResponse
 from custom_components.pge_energy.time_util import iter_local_days, local_day_bounds
+from scripts import cli
 
 
 def _usage(intervals: list[UsageInterval] | None = None) -> UsageResponse:
@@ -67,8 +68,6 @@ def _login_result(account_id: str = "acct0001") -> portal_auth.PortalAuthResult:
 
 
 def _set_credential_env(monkeypatch, *, account_id: str = "acct0001") -> None:
-    monkeypatch.delenv("PGE_BEARER_TOKEN", raising=False)
-    monkeypatch.delenv("PGE_ENCRYPTED_PERSON_ID", raising=False)
     monkeypatch.setenv("PGE_EMAIL", "user@example.com")
     monkeypatch.setenv("PGE_PASSWORD", "secret")
     monkeypatch.setenv("PGE_ACCOUNT_ID", account_id)
@@ -76,8 +75,6 @@ def _set_credential_env(monkeypatch, *, account_id: str = "acct0001") -> None:
 
 class TestCliValidate:
     def test_missing_env(self, monkeypatch):
-        monkeypatch.delenv("PGE_BEARER_TOKEN", raising=False)
-        monkeypatch.delenv("PGE_ENCRYPTED_PERSON_ID", raising=False)
         monkeypatch.delenv("PGE_ACCOUNT_ID", raising=False)
         monkeypatch.delenv("PGE_EMAIL", raising=False)
         monkeypatch.delenv("PGE_PASSWORD", raising=False)
@@ -91,11 +88,11 @@ class TestCliValidate:
 
         with (
             patch(
-                "custom_components.pge_energy.cli.portal_auth.async_login_or_refresh",
+                "scripts.cli.portal_auth.async_login_or_refresh",
                 AsyncMock(return_value=_login_result("0000000000")),
             ),
-            patch("custom_components.pge_energy.cli.aiohttp.ClientSession") as session_cls,
-            patch("custom_components.pge_energy.cli.PGEApiClient", return_value=mock_client),
+            patch("scripts.cli.aiohttp.ClientSession") as session_cls,
+            patch("scripts.cli.PGEApiClient", return_value=mock_client),
         ):
             session_cls.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
             session_cls.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -111,11 +108,11 @@ class TestCliValidate:
 
         with (
             patch(
-                "custom_components.pge_energy.cli.portal_auth.async_login_or_refresh",
+                "scripts.cli.portal_auth.async_login_or_refresh",
                 AsyncMock(return_value=_login_result()),
             ),
-            patch("custom_components.pge_energy.cli.aiohttp.ClientSession") as session_cls,
-            patch("custom_components.pge_energy.cli.PGEApiClient", return_value=mock_client),
+            patch("scripts.cli.aiohttp.ClientSession") as session_cls,
+            patch("scripts.cli.PGEApiClient", return_value=mock_client),
         ):
             session_cls.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
             session_cls.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -129,11 +126,11 @@ class TestCliValidate:
 
         with (
             patch(
-                "custom_components.pge_energy.cli.portal_auth.async_login_or_refresh",
+                "scripts.cli.portal_auth.async_login_or_refresh",
                 AsyncMock(return_value=_login_result()),
             ),
-            patch("custom_components.pge_energy.cli.aiohttp.ClientSession") as session_cls,
-            patch("custom_components.pge_energy.cli.PGEApiClient", return_value=mock_client),
+            patch("scripts.cli.aiohttp.ClientSession") as session_cls,
+            patch("scripts.cli.PGEApiClient", return_value=mock_client),
         ):
             session_cls.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
             session_cls.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -152,18 +149,18 @@ class TestCliFetch:
             iter_local_days(
                 datetime(2025, 7, 1, tzinfo=UTC),
                 datetime(2025, 7, 3, tzinfo=UTC),
-            )
+            ),
         )
         mock_client = MagicMock()
         mock_client.get_usage = AsyncMock(side_effect=[_usage([_interval(d)]) for d in days])
 
         with (
             patch(
-                "custom_components.pge_energy.cli.portal_auth.async_login_or_refresh",
+                "scripts.cli.portal_auth.async_login_or_refresh",
                 AsyncMock(return_value=_login_result()),
             ),
-            patch("custom_components.pge_energy.cli.aiohttp.ClientSession") as session_cls,
-            patch("custom_components.pge_energy.cli.PGEApiClient", return_value=mock_client),
+            patch("scripts.cli.aiohttp.ClientSession") as session_cls,
+            patch("scripts.cli.PGEApiClient", return_value=mock_client),
         ):
             session_cls.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
             session_cls.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -176,7 +173,7 @@ class TestCliFetch:
                     "2025-07-01",
                     "--end-date",
                     "2025-07-03",
-                ]
+                ],
             )
         assert code == cli.EXIT_OK
         assert mock_client.get_usage.await_count == len(days)
@@ -190,13 +187,13 @@ class TestCliFetch:
 
         with (
             patch(
-                "custom_components.pge_energy.cli.portal_auth.async_login_or_refresh",
+                "scripts.cli.portal_auth.async_login_or_refresh",
                 AsyncMock(return_value=_login_result()),
             ),
-            patch("custom_components.pge_energy.cli.aiohttp.ClientSession") as session_cls,
-            patch("custom_components.pge_energy.cli.PGEApiClient", return_value=mock_client),
+            patch("scripts.cli.aiohttp.ClientSession") as session_cls,
+            patch("scripts.cli.PGEApiClient", return_value=mock_client),
             patch(
-                "custom_components.pge_energy.cli.iter_local_days",
+                "scripts.cli.iter_local_days",
                 return_value=[day],
             ),
         ):
@@ -212,7 +209,7 @@ class TestCliFetch:
                     "--end-date",
                     "2025-07-01",
                     "--json",
-                ]
+                ],
             )
         assert code == cli.EXIT_OK
         out = capsys.readouterr().out
@@ -227,11 +224,11 @@ class TestCliFetch:
         mock_client.get_usage = AsyncMock(side_effect=PGESchemaError("bad"))
         with (
             patch(
-                "custom_components.pge_energy.cli.portal_auth.async_login_or_refresh",
+                "scripts.cli.portal_auth.async_login_or_refresh",
                 AsyncMock(return_value=_login_result()),
             ),
-            patch("custom_components.pge_energy.cli.aiohttp.ClientSession") as session_cls,
-            patch("custom_components.pge_energy.cli.PGEApiClient", return_value=mock_client),
+            patch("scripts.cli.aiohttp.ClientSession") as session_cls,
+            patch("scripts.cli.PGEApiClient", return_value=mock_client),
         ):
             session_cls.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
             session_cls.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -244,7 +241,7 @@ class TestCliFetch:
                     "2025-07-01",
                     "--end-date",
                     "2025-07-02",
-                ]
+                ],
             )
         assert code == cli.EXIT_SCHEMA
 
@@ -254,7 +251,7 @@ class TestCliLogin:
         monkeypatch.setenv("PGE_EMAIL", "user@example.com")
         monkeypatch.setenv("PGE_PASSWORD", "secret")
         with patch(
-            "custom_components.pge_energy.cli.portal_auth.async_login_or_refresh",
+            "scripts.cli.portal_auth.async_login_or_refresh",
             AsyncMock(side_effect=PGEDiscoveryIncompleteError("nope")),
         ):
             code = cli.main(["login"])
@@ -271,7 +268,7 @@ class TestCliLogin:
             refresh_credential="refresh",
         )
         with patch(
-            "custom_components.pge_energy.cli.portal_auth.async_login_or_refresh",
+            "scripts.cli.portal_auth.async_login_or_refresh",
             AsyncMock(return_value=result),
         ):
             code = cli.main(["login"])

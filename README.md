@@ -193,13 +193,15 @@ Common issues — including quiet expected log warnings (`pypdf` layout warnings
 
 ## Development
 
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements_test.txt
-bash scripts/run_tests.sh
-```
+A [devcontainer](https://containers.dev/) configuration is provided, which sets up the required environment automatically.
 
-Local CLI testing reuses the production `api` / `auth` / `portal_auth` modules with an opt-in `.env` (gitignored, never auto-loaded): [`docs/LIVE_TESTING.md`](docs/LIVE_TESTING.md).
+1. Open the repository in VS Code, with the 'Dev Containers' extension installed.
+2. When prompted, select **Reopen in Container** (requires Docker).
+3. Run tests using `scripts/run_tests.sh`.
+
+If you have no `.env`, a dummy is automatically created by copying `.env.example`. The contents are then passed as environment variables, and the actual file masked from the devcontainer.
+
+Local CLI testing reuses the production `api` / `auth` / `portal_auth` modules, with the env vars described above.
 
 ## Security
 

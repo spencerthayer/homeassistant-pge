@@ -2,17 +2,17 @@
 """Capped live probe of PGE Cognito InitiateAuth rate limits.
 
 Safety rails (see plan):
-  - Opt-in --env-file only (never auto-load .env)
+  - Use PGE_EMAIL and PGE_PASSWORD environment variables
   - Prefer valid-password bursts (avoid failed-password lockout budget)
   - Hard stop on throttle / lock / MFA / CAPTCHA / HTTP 429
   - Absolute cap of 25 InitiateAuth calls per run
   - Failed-password probe capped at 3 unless --allow-lockout-probe
 
-Usage (from repo root; stop live HA first):
-  .venv/bin/python scripts/probe_cognito_rate_limit.py --env-file .env password-burst
-  .venv/bin/python scripts/probe_cognito_rate_limit.py --env-file .env refresh-burst
-  .venv/bin/python scripts/probe_cognito_rate_limit.py --env-file .env recovery
-  .venv/bin/python scripts/probe_cognito_rate_limit.py --env-file .env failed-password
+Usage (from repo root inside dev container; stop live HA first):
+  python3 scripts/probe_cognito_rate_limit.py password-burst
+  python3 scripts/probe_cognito_rate_limit.py refresh-burst
+  python3 scripts/probe_cognito_rate_limit.py recovery
+  python3 scripts/probe_cognito_rate_limit.py failed-password
 """
 
 from __future__ import annotations
@@ -32,10 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from custom_components.pge_energy.env_loader import (  # noqa: E402
-    EnvPermissionError,
-    load_env_file,
-)
+
 from custom_components.pge_energy.portal_auth import (  # noqa: E402
     COGNITO_AUTH_FLOW,
     COGNITO_CLIENT_ID,
@@ -57,16 +54,11 @@ STOP_MARKERS = (
 )
 
 
-def _env(name: str) -> str | None:
-    value = os.environ.get(name)
-    return value.strip() if value else None
-
-
 def _require_creds() -> tuple[str, str]:
-    email = _env("PGE_EMAIL")
-    password = _env("PGE_PASSWORD")
+    email = os.environ.get("PGE_EMAIL", "").strip()
+    password = os.environ.get("PGE_PASSWORD", "")
     if not email or not password:
-        raise SystemExit("Missing PGE_EMAIL / PGE_PASSWORD (use --env-file .env)")
+        raise SystemExit("Missing PGE_EMAIL / PGE_PASSWORD environment variables.")
     return email, password
 
 
@@ -178,16 +170,16 @@ async def _run_burst(
                         "message": payload.get("message") or payload.get("Message"),
                     }
                     throttle_headers = hdrs
-            if stop_reason is not None:
-                return {
-                    "mode": mode,
-                    "calls": calls,
-                    "stop_reason": stop_reason,
-                    "throttle_payload": throttle_payload,
-                    "throttle_headers": throttle_headers,
-                    "timeline": timeline,
-                    "concurrency": concurrency,
-                }
+                if stop_reason is not None:
+                    return {
+                        "mode": mode,
+                        "calls": calls,
+                        "stop_reason": stop_reason,
+                        "throttle_payload": throttle_payload,
+                        "throttle_headers": throttle_headers,
+                        "timeline": timeline,
+                        "concurrency": concurrency,
+                    }
 
         while calls < max_calls:
             if mode == "refresh-burst" and refresh_token is None:
@@ -357,12 +349,6 @@ def _write_fixture(path: Path, capture: dict[str, Any]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Probe PGE Cognito InitiateAuth rate limits")
-    parser.add_argument(
-        "--env-file",
-        required=True,
-        help="Opt-in dotenv path (maps email/password). Never auto-loaded.",
-    )
-    parser.add_argument("--allow-insecure-env", action="store_true")
     parser.add_argument("--max-calls", type=int, default=MAX_INITIATE_AUTH)
     parser.add_argument("--delay", type=float, default=0.0, help="Seconds between burst calls")
     parser.add_argument(
@@ -386,14 +372,6 @@ def main(argv: list[str] | None = None) -> int:
 
     max_calls = min(int(args.max_calls), MAX_INITIATE_AUTH)
     concurrency = max(1, min(int(args.concurrency), MAX_INITIATE_AUTH))
-    try:
-        load_env_file(args.env_file, refuse_insecure=not args.allow_insecure_env)
-    except EnvPermissionError as exc:
-        print(f"ENV_PERMISSION: {exc}", file=sys.stderr)
-        return 64
-    except FileNotFoundError as exc:
-        print(f"ENV_MISSING: {exc}", file=sys.stderr)
-        return 64
 
     if args.command == "password-burst":
         result = asyncio.run(
@@ -402,7 +380,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_calls=max_calls,
                 delay_s=args.delay,
                 concurrency=concurrency,
-            )
+            ),
         )
     elif args.command == "refresh-burst":
         result = asyncio.run(_run_burst(mode="refresh-burst", max_calls=max_calls, delay_s=args.delay))
@@ -417,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
                 delay_s=max(args.delay, 0.5),
                 wrong_password=True,
                 concurrency=1,
-            )
+            ),
         )
     else:
         return 64
@@ -434,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
                 "throttle_headers": result.get("throttle_headers"),
             },
             indent=2,
-        )
+        ),
     )
 
     if args.fixture_out and result.get("throttle_payload"):

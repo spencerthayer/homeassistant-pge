@@ -19,3 +19,5 @@ outputs/
 *.code-workspace
 
 .venv
+
+.coverage

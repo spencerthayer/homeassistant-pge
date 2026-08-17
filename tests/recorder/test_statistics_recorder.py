@@ -1,7 +1,7 @@
 """Recorder-backed import tests.
 
-Run:
-  .venv/bin/python -m pytest tests/recorder -p homeassistant -o addopts= -q
+Run (inside dev container):
+  python3 -m pytest tests/recorder -p homeassistant -o addopts= -q
 """
 
 from __future__ import annotations

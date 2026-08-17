@@ -1,30 +1,26 @@
 # Live / CLI testing
 
-For maintainers validating the GraphQL contract without a full Home Assistant UI session. Never commit `.env` or live capture bodies.
+For maintainers validating the GraphQL contract without a full Home Assistant UI session. Never commit live capture bodies.
 
 ## Credentials
 
-```bash
-# gitignored; chmod 600
-# keys: email, password, account_number (optional username)
-```
+Set environment variables in your devcontainer or shell (`PGE_EMAIL`, `PGE_PASSWORD`, optional `PGE_ACCOUNT_ID` or `PGE_ACCOUNT_HINT`, `PGE_REFRESH_CREDENTIAL`).
+Tests and CI read environment variables or mock data.
 
-Load only via explicit `--env-file`. Tests and CI never auto-load `.env`.
+## CLI (development harness under scripts/)
 
-## CLI (ships with the integration package)
-
-From a venv with `requirements_test.txt` installed:
+From the dev container:
 
 ```bash
-.venv/bin/python -m custom_components.pge_energy.cli --env-file .env login
-.venv/bin/python -m custom_components.pge_energy.cli --env-file .env renew
-.venv/bin/python -m custom_components.pge_energy.cli --env-file .env validate
-.venv/bin/python -m custom_components.pge_energy.cli --env-file .env fetch \
-  --resolution hourly --start-date 2025-07-01 --end-date 2025-07-03
+python3 scripts/cli.py login
+python3 scripts/cli.py renew
+python3 scripts/cli.py validate
+python3 scripts/cli.py fetch \
+  --resolution hourly --start-date 2026-08-01 --end-date 2026-08-03
 
-.venv/bin/python -m custom_components.pge_energy.cli --env-file .env billing-snapshot --json
-.venv/bin/python -m custom_components.pge_energy.cli --env-file .env billing-history --page 0 --json
-.venv/bin/python -m custom_components.pge_energy.cli --env-file .env programs --json
+python3 scripts/cli.py billing-snapshot --json
+python3 scripts/cli.py billing-history --page 0 --json
+python3 scripts/cli.py programs --json
 ```
 
 Output redacts account/person IDs by default; pass `--show-ids` only for local debugging. Use `--ask` to prompt for missing secrets via getpass.
@@ -47,8 +43,6 @@ Capture logs allowlist interval timestamps, kWh, amount, usage status, interval 
 ## Automated suite
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements_test.txt
 bash scripts/run_tests.sh
 ```
 

@@ -57,7 +57,7 @@ When **Download bill PDFs** is enabled, statement PDFs are written under `www/pg
 ## Local CLI vs PGE secrets
 
 - Home Assistant owner login is **not** PGE portal credentials.
-- Repo-root `.env` (when used for CLI) holds PGE test credentials: gitignored, mode **0600**, never committed; load only via explicit CLI `--env-file`.
+- Local CLI and dev tools read test credentials directly from environment variables (`PGE_EMAIL`, `PGE_PASSWORD`, etc.); never commit secrets.
 - Do not confuse HA UI login with PGE Configure → Update credentials.
 - Promote captured API shapes into `tests/fixtures/` only after sanitization and a clean `scripts/scan_secrets.py` pass. See `docs/LIVE_TESTING.md`.
 

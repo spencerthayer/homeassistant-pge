@@ -10,15 +10,11 @@ PID_FILE="$ROOT/outputs/ha_live/hass.pid"
 LOG_FILE="$ROOT/outputs/ha_live/hass.log"
 CURRENT_LINK="$ROOT/outputs/ha_live/current"
 LIVE_ROOT="$ROOT/outputs/ha_live"
-VENV_HASS="$ROOT/.venv/bin/hass"
-VENV_PY="$ROOT/.venv/bin/python"
 HOST="${HA_HOST:-127.0.0.1}"
 PORT="${HA_PORT:-8123}"
 
-if [[ ! -x "$VENV_HASS" ]]; then
-  echo "error: missing $VENV_HASS — create the project venv first" >&2
-  exit 1
-fi
+HASS_BIN="$(command -v hass)"
+PYTHON_BIN="$(command -v python3)"
 
 if [[ -f "$PID_FILE" ]]; then
   old_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
@@ -69,9 +65,16 @@ pick_run_dir() {
 run_dir="$(pick_run_dir || true)"
 
 if [[ -z "${run_dir:-}" || ! -d "$run_dir/config" ]]; then
-  echo "No existing live config — preparing a new run …"
-  "$VENV_PY" "$ROOT/scripts/dev_ha_live_server.py" --prepare-only
-  run_dir="$(pick_run_dir || true)"
+  echo "No existing live config — preparing a default run directory …"
+  run_dir="$LIVE_ROOT/default"
+  mkdir -p "$run_dir/config"
+  if [[ ! -f "$run_dir/config/configuration.yaml" ]]; then
+    cat <<'YAML' > "$run_dir/config/configuration.yaml"
+default_config:
+frontend:
+config:
+YAML
+  fi
 fi
 
 if [[ -z "${run_dir:-}" || ! -d "$run_dir/config" ]]; then
@@ -86,7 +89,7 @@ ln -s "$run_dir" "$CURRENT_LINK"
 config_dir="$run_dir/config"
 
 # Keep the custom component symlink pointed at the repo.
-"$VENV_PY" -c "
+"$PYTHON_BIN" -c "
 from pathlib import Path
 import shutil
 root = Path(r'''$ROOT''')
@@ -113,7 +116,7 @@ else
 fi
 
 # Double-fork daemonize so Cursor/agent shell teardown cannot reap hass.
-"$VENV_PY" - "$VENV_HASS" "$config_dir" "$LOG_FILE" "$PID_FILE" <<'PY'
+"$PYTHON_BIN" - "$HASS_BIN" "$config_dir" "$LOG_FILE" "$PID_FILE" <<'PY'
 import os
 import sys
 

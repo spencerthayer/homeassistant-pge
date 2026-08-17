@@ -253,7 +253,7 @@ Backs the portal “Current Use” card (est. current charges, billing-cycle day
 - **Companion op:** `getEnergyTrackerUserInfo(encryptedAccountNumber: String)` → `{ mainAccountPersonId, premiseIds }` returned `null` for a residential account and is not required.
 - **Gate:** `getAccountDetails.pgeEnergyTracker.energyTrackerInfo.showEnergyTracker` plus `detailsAvailable` control whether the portal shows the card.
 - **Discrepancy note:** `currentBillingPeriod.totalKwh` does not match a raw sum of imported hourly intervals over the same open period (live sample: 358 vs ~554 kWh) — treat these estimates as a separate PGE-provided series, not a cross-check of interval imports.
-- **Probe:** packaged CLI `billing-snapshot` / live portal Current Use card (maintainer notes in `docs/LIVE_TESTING.md`).
+- **Probe:** development CLI `scripts/cli.py billing-snapshot` / live portal Current Use card (maintainer notes in `docs/LIVE_TESTING.md`).
 - **HA import:** fetched in `billing_sync` after the ledger, soft-failing to the previous value; surfaced as sensors (`est_current_charges`, `est_next_bill_min`/`_max`, `billing_cycle_day`, `billing_cycle_total_days`) and panel “PGE est.” cards. No statistics are published — these are estimates that get revised daily.
 
 ### `getTimeOfDayPricingDetails` — REMOVED (v0.9.1)

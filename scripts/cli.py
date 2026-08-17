@@ -1,16 +1,17 @@
+#!/usr/bin/env python3
 """Local CLI harness for PGE auth/API debugging without a running Home Assistant.
 
-Usage (from repo root):
-  .venv/bin/python -m custom_components.pge_energy.cli validate
-  .venv/bin/python -m custom_components.pge_energy.cli fetch --resolution hourly \\
+Usage (from repo root inside dev container):
+  python3 scripts/cli.py validate
+  python3 scripts/cli.py fetch --resolution hourly \
       --start-date 2025-07-01 --end-date 2025-07-03
-  .venv/bin/python -m custom_components.pge_energy.cli login
-  .venv/bin/python -m custom_components.pge_energy.cli renew
+  python3 scripts/cli.py login
+  python3 scripts/cli.py renew
 
-Secrets from env only (or --ask / --env-file): PGE_EMAIL, PGE_PASSWORD,
-optional PGE_ACCOUNT_ID / PGE_REFRESH_CREDENTIAL. validate/fetch/login/renew
-use portal_auth email/password. Never pass secrets on argv. Prefer
---env-file .env (maps email/password/account_number). Never auto-load .env.
+Secrets read directly from environment variables (or --ask): PGE_EMAIL, PGE_PASSWORD,
+optional PGE_ACCOUNT_ID (or PGE_ACCOUNT_HINT) / PGE_REFRESH_CREDENTIAL.
+validate/fetch/login/renew use portal_auth email/password.
+Never pass secrets on argv.
 """
 
 from __future__ import annotations
@@ -30,13 +31,16 @@ from typing import Any
 
 import aiohttp
 
-from . import portal_auth
-from .api import PGEApiClient
-from .auth import PGEAuthManager, generate_immutable_account_key
-from .billing_api import PGEBillingApiClient
-from .day_validation import clip_hourly_to_local_day
-from .env_loader import EnvPermissionError, load_env_file
-from .exceptions import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from custom_components.pge_energy import portal_auth  # noqa: E402
+from custom_components.pge_energy.api import PGEApiClient  # noqa: E402
+from custom_components.pge_energy.auth import PGEAuthManager, generate_immutable_account_key  # noqa: E402
+from custom_components.pge_energy.billing_api import PGEBillingApiClient  # noqa: E402
+from custom_components.pge_energy.day_validation import clip_hourly_to_local_day  # noqa: E402
+from custom_components.pge_energy.exceptions import (  # noqa: E402
     PGEAuthenticationError,
     PGECaptchaUnsupportedError,
     PGEConnectionError,
@@ -46,8 +50,8 @@ from .exceptions import (
     PGERateLimitError,
     PGESchemaError,
 )
-from .models import UsageResolution
-from .time_util import iter_local_days, local_day_bounds, today_local
+from custom_components.pge_energy.models import UsageResolution  # noqa: E402
+from custom_components.pge_energy.time_util import iter_local_days, local_day_bounds, today_local  # noqa: E402
 
 _LOGGER = logging.getLogger("pge_energy.cli")
 
@@ -81,6 +85,8 @@ def _require_credential_creds(*, ask: bool) -> tuple[str, str | None]:
         password = password or getpass.getpass("PGE_PASSWORD: ")
     if not email:
         raise SystemExit("Missing PGE_EMAIL")
+    if not password:
+        raise SystemExit("Missing PGE_PASSWORD")
     return email, password
 
 
@@ -122,7 +128,7 @@ async def _resolve_auth_manager(*, ask: bool) -> PGEAuthManager:
     except PGEConnectionError as exc:
         raise SystemExit(f"CONNECTION_FAILED: {exc}") from exc
 
-    preferred = _env("PGE_ACCOUNT_ID")
+    preferred = _env("PGE_ACCOUNT_ID") or _env("PGE_ACCOUNT_HINT")
     if preferred and preferred in result.account_ids:
         account_id = preferred
     elif result.account_ids:
@@ -182,7 +188,7 @@ async def _cmd_validate(args: argparse.Namespace) -> int:
         acct = auth.account_id if args.show_ids else _mask(auth.account_id)
         print(
             f"OK auth account={acct} hourly_raw={len(resp.intervals)} "
-            f"hourly_clipped={len(clipped)} total_kwh={resp.total_kwh}"
+            f"hourly_clipped={len(clipped)} total_kwh={resp.total_kwh}",
         )
         return EXIT_OK
 
@@ -236,7 +242,7 @@ async def _cmd_fetch(args: argparse.Namespace) -> int:
                                 "kwh": str(iv.kwh),
                                 "amount": str(iv.amount) if iv.amount is not None else None,
                                 "account_key": iv.account_key,
-                            }
+                            },
                         )
             elif resolution == UsageResolution.MONTHLY:
                 resp = await client.get_monthly_usage_paged(start, end, auth.account_key)
@@ -249,7 +255,7 @@ async def _cmd_fetch(args: argparse.Namespace) -> int:
                             "kwh": str(iv.kwh),
                             "amount": str(iv.amount) if iv.amount is not None else None,
                             "account_key": iv.account_key,
-                        }
+                        },
                     )
             else:
                 # DAILY: prefer ≥31d windows live; still allow caller-chosen range.
@@ -263,7 +269,7 @@ async def _cmd_fetch(args: argparse.Namespace) -> int:
                             "kwh": str(iv.kwh),
                             "amount": str(iv.amount) if iv.amount is not None else None,
                             "account_key": iv.account_key,
-                        }
+                        },
                     )
         except PGEAuthenticationError as exc:
             print(f"AUTH_FAILED: {exc}")
@@ -412,7 +418,7 @@ async def _cmd_renew(args: argparse.Namespace) -> int:
     auth = PGEAuthManager(
         token="",
         encrypted_person_id="",
-        account_id=_env("PGE_ACCOUNT_ID") or "0",
+        account_id=_env("PGE_ACCOUNT_ID") or _env("PGE_ACCOUNT_HINT") or "0",
         email=email,
         password=password,
         refresh_credential=_env("PGE_REFRESH_CREDENTIAL"),
@@ -436,16 +442,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PGE Energy local CLI harness")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--ask", action="store_true", help="Prompt for missing secrets")
-    parser.add_argument(
-        "--env-file",
-        default=None,
-        help="Opt-in dotenv path (maps email/password/account_number). Never auto-loaded.",
-    )
-    parser.add_argument(
-        "--allow-insecure-env",
-        action="store_true",
-        help="Allow group/world-readable --env-file (not recommended)",
-    )
     parser.add_argument(
         "--show-ids",
         action="store_true",
@@ -495,19 +491,6 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
     )
-    if args.env_file:
-        try:
-            result = load_env_file(
-                args.env_file,
-                refuse_insecure=not args.allow_insecure_env,
-            )
-        except EnvPermissionError as exc:
-            print(f"ENV_PERMISSION: {exc}")
-            return EXIT_USAGE
-        except FileNotFoundError as exc:
-            print(f"ENV_MISSING: {exc}")
-            return EXIT_USAGE
-        _LOGGER.debug("Loaded env keys %s from %s", result.mapped_keys, result.path)
     try:
         if args.command == "validate":
             return asyncio.run(_cmd_validate(args))

@@ -53,15 +53,7 @@ done < <(
   pgrep -f "${CONFIG_MARKER}.*/config" 2>/dev/null || true
 )
 
-# 3) Launcher still holding the foreground/exec path
-while read -r pid; do
-  [[ -n "${pid:-}" ]] || continue
-  kill_pid "$pid" "dev_ha_live_server"
-done < <(
-  pgrep -f "${ROOT}/scripts/dev_ha_live_server.py" 2>/dev/null || true
-)
-
-# 4) Anything still bound to the UAT port (best-effort)
+# 3) Anything still bound to the UAT port (best-effort)
 if curl -sf --connect-timeout 1 "http://${HOST}:${PORT}/" >/dev/null 2>&1; then
   if command -v lsof >/dev/null 2>&1; then
     while read -r pid; do
