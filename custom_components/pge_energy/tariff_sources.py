@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -32,7 +33,7 @@ _LOGGER = logging.getLogger(__name__)
 _PDF_ALLOWED_HOSTS = ("assets.ctfassets.net",)
 _PDF_MAX_BYTES = 10 * 1024 * 1024
 _PDF_MAX_PAGES = 24
-_PARSER_VERSION = 1
+_PARSER_VERSION = 2
 
 # Gatsby page-data URLs
 _TOD_PAGE_DATA_URL = "https://portlandgeneral.com/page-data/about/info/pricing-plans/time-of-day/page-data.json"
@@ -90,13 +91,24 @@ class TariffSourceUpdate:
 
 
 def _extract_text_nodes(node: Any) -> list[str]:
-    """Recursively extract plain text from Contentful rich-text nodes."""
+    """Recursively extract plain text from Contentful rich-text and Gatsby page-data nodes.
+
+    Handles the legacy inline-rich-text format (``content`` lists with ``value``
+    keys) and the current Gatsby format where rich text is stored as a
+    JSON-encoded string under a ``raw`` key.  Walks every dict/list value so
+    nested ``contentEntries``, ``accordionItems``, ``bodyCopy``, etc. are reached.
+    """
     texts: list[str] = []
     if isinstance(node, dict):
-        if "value" in node and isinstance(node["value"], str):
+        if "value" in node and isinstance(node["value"], str) and node["value"].strip():
             texts.append(node["value"])
-        for child in node.get("content", []):
-            texts.extend(_extract_text_nodes(child))
+        raw = node.get("raw")
+        if isinstance(raw, str) and raw.strip():
+            with contextlib.suppress(ValueError, TypeError):
+                texts.extend(_extract_text_nodes(json.loads(raw)))
+        for val in node.values():
+            if isinstance(val, (dict, list)):
+                texts.extend(_extract_text_nodes(val))
     elif isinstance(node, list):
         for item in node:
             texts.extend(_extract_text_nodes(item))
@@ -119,10 +131,15 @@ def _find_contentful_modules(data: Any) -> list[dict[str, Any]]:
 
 
 def _find_document_lists(data: Any) -> list[dict[str, Any]]:
-    """Find ContentfulModuleDocumentList entries in page-data JSON."""
+    """Find ContentfulModuleDocumentList entries in page-data JSON.
+
+    Supports both the legacy ``contentful_component_type`` key and the current
+    Gatsby ``__typename`` discriminator.
+    """
     lists: list[dict[str, Any]] = []
     if isinstance(data, dict):
-        if data.get("contentful_component_type") == "ContentfulModuleDocumentList":
+        ctype = data.get("contentful_component_type") or data.get("__typename")
+        if ctype == "ContentfulModuleDocumentList":
             lists.append(data)
         for val in data.values():
             lists.extend(_find_document_lists(val))
@@ -137,15 +154,15 @@ def _find_document_lists(data: Any) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 _RATE_PATTERN = re.compile(
-    r"(?:off[\s-]*peak|off)[^$]*?(\d+\.?\d*)\s*(?:¢|cents?)\s*/\s*kWh",
+    r"off[\s-]*peak[^\n]*?(\d+\.?\d*)\s*(?:¢|cents?)\s*(?:/|per)\s*kWh",
     re.IGNORECASE,
 )
 _MID_PATTERN = re.compile(
-    r"(?:mid[\s-]*peak|mid)[^$]*?(\d+\.?\d*)\s*(?:¢|cents?)\s*/\s*kWh",
+    r"mid[\s-]*peak[^\n]*?(\d+\.?\d*)\s*(?:¢|cents?)\s*(?:/|per)\s*kWh",
     re.IGNORECASE,
 )
 _ON_PATTERN = re.compile(
-    r"(?:on[\s-]*peak|on)[^$]*?(\d+\.?\d*)\s*(?:¢|cents?)\s*/\s*kWh",
+    r"on[\s-]*peak[^\n]*?(\d+\.?\d*)\s*(?:¢|cents?)\s*(?:/|per)\s*kWh",
     re.IGNORECASE,
 )
 _AS_OF_PATTERN = re.compile(r"as\s+of\s+(\w+\s+\d{1,2},?\s+\d{4})", re.IGNORECASE)
@@ -246,15 +263,24 @@ def discover_tariff_documents(raw_json: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract unseen Standard Service and tariff-update documents from page-data.
 
     Returns a list of dicts with keys: url, title, effective_date_str, kind.
+
+    Supports both the legacy ``contentful_component_type`` schema (``header`` /
+    ``title`` rich-text dicts, ``asset.url``) and the current Gatsby schema
+    (``__typename``, ``documentListHeader`` plain string, plain string titles,
+    and ``file.url`` which may be protocol-relative).
     """
     docs: list[dict[str, Any]] = []
     doc_lists = _find_document_lists(raw_json)
 
     for doc_list in doc_lists:
         header = ""
-        header_nodes = _extract_text_nodes(doc_list.get("header", {}))
-        if header_nodes:
-            header = " ".join(header_nodes).strip().lower()
+        header_field = doc_list.get("documentListHeader")
+        if isinstance(header_field, str):
+            header = header_field.strip().lower()
+        else:
+            header_nodes = _extract_text_nodes(doc_list.get("header", {}))
+            if header_nodes:
+                header = " ".join(header_nodes).strip().lower()
 
         documents = doc_list.get("documents") or []
         if not isinstance(documents, list):
@@ -263,18 +289,27 @@ def discover_tariff_documents(raw_json: dict[str, Any]) -> list[dict[str, Any]]:
         for doc in documents:
             if not isinstance(doc, dict):
                 continue
-            title = ""
-            title_nodes = _extract_text_nodes(doc.get("title", {}))
-            if title_nodes:
-                title = " ".join(title_nodes).strip()
 
-            asset = doc.get("asset") or {}
+            title = ""
+            raw_title = doc.get("title")
+            if isinstance(raw_title, str):
+                title = raw_title.strip()
+            elif isinstance(raw_title, dict):
+                title_nodes = _extract_text_nodes(raw_title)
+                if title_nodes:
+                    title = " ".join(title_nodes).strip()
+
+            file_data = doc.get("file") or doc.get("asset") or {}
             url = ""
-            if isinstance(asset, dict):
-                url = asset.get("url", "")
+            if isinstance(file_data, dict):
+                url = file_data.get("url", "")
 
             if not url or not title:
                 continue
+
+            # Ensure absolute HTTPS URL (new schema uses protocol-relative).
+            if url.startswith("//"):
+                url = "https:" + url
 
             # Determine kind from header
             kind = "unknown"
