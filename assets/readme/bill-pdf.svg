@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="200" viewBox="0 0 1200 200"
+     role="img" aria-labelledby="title desc">
+  <title id="title">Bill PDF pipeline</title>
+  <desc id="desc">Download, parse, reconcile, import.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1526"/>
+      <stop offset="1" stop-color="#080e1a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="200" rx="16" fill="url(#bg)"/>
+
+  <text x="56" y="48" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="26" font-weight="700" fill="#E0EAF8">Bill PDFs</text>
+
+  <!-- Stage 1 -->
+  <rect x="56" y="72" width="200" height="80" rx="10" fill="#0C1320" stroke="#172036"/>
+  <rect x="56" y="72" width="200" height="4" rx="2" fill="#2A78D6"/>
+  <text x="156" y="112" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="16" font-weight="600" fill="#E0EAF8">Download</text>
+  <text x="156" y="132" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#3E5678">REST API</text>
+
+  <!-- Arrow -->
+  <line x1="264" y1="112" x2="310" y2="112" stroke="#3E5678" stroke-width="2"/>
+
+  <!-- Stage 2 -->
+  <rect x="326" y="72" width="200" height="80" rx="10" fill="#0C1320" stroke="#172036"/>
+  <rect x="326" y="72" width="200" height="4" rx="2" fill="#EB6834"/>
+  <text x="426" y="112" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="16" font-weight="600" fill="#E0EAF8">Parse</text>
+  <text x="426" y="132" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#3E5678">pypdf · 18 fields</text>
+
+  <!-- Arrow -->
+  <line x1="534" y1="112" x2="580" y2="112" stroke="#3E5678" stroke-width="2"/>
+
+  <!-- Stage 3 -->
+  <rect x="596" y="72" width="200" height="80" rx="10" fill="#0C1320" stroke="#172036"/>
+  <rect x="596" y="72" width="200" height="4" rx="2" fill="#1BAF7A"/>
+  <text x="696" y="112" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="16" font-weight="600" fill="#E0EAF8">Reconcile</text>
+  <text x="696" y="132" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#3E5678">GraphQL check</text>
+
+  <!-- Arrow -->
+  <line x1="804" y1="112" x2="850" y2="112" stroke="#3E5678" stroke-width="2"/>
+
+  <!-- Stage 4 -->
+  <rect x="866" y="72" width="200" height="80" rx="10" fill="#0C1320" stroke="#172036"/>
+  <rect x="866" y="72" width="200" height="4" rx="2" fill="#D4A843"/>
+  <text x="966" y="112" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="16" font-weight="600" fill="#E0EAF8">Import</text>
+  <text x="966" y="132" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#3E5678">18 statistics</text>
+</svg>

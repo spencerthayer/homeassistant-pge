@@ -1,50 +1,14 @@
 # Portland General Electric (PGE) Energy for Home Assistant
 
-![PGE Energy for Home Assistant — imports Portland General Electric usage, cost, and outdoor temperature into the Home Assistant Energy dashboard and a first-party /pge panel](./assets/readme/hero.svg)
+![PGE Energy for Home Assistant — imports Portland General Electric usage, cost, billing, Time of Day pricing, and outdoor temperature into the Home Assistant Energy dashboard and a first-party /pge panel](./assets/readme/hero.svg)
 
-Home Assistant custom integration for **Portland General Electric (PGE)** — imports your energy usage into the HA Energy dashboard and a first-party `/pge` panel, using PGE's own in-house portal GraphQL API (not Opower, not HTML scraping).
+Home Assistant custom integration for **Portland General Electric (PGE)** — imports your energy usage, billing, and Time of Day pricing into the HA Energy dashboard and a first-party `/pge` panel, using PGE's own in-house portal GraphQL API (not Opower, not HTML scraping).
 
 > **Not Pacific Gas & Electric (PG&E).** This is for [Portland General Electric](https://portlandgeneral.com/) in Oregon. It does **not** work with California PG&E / Opower integrations.
 >
 > **Unsupported / unofficial:** MFA- and CAPTCHA-enabled PGE accounts are not supported (fail closed). The portal API is unofficial and may change without notice. Not affiliated with or endorsed by Portland General Electric.
 
 **Requires Home Assistant 2026.7.0+.**
-
----
-
-## The panel
-
-A first-party Home Assistant panel at `/pge` — usage, cost, outdoor temperature, billing, programs, and live sync progress for all configured accounts.
-
-![PGE panel At a glance — yesterday and week kWh and cost, statement cycle, since-statement, PGE estimates, amount due (values redacted)](./assets/readme/panel-glance.png)
-_At a glance — yesterday and week totals, statement and since-statement sums, PGE's own open-cycle estimates, amount due._
-
-![PGE panel Usage — hourly kWh bars with cost overlay, range accounting and breakdown tables (values redacted)](./assets/readme/panel-usage.png)
-_Usage — hourly kWh bars with a cost series, plus Range accounting and per-hour breakdown tables._
-
-<p align="center">
-  <img src="./assets/readme/panel-analytics.png" width="49%" alt="PGE panel Analytics — weather vs usage scatter and cost intelligence (values redacted)">
-  <img src="./assets/readme/panel-billing.png" width="49%" alt="PGE panel Billing — balance, statement, lifetime totals, bill PDF link, programs (values redacted)">
-  <br><em>Analytics — weather vs usage and cost intelligence · Billing — balance, statements, bill PDFs, programs.</em>
-</p>
-
----
-
-## What it does
-
-- **Hourly → daily → monthly usage history** (kWh, cost, outdoor temperature) imported into HA Energy statistics, with tiered backfill of your full account history.
-- **Dual-published data**: every series is both a `sensor.pge_*` entity and a `pge_energy:*` statistic, so it works in the Energy dashboard, History, and the entity Statistics graph.
-- **Billing & programs** sensors — balance, amount due, statements, lifetime totals, autopay/paperless/PTR/Green Future/Time-of-Day enrollment, and PGE's open-cycle estimates.
-- **Unattended login** — PGE email/password (Cognito → Apigee), stored locally with automatic token renewal; rate limits soft-fail instead of locking your account.
-- **Resilient by default** — auth or sync failures keep your last-known sensors and recorder history; long backfills self-heal on stall; sync status always reaches a terminal state.
-
-## How it works
-
-![How it works — unattended login, tiered hourly/daily/monthly import into dual-published statistics, then Home Assistant Energy and the /pge panel](./assets/readme/workflow.svg)
-
-A single `PGECoordinator` authenticates once per entry, then polls PGE's GraphQL endpoint on a Pacific sync clock (default **every 4 hours** from **12:00 AM** — 12am/4am/8am/noon/4pm/8pm). Closed intervals are imported as statistics; the `/pge` panel reads those same recorder statistics for its charts. Auth chain and data model details live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md).
-
-PGE publishes usage **once overnight**, so a "stuck" latest interval near `01:00` Pacific during the day is expected — not a sync failure.
 
 ---
 
@@ -72,6 +36,269 @@ Setup validates connectivity with an hourly request for yesterday, then the firs
 
 ---
 
+## The panel
+
+A first-party Home Assistant panel at `/pge` — usage, cost, outdoor temperature, billing, programs, Time of Day pricing, and live sync progress for all configured accounts.
+
+![PGE panel At a glance — yesterday and week kWh and cost, statement cycle, since-statement, PGE estimates, amount due (values redacted)](./assets/readme/panel-glance.png)
+_At a glance — yesterday and week totals, statement and since-statement sums, PGE's own open-cycle estimates, amount due. Click any KPI tile to copy its value._
+
+![PGE panel Usage — hourly kWh bars with cost overlay, range accounting and breakdown tables (values redacted)](./assets/readme/panel-usage.png)
+_Usage — hourly kWh bars with a cost series, grid flow for solar accounts, plus Range accounting and per-hour breakdown tables._
+
+<p align="center">
+  <img src="./assets/readme/panel-analytics.png" width="49%" alt="PGE panel Analytics — weather vs usage scatter and cost intelligence (values redacted)">
+  <img src="./assets/readme/panel-billing.png" width="49%" alt="PGE panel Billing — balance, statement, lifetime totals, bill PDF link, programs (values redacted)">
+  <br><em>Analytics — weather vs usage and cost intelligence · Billing — balance, statements, bill PDFs, programs.</em>
+</p>
+
+---
+
+## What it does
+
+![How PGE Energy syncs into Home Assistant — login, tiered import, billing/TOD sync, then Energy dashboard and /pge panel](./assets/readme/workflow.svg)
+
+- **Hourly → daily → monthly usage history** (kWh, cost, outdoor temperature) imported into HA Energy statistics, with tiered backfill of your full account history.
+- **Dual-published data**: every series is both a `sensor.pge_*` entity and a `pge_energy:*` statistic, so it works in the Energy dashboard, History, and the entity Statistics graph.
+- **Time of Day pricing hub** — current E-TOU period/rate KPIs, next-transition countdown, weekly schedule grid (Sun–Sat × 24h Pacific), usage bucketed by period, and a local TOD imported-energy estimate that compares TOD pricing to Basic rates.
+
+![Time of Day pricing hub — period KPIs, schedule grid, usage by period, TOD vs Basic estimate](./assets/readme/tod-hub.svg)
+
+- **Billing & programs** sensors — balance, amount due, statements, lifetime totals, autopay/paperless/PTR/Green Future/Time-of-Day enrollment, and PGE's open-cycle estimates.
+
+![Billing and programs — balance, amount due, current bill, program enrollments, lifetime totals](./assets/readme/billing-programs.svg)
+
+- **Bill PDFs (opt-in)** — download statement PDFs, parse them locally with `pypdf`, reconcile against GraphQL, and import 18 statement-dated statistics.
+
+![Bill PDF pipeline — download, parse, reconcile, import](./assets/readme/bill-pdf.svg)
+
+- **Multi-account discovery** — one PGE login automatically discovers all active accounts; each gets its own config entry, device, and statistics.
+
+![Multi-account discovery — one login, multiple independent account entries](./assets/readme/multi-account.svg)
+
+- **Solar / net-metering** — signed HOURLY grid import/export split into `_consumption` / `_return` (and `_cost` / `_compensation`) for the Energy dashboard and panel.
+- **Unattended login** — PGE email/password (Cognito → Apigee), stored locally with automatic token renewal; rate limits soft-fail instead of locking your account.
+- **Resilient by default** — auth or sync failures keep your last-known sensors and recorder history; long backfills self-heal on stall; sync status always reaches a terminal state.
+
+## How it works
+
+A single `PGECoordinator` authenticates once per entry, then polls PGE's GraphQL endpoint on a Pacific sync clock (default **every 4 hours** from **12:00 AM** — 12am/4am/8am/noon/4pm/8pm). Closed intervals are imported as statistics; the `/pge` panel reads those same recorder statistics for its charts. Auth chain and data model details live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md).
+
+PGE publishes usage **once overnight**, so a "stuck" latest interval near `01:00` Pacific during the day is expected — not a sync failure.
+
+### Connection architecture
+
+```mermaid
+sequenceDiagram
+    participant U as User / HA
+    participant C as Cognito<br/>(USER_PASSWORD_AUTH)
+    participant A as Apigee<br/>(token exchange)
+    participant G as GraphQL API<br/>(apix.portlandgeneral.com)
+
+    U->>C: email + password
+    C-->>A: access token + encrypted IDs
+    A-->>U: Bearer token
+
+    loop Every 4h (Pacific clock)
+        U->>A: ensure_valid_token()
+        alt token expired
+            A->>C: REFRESH_TOKEN_AUTH
+            C-->>A: new token
+        end
+        A->>G: Bearer + headers
+        G-->>A: JSON response
+        A-->>U: parsed intervals / billing
+    end
+
+    Note over U,G: MFA / CAPTCHA → fail closed<br/>Rate limit → soft-fail with cooldown<br/>401 → force renew once, then fail
+```
+
+### Data extraction pipeline
+
+```mermaid
+flowchart LR
+    subgraph PGE["PGE Portal API"]
+        direction TB
+        GH["GetUsageCompare<br/>(HOURLY / DAILY / MONTHLY)"]
+        BD["getAccountDetailList<br/>(balance, bills, programs)"]
+        ET["getEnergyTrackerData<br/>(open-cycle estimates)"]
+        PR["8× program detail ops<br/>(PTR, TOD, battery, etc.)"]
+        RC["getRateCompare<br/>(TOD vs Basic)"]
+        NM["getNetMeteringDetails<br/>(solar credits)"]
+    end
+
+    subgraph INT["Integration"]
+        direction TB
+        COORD["PGECoordinator<br/>(polls every 4h Pacific)"]
+        USAGE["PGEApiClient<br/>(usage API)"]
+        BILL["PGEBillingApiClient<br/>(billing/programs API)"]
+        AUTH["PGEAuthManager<br/>(Cognito → Apigee)"]
+        BACK["backfill.py<br/>(hourly → daily → monthly)"]
+        DIR["usage_direction.py<br/>(split signed import/export)"]
+    end
+
+    subgraph HA["Home Assistant"]
+        direction TB
+        REC["Recorder<br/>(statistics DB)"]
+        ENT["sensor.pge_* entities"]
+        BIN["binary_sensor.pge_*"]
+        DASH["Energy Dashboard"]
+        PANEL["/pge panel"]
+        WEB["WebSocket API"]
+    end
+
+    GH --> USAGE
+    BD --> BILL
+    ET --> BILL
+    PR --> BILL
+    RC --> BILL
+    NM --> BILL
+
+    AUTH --> USAGE
+    AUTH --> BILL
+
+    USAGE --> COORD
+    BILL --> COORD
+
+    COORD --> BACK
+    COORD --> DIR
+
+    BACK --> REC
+    DIR --> REC
+    COORD --> ENT
+    BILL --> BIN
+
+    REC --> DASH
+    REC --> PANEL
+    WEB --> PANEL
+    ENT --> PANEL
+```
+
+### Complete GraphQL operations map
+
+Every GraphQL operation this integration calls, with all extracted fields:
+
+```mermaid
+flowchart TD
+    subgraph USAGE["Usage API — GetUsageCompare"]
+        direction TB
+        U1["<b>getUsageCompare</b><br/>params: startDate, endDate, displayMode,<br/>accountId, encryptedPersonId"]
+        U1F1["isCustomerEnrolledInTOD"]
+        U1F2["acctType"]
+        U1F3["totalKwhUsage"]
+        U1F4["totalKwhCost"]
+        U1L["<b>hourlyUsageList / dailyUsageList / monthlyUsageList</b>"]
+        U1LF1["intervalTime · startDate · endDate"]
+        U1LF2["kwh · amount · temperature"]
+        U1LF3["intervalSize · usageStatus"]
+        U1LF4["similarHomesKwh · efficientSimilarHomesKwh · rank"]
+        U1 --- U1F1 & U1F2 & U1F3 & U1F4
+        U1 --- U1L
+        U1L --- U1LF1 & U1LF2 & U1LF3 & U1LF4
+    end
+
+    subgraph BILLING["Billing API — getAccountDetailList"]
+        direction TB
+        B1["<b>getAccountDetailList</b><br/>params: accountStatus, groupId,<br/>paging, sort, filter"]
+        B1F1["accountNumber · encryptedAccountNumber"]
+        B1F2["encryptedPersonId"]
+        B1B["<b>billInfo</b>"]
+        B1BF1["amountDue · dueDate"]
+        B1BF2["lastPaymentAmount · lastPaymentDate"]
+        B1BD["<b>billDetails</b>"]
+        B1BDF1["amountDue · kwh · billDate · dueDate"]
+        B1BDF2["previousBalance · totalAdjustments"]
+        B1BDF3["totalCurrentCharges · totalBalanceAfterBill"]
+        B1BDF4["billingPeriodStartDate · billingPeriodEndDate"]
+        B1BDF5["encryptedBillId"]
+        B1AP["<b>autoPay</b> → isEnrolled"]
+        B1PP["<b>isPaperlessBillEnrolled</b> → result"]
+        B1PR["<b>premiseInfo</b> → encryptedPremiseId"]
+        B1SA["saDetails → encryptedSAId"]
+        B1TMP["<b>viewBillAverageTemperature</b>"]
+        B1TMF["averageTemperature · date"]
+        B1TMF2["totalCost · totalKwh"]
+        B1 --- B1F1 & B1F2
+        B1 --- B1B
+        B1B --- B1BF1 & B1BF2
+        B1B --- B1BD
+        B1BD --- B1BDF1 & B1BDF2 & B1BDF3 & B1BDF4 & B1BDF5
+        B1 --- B1AP & B1PP & B1PR & B1SA & B1TMP
+        B1TMP --- B1TMF & B1TMF2
+    end
+
+    subgraph ESTIMATES["Open-Cycle Estimates — getEnergyTrackerData"]
+        direction TB
+        E1["<b>getEnergyTrackerData</b><br/>params: encryptedAccountNumber,<br/>encryptedPersonId"]
+        E1F1["detailsAvailable · hasMoreThan15DaysOfData"]
+        E1D["<b>details</b>"]
+        E1DF["billingCycleDay · numberOfBillingDays"]
+        E1DF2["billToDateAmount"]
+        E1DF3["minProjectedAmount · maxProjectedAmount"]
+        E1CP["<b>currentBillingPeriod</b> → totalKwh"]
+        E1PP["<b>previousBillingPeriod</b> → totalKwh"]
+        E1 --- E1F1
+        E1 --- E1D
+        E1D --- E1DF & E1DF2 & E1DF3
+        E1 --- E1CP & E1PP
+    end
+
+    subgraph PROGRAMS["Program Status — getProgramsEnrollmentStatusDetails"]
+        direction TB
+        P1["<b>getProgramsEnrollmentStatusDetails</b><br/>params: encryptedAccountNumber,<br/>encryptedPremiseId, encryptedSaId"]
+        P1ES["<b>energyShifting[]</b>"]
+        P1ESF["isEligible · isEnrolled · programName"]
+        P1RN["<b>renewables[]</b>"]
+        P1RNF["isEligible · isEnrolled · programName"]
+        P1FL["ytdFlexLoadEarnings · onBillFlexLoadEarnings"]
+        P1 --- P1ES & P1RN & P1FL
+        P1ES --- P1ESF
+        P1RN --- P1RNF
+    end
+
+    subgraph DETAIL["Program Details — best-effort ops"]
+        direction TB
+        D1["<b>getPeakTimeRebateEnrollmentDetails</b><br/>encryptedAccountNumber, ptrMockServerDate"]
+        D1F["enrollmentStatus · cardType · totalEarnedCredit"]
+        D1E["peakTimeEvents[] · seasonalDates"]
+        D2["<b>getRenewablesEnrollmentDetails</b><br/>encryptedServiceAgreementId"]
+        D2F["greenFutureProgramDetails → isEnrolled, consumptionPercentage"]
+        D2H["habitatSupport → isEnrolled"]
+        D3["<b>getTimeOfDayEnrollmentDetails</b><br/>encryptedAccountNumber, encryptedServiceAgreementId"]
+        D3F["isEnrolled · cardType · offPeakCharges · midPeakCharges · onPeakCharges · planSavings"]
+        D4["<b>getSmartThermostatEnrollmentDetails</b><br/>encryptedAccountNumber"]
+        D4F["isEnrolled · cardType"]
+        D5["<b>getSmartChargingEnrollmentDetails</b><br/>encryptedAccountNumber"]
+        D5F["enrollmentStatus · cardType · activeSeason"]
+        D6["<b>getSmartBatteryDetails</b><br/>encryptedServiceAgreementId"]
+        D6F["isEnrolled · currentBillCreditAmount · ytdCreditAmount · ytdKwh"]
+        D7["<b>getNetMeteringDetails</b><br/>encryptedAccountId, encryptedPremiseId"]
+        D7F["isEnrolled · currentBalance · lastStatementCredit · yearToDateGeneration · yearToDateExport"]
+        D1 --- D1F & D1E
+        D2 --- D2F & D2H
+        D3 --- D3F
+        D4 --- D4F
+        D5 --- D5F
+        D6 --- D6F
+        D7 --- D7F
+    end
+
+    subgraph COMPARE["Rate Compare — getRateCompare"]
+        direction TB
+        R1["<b>getRateCompare</b><br/>params: accountNumber"]
+        R1F["touTotal · basicTotal · savings · comparisonPeriod"]
+        R1 --- R1F
+    end
+
+    USAGE ~~~ BILLING
+    BILLING ~~~ ESTIMATES
+    ESTIMATES ~~~ PROGRAMS
+    PROGRAMS ~~~ DETAIL
+    DETAIL ~~~ COMPARE
+```
+
+---
+
 ## Usage
 
 ### Energy Dashboard
@@ -94,10 +321,10 @@ If the dashboard shows a huge negative kWh spike after a history rebuild, use th
 
 ### PGE panel `/pge`
 
-The integration registers `/pge` and (for admin users, by default) a sidebar item **PGE**. Use it for usage, cost, temperature, billing, programs, and live sync progress:
+The integration registers `/pge` and (for admin users, by default) a sidebar item **PGE**. Use it for usage, cost, temperature, billing, programs, Time of Day pricing, and live sync progress:
 
 - **At a glance** — yesterday and week (Pacific Sunday → yesterday) kWh/cost, statement and since-statement sums, PGE estimate cards, amount due. Click any KPI tile to copy its label, value, and note to the clipboard. A collapsible **Sync status** section shows live import progress and PGE publication gaps.
-- **Usage** — combined multi-series chart. For generating accounts, **grid flow** bars go above zero for import and below zero for export (Opower/HA Energy style); the money line is **import cost**, or **net interval amount** (`cost − compensation`) when export credits are present in the range — an interval estimate, not PGE’s statement credit bank. Ranges end at Pacific midnight of the current day. Fast-select: **24h / This cycle / Last cycle / 7 days / Month**, with **More…** for `6h`/`12h`/`3mo`/`6mo`/`12mo`/YTD. **Range accounting** uses the same signed projection.
+- **Usage** — combined multi-series chart. For generating accounts, **grid flow** bars go above zero for import and below zero for export (Opower/HA Energy style); the money line is **import cost**, or **net interval amount** (`cost − compensation`) when export credits are present in the range — an interval estimate, not PGE's statement credit bank. Ranges end at Pacific midnight of the current day. Fast-select: **24h / This cycle / Last cycle / 7 days / Month**, with **More…** for `6h`/`12h`/`3mo`/`6mo`/`12mo`/YTD. **Range accounting** uses the same signed projection.
 - **Analytics** — weather vs usage (daily kWh vs outdoor °F) and cost intelligence (monthly average rate, billed vs payments).
 - **Billing** — balance, statements, lifetime totals, and programs; when bill PDFs are enabled, **View bill PDF** + **Statement details (PDF)**.
 - **Time of Day** — current E-TOU period/rate KPIs with a next-transition countdown, an enrollment badge, and the week schedule grid (Sun–Sat × 24h Pacific) highlighting the current hour. Usage is bucketed by period (energy, imported cost, TOD-priced, share, avg billed ¢/kWh). The local comparison **hero** is TOD-priced kWh vs **billed imported energy** for a window chosen **in the Time of Day section** (24h / This cycle / Last cycle / 7 days / Month / More… / custom; default Last cycle; independent of the Usage chart range). A collapsed **How this was calculated** table also shows the offline/portal **rate-card** TOD vs Basic model (kWh × published/default ¢ — not billed). Official PGE `getRateCompare` savings stay a separate card when the portal returns them. Holiday/off-peak days for the current year are listed in a collapsed note.
@@ -186,6 +413,7 @@ Time-of-Day rates are resolved per poll: manual overrides → effective-dated on
 - DAILY windows under ~31 days may hard-error; prefer HOURLY or ≥31-day DAILY.
 - MONTHLY returns the latest ~12 billing periods per call; older history requires paging backwards.
 - Grid export uses signed HOURLY rows only; DAILY/MONTHLY net totals are not split into gross import/export.
+- PGE's hourly temperature records are not _always_ in sync with the energy data.
 - PGE has told customers they are moving away from third-party data providers to their own in-house portal, and the Opower-backed endpoints used by the upstream `opower` integration have started returning 503 ([`tronikos/opower#210`](https://github.com/tronikos/opower/issues/210)). This integration talks to PGE's own portal API and is unaffected by that shutdown.
 - PGE may return transient 502s (retried). PGE's API is unofficial and may change without notice.
 

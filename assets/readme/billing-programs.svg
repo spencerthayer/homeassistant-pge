@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="280" viewBox="0 0 1200 280"
+     role="img" aria-labelledby="title desc">
+  <title id="title">Billing and programs</title>
+  <desc id="desc">Balance, due, estimate, bill, programs.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1526"/>
+      <stop offset="1" stop-color="#080e1a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="280" rx="16" fill="url(#bg)"/>
+
+  <text x="56" y="48" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="26" font-weight="700" fill="#E0EAF8">Billing &amp; Programs</text>
+
+  <!-- KPI row -->
+  <rect x="56" y="72" width="180" height="72" rx="10" fill="#0C1320" stroke="#172036"/>
+  <text x="72" y="96" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#4A6A96">BALANCE</text>
+  <text x="72" y="124" font-family="ui-monospace, Menlo, monospace" font-size="24" font-weight="700" fill="#E0EAF8">$142.87</text>
+
+  <rect x="252" y="72" width="180" height="72" rx="10" fill="#0C1320" stroke="#172036"/>
+  <text x="268" y="96" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#4A6A96">DUE</text>
+  <text x="268" y="124" font-family="ui-monospace, Menlo, monospace" font-size="24" font-weight="700" fill="#EB6834">$87.42</text>
+
+  <rect x="448" y="72" width="160" height="72" rx="10" fill="#0C1320" stroke="#172036"/>
+  <text x="464" y="96" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#4A6A96">DATE</text>
+  <text x="464" y="124" font-family="-apple-system, sans-serif" font-size="22" font-weight="700" fill="#E0EAF8">Aug 28</text>
+
+  <rect x="624" y="72" width="260" height="72" rx="10" fill="#0C1320" stroke="#172036"/>
+  <text x="640" y="96" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#4A6A96">PGE ESTIMATE</text>
+  <text x="640" y="124" font-family="ui-monospace, Menlo, monospace" font-size="22" font-weight="700" fill="#D4A843">$72 – $96</text>
+
+  <!-- Bill bar -->
+  <rect x="56" y="160" width="520" height="28" rx="6" fill="#0C1320" stroke="#172036"/>
+  <rect x="56" y="160" width="350" height="28" rx="6" fill="#2A78D6" opacity="0.1"/>
+  <text x="70" y="179" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#6880A0">$87.42 · 618 kWh</text>
+
+  <!-- Programs: simple dots -->
+  <text x="920" y="84" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#4A6A96">PROGRAMS</text>
+  <g transform="translate(920 96)">
+    <circle cx="6" cy="6" r="5" fill="#1BAF7A"/>
+    <text x="18" y="11" font-family="-apple-system, sans-serif" font-size="13" fill="#8499B8">Auto Pay</text>
+    <circle cx="106" cy="6" r="5" fill="#1BAF7A"/>
+    <text x="118" y="11" font-family="-apple-system, sans-serif" font-size="13" fill="#8499B8">Paperless</text>
+    <circle cx="210" cy="6" r="5" fill="#1BAF7A"/>
+    <text x="222" y="11" font-family="-apple-system, sans-serif" font-size="13" fill="#8499B8">TOD</text>
+
+    <circle cx="6" cy="30" r="5" fill="#1BAF7A"/>
+    <text x="18" y="35" font-family="-apple-system, sans-serif" font-size="13" fill="#8499B8">Green Future</text>
+    <circle cx="126" cy="30" r="5" fill="#1BAF7A"/>
+    <text x="138" y="35" font-family="-apple-system, sans-serif" font-size="13" fill="#8499B8">PTR</text>
+    <circle cx="196" cy="30" r="5" fill="#3E5678"/>
+    <text x="208" y="35" font-family="-apple-system, sans-serif" font-size="13" fill="#5A7DB0">Charging</text>
+  </g>
+
+  <text x="920" y="150" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#4A6A96">LIFETIME</text>
+  <text x="920" y="168" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#6880A0">$2,847 · 18,420 kWh</text>
+</svg>

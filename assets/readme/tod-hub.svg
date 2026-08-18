@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="320" viewBox="0 0 1200 320"
+     role="img" aria-labelledby="title desc">
+  <title id="title">Time of Day pricing</title>
+  <desc id="desc">Period rates, schedule, usage, TOD vs Basic.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1526"/>
+      <stop offset="1" stop-color="#080e1a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="320" rx="16" fill="url(#bg)"/>
+
+  <text x="56" y="48" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="26" font-weight="700" fill="#E0EAF8">Time of Day</text>
+
+  <!-- Rate cards -->
+  <rect x="56" y="72" width="180" height="72" rx="10" fill="#0C1320" stroke="#0F261E"/>
+  <text x="72" y="96" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#4A6A96">OFF-PEAK</text>
+  <text x="72" y="124" font-family="ui-monospace, Menlo, monospace" font-size="24" font-weight="700" fill="#1BAF7A">8.9¢</text>
+
+  <rect x="252" y="72" width="180" height="72" rx="10" fill="#0C1320" stroke="#1F1F14"/>
+  <text x="268" y="96" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#4A6A96">MID-PEAK</text>
+  <text x="268" y="124" font-family="ui-monospace, Menlo, monospace" font-size="24" font-weight="700" fill="#D4A843">16.7¢</text>
+
+  <rect x="448" y="72" width="180" height="72" rx="10" fill="#0C1320" stroke="#1F1414"/>
+  <text x="464" y="96" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#4A6A96">ON-PEAK</text>
+  <text x="464" y="124" font-family="ui-monospace, Menlo, monospace" font-size="24" font-weight="700" fill="#E05535">43.1¢</text>
+
+  <rect x="644" y="72" width="160" height="72" rx="10" fill="#0C1320" stroke="#172036"/>
+  <text x="660" y="96" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#4A6A96">NEXT</text>
+  <text x="660" y="124" font-family="-apple-system, sans-serif" font-size="20" font-weight="700" fill="#E0EAF8">4:00 PM</text>
+
+  <!-- Schedule: simple color blocks -->
+  <text x="56" y="174" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#4A6A96">SCHEDULE</text>
+  <g transform="translate(56 182)">
+    <rect x="0" y="0" width="36" height="40" rx="4" fill="#1BAF7A" opacity="0.2"/>
+    <rect x="44" y="0" width="36" height="40" rx="4" fill="#1BAF7A" opacity="0.2"/>
+    <rect x="44" y="0" width="36" height="14" rx="4" fill="#D4A843" opacity="0.25"/>
+    <rect x="44" y="0" width="36" height="7" rx="4" fill="#E05535" opacity="0.25"/>
+    <rect x="88" y="0" width="36" height="40" rx="4" fill="#1BAF7A" opacity="0.2"/>
+    <rect x="88" y="0" width="36" height="14" rx="4" fill="#D4A843" opacity="0.25"/>
+    <rect x="88" y="0" width="36" height="7" rx="4" fill="#E05535" opacity="0.25"/>
+    <rect x="132" y="0" width="36" height="40" rx="4" fill="#1BAF7A" opacity="0.2"/>
+    <rect x="132" y="0" width="36" height="14" rx="4" fill="#D4A843" opacity="0.25"/>
+    <rect x="132" y="0" width="36" height="7" rx="4" fill="#E05535" opacity="0.25"/>
+    <rect x="176" y="0" width="36" height="40" rx="4" fill="#1BAF7A" opacity="0.2"/>
+    <rect x="176" y="0" width="36" height="14" rx="4" fill="#D4A843" opacity="0.25"/>
+    <rect x="176" y="0" width="36" height="7" rx="4" fill="#E05535" opacity="0.25"/>
+    <rect x="220" y="0" width="36" height="40" rx="4" fill="#1BAF7A" opacity="0.2"/>
+    <rect x="220" y="0" width="36" height="14" rx="4" fill="#D4A843" opacity="0.25"/>
+    <rect x="220" y="0" width="36" height="7" rx="4" fill="#E05535" opacity="0.25"/>
+    <rect x="264" y="0" width="36" height="40" rx="4" fill="#1BAF7A" opacity="0.2"/>
+  </g>
+
+  <!-- Usage bars -->
+  <text x="56" y="248" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#4A6A96">USAGE BY PERIOD</text>
+  <g transform="translate(56 256)">
+    <rect x="0" y="0" width="180" height="20" rx="4" fill="#1BAF7A" opacity="0.15"/>
+    <text x="6" y="15" font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#1BAF7A">off 14.2kWh</text>
+    <rect x="196" y="0" width="100" height="20" rx="4" fill="#D4A843" opacity="0.15"/>
+    <text x="202" y="15" font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#D4A843">mid 7.8kWh</text>
+    <rect x="312" y="0" width="50" height="20" rx="4" fill="#E05535" opacity="0.15"/>
+    <text x="318" y="15" font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#E05535">on 2.7kWh</text>
+  </g>
+
+  <!-- Comparison -->
+  <rect x="644" y="160" width="320" height="64" rx="10" fill="#0C1320" stroke="#172036"/>
+  <text x="660" y="184" font-family="-apple-system, sans-serif" font-size="14" font-weight="600" fill="#C0D0E8">TOD vs Basic</text>
+  <text x="660" y="210" font-family="ui-monospace, Menlo, monospace" font-size="20" font-weight="700" fill="#1BAF7A">$3.73</text>
+  <text x="740" y="210" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#4A6A96">vs</text>
+  <text x="770" y="210" font-family="ui-monospace, Menlo, monospace" font-size="20" font-weight="700" fill="#8499B8">$4.47</text>
+</svg>

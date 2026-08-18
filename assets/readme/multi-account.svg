@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="180" viewBox="0 0 1200 180"
+     role="img" aria-labelledby="title desc">
+  <title id="title">Multi-account discovery</title>
+  <desc id="desc">One PGE login discovers all active accounts.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1526"/>
+      <stop offset="1" stop-color="#080e1a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="180" rx="16" fill="url(#bg)"/>
+
+  <text x="56" y="48" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="26" font-weight="700" fill="#E0EAF8">One Login, All Accounts</text>
+
+  <!-- Login -->
+  <rect x="56" y="72" width="160" height="76" rx="10" fill="#0C1320" stroke="#2A78D6"/>
+  <circle cx="96" cy="100" r="10" fill="none" stroke="#2A78D6" stroke-width="2"/>
+  <path d="M92,92 v-2 a4,4 0 0 1 8,0 v2" fill="none" stroke="#2A78D6" stroke-width="2"/>
+  <text x="96" y="132" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#6880A0">login</text>
+
+  <!-- Arrow -->
+  <line x1="224" y1="110" x2="280" y2="110" stroke="#3E5678" stroke-width="2"/>
+
+  <!-- Account 1 -->
+  <rect x="296" y="72" width="180" height="76" rx="10" fill="#0C1320" stroke="#172036"/>
+  <rect x="296" y="72" width="180" height="4" rx="2" fill="#2A78D6"/>
+  <text x="386" y="116" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#E0EAF8">1234567890</text>
+
+  <!-- Account 2 -->
+  <rect x="500" y="72" width="180" height="76" rx="10" fill="#0C1320" stroke="#172036"/>
+  <rect x="500" y="72" width="180" height="4" rx="2" fill="#EB6834"/>
+  <text x="590" y="116" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#E0EAF8">9876543210</text>
+
+  <!-- Account 3 -->
+  <rect x="704" y="72" width="180" height="76" rx="10" fill="#0C1320" stroke="#172036" stroke-dasharray="5 3"/>
+  <rect x="704" y="72" width="180" height="4" rx="2" fill="#1BAF7A"/>
+  <text x="794" y="116" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#E0EAF8">5551234567</text>
+
+  <!-- Plus -->
+  <text x="920" y="120" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="28" fill="#3E5678">+</text>
+</svg>
