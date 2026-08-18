@@ -224,4 +224,4 @@ async def test_unload_tears_down_panel_when_last_entry():
     assert ok is True
     assert DOMAIN not in hass.data
     remove.assert_called_once_with(hass, PANEL_URL_PATH)
-    assert hass.services.async_remove.call_count == 4
+    assert hass.services.async_remove.call_count == 5

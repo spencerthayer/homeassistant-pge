@@ -260,7 +260,7 @@ Backs the portal “Current Use” card (est. current charges, billing-cycle day
 
 This speculative GraphQL operation was never verified against a live portal and has been removed. The `get_tod_pricing` API method and its billing-sync caller `_async_fetch_tod_snapshot` no longer exist.
 
-- **Resolution chain:** account overrides (`tod_rate_off_peak`/`_mid_peak`/`_on_peak`/`_basic_service`) → retained last-good portal `TodSnapshot` (when present; restored from the Store by `async_load_store`, no live op populates it in v0.9.1) → built-in defaults (`DEFAULT_TOD_RATES` / `DEFAULT_BASIC_RATE`). Period definitions, holiday rules, and the offline engine live in `tod_schedule.py`; resolution in `tod_pricing.resolve_tod_rates`.
+- **Resolution chain (v0.10.0):** account overrides (`tod_rate_off_peak`/`_mid_peak`/`_on_peak`/`_basic_service`) → effective-dated on-device catalog (auto-discovered from PGE public sources, domain-global `TariffUpdaterCoordinator`) → retained last-good portal `TodSnapshot` → built-in defaults (`DEFAULT_TOD_RATES`; `DEFAULT_BASIC_RATE` removed). Period definitions, holiday rules, and the offline engine live in `tod_schedule.py`; resolution in `tod_pricing.resolve_tod_rates` (legacy), `resolve_tod_rates_from_catalog` (new), and `resolve_basic_from_catalog`. On-device catalogs in `tod_tariff.py` with bundled seed rates (verified 2026-08-16 from official PGE PDFs/pages); `tariff_sources.py` fetches from PGE Gatsby page-data endpoints; `tariff_store.py` persists to domain-global Store; `tariff_updater.py` coordinates discovery with conditional requests and retry backoff.
 - **Replacement ops:** `getTimeOfDayEnrollmentDetails` now carries `annualLookBackEarnedCredit`, `offPeakCharges`, `midPeakCharges`, `onPeakCharges`, `planSavings` as diagnostic attributes on the TOD binary sensor. `getRateCompare` (params: `{ accountNumber }`) returns `touTotal`, `basicTotal`, `savings`, `comparisonPeriod` — persisted as a diagnostic `RateCompareSnapshot` on the coordinator; its `savings` aggregate powers the `tod_vs_basic_savings` sensor fallback and the panel's official “PGE TOD vs Basic savings” block (see below). Neither op is used to derive per-period ¢/kWh rates.
 
 ### `getRateCompare` (`RateCompareParams!`) — v0.9.1+
@@ -269,7 +269,7 @@ This speculative GraphQL operation was never verified against a live portal and 
 - **Variables:** `{ params: { accountNumber } }` — plaintext account number (not encrypted).
 - **Fields:** `touTotal`, `basicTotal`, `savings`, `comparisonPeriod`.
 - **Consumers (v0.9.1):** `savings` feeds `sensor.pge_*_tod_vs_basic_savings` when the legacy pricing-plan `savings_total` snapshot is absent, the `tod.rate_compare` block of the `pge_energy/accounts` websocket payload, and the official “PGE TOD vs Basic savings” card on `/pge#tod`. Per-period rates are never derived from these aggregates.
-- **Panel local estimate (v0.9.2+):** `/pge#tod` does **not** use `getRateCompare` totals for the local hero. `computeTodPlanCompare` prices the selected window’s imported hourly kWh at effective TOD rates and compares that to **billed imported cost** (not to `DEFAULT_BASIC_RATE` × kWh). Inferred ¢/kWh is billed ÷ kWh. `todEnrollmentVerdict` drives the hero (**Would cost about $X more** / **Would save about $X** when not enrolled; **Costing** / **Saving** versus Basic when enrolled). The estimate window is chosen in `#tod` (`_todRangeKey`, default `last_cycle`) and does not follow the Usage chart range. The collapsed “How this was calculated” table still shows the rate-card TOD vs Basic model as “$X more” / “$X cheaper” (never a signed savings figure). Energy charges only — fees/taxes/adjustments omitted. Official portal savings remain the separate green card.
+- **Panel local estimate (v0.10.0):** `/pge#tod` uses `estimatePlanCostSeries` with effective-dated catalog rates for a dual-source local estimate (TOD vs Basic). `reconcilePlanComparison` compares the local estimate against `getRateCompare` official totals for the same range. `detectFlatPortalRates` provides diagnostic flat-rate warnings. `todEnrollmentVerdict` drives the hero. Tariff status block shows catalog freshness and discovery state. Energy charges only — fees/taxes/adjustments omitted. Official portal savings remain the separate green card.
 - **Failure policy:** best-effort; soft-fails to last-good `RateCompareSnapshot`. A null/missing payload, or a payload whose fields are all null, parses as an empty/blank snapshot and **does not** overwrite a previously valid snapshot.
 
 ### `getSmartChargingEnrollmentDetails` (`SmartChargingEnrollmentDetailsParams!`) — v0.9.1+
@@ -315,6 +315,27 @@ When parsing reconciles: `_bill_pdf_amount_due`, `_bill_pdf_total_kwh`, plus 16 
 ### Billing statistics suffixes
 
 External `pge_energy:<account_key>_*` series: `_account_balance`, `_amount_due`, `_last_payment_amount`, `_bill_avg_temperature`, `_ytd_program_savings` (mean); `_bill_amount`, `_bill_kwh`, `_payment_amount` (sum from ledger). Mean series are **external-only** — snapshot-stamped rows are never mirrored onto recorder entity statistics because HA Core's `compile_statistics` does a plain INSERT for the same hour and logs `UNIQUE constraint failed: statistics.metadata_id, statistics.start_ts` ("Blocked attempt to insert duplicated statistic rows") against a pre-seeded slot. The `_bill_amount` / `_payment_amount` sum series still mirror onto `sensor.pge_*_lifetime_billed` / `_lifetime_payments` entity stats. Every entity mirror (usage energy/cost/outdoor temperature + bill/payment sums) goes through `_async_mirror_entity_statistics`, which drops rows newer than `utcnow` floored − 2h so it can never race the recorder's compile INSERT; HA natively compiles those newest hours and the mirror re-curates them once they age past the cutoff.
+
+### On-device tariff catalogs (v0.10.0+)
+
+- **Purpose:** effective-dated TOD and Basic comparison rates, independently discovered by each HA instance from PGE public sources.
+- **Sources:** PGE Gatsby page-data endpoints (`/page-data/about/info/pricing-plans/time-of-day/page-data.json`, `/page-data/about/info/rates-and-regulatory/tariff/page-data.json`) and Standard Service PDFs linked from the tariff catalog. No Cognito/Apigee authentication required.
+- **Bundled seeds:** TOD rates (off=0.0893, mid=0.1670, on=0.4313) and Basic comparison (base=0.11289, schedule_125=0.05619, rate=0.16908) verified 2026-08-16 from official PGE PDFs/pages.
+- **Storage:** domain-global `TariffStore(Store)` v1 (`tariff_store.py`), shared by all PGE entries. Active merged rows are persisted; same-date supersessions replace the previous row (audit fields are reserved for future use).
+- **Coordinator:** `TariffUpdaterCoordinator` (`tariff_updater.py`) runs domain-globally, started on first entry setup, stopped on last entry unload. Conditional requests (ETag/Last-Modified), retry backoff, effective-date wake scheduling. Service `pge_energy.refresh_tariffs` for manual trigger.
+- **Resolution:** manual overrides → effective-dated catalog → portal snapshot → bundled defaults. `resolve_tod_rates_from_catalog` and `resolve_basic_from_catalog` in `tod_pricing.py`.
+- **Models:** `TodTariffRow`, `BasicComparisonRow`, `SourceInfo` in `tod_tariff.py`. Catalog lookup via `tod_rate_card_at` / `basic_comparison_rate_at`. Merge via `merge_validated_catalog`. Serialization/deserialization for Store persistence.
+
+### Websocket `tod` payload (v0.10.0+)
+
+The `tod` block in `pge_energy/accounts` is enriched with:
+
+- `enrolled` — boolean | null from `ProgramsSnapshot.time_of_day_enrolled` (dataclass field; not a dict `.get`)
+- `catalogs` — `{ tod: [...], basic: [...] }` serialized from domain-global tariff updater
+- `tariff_status` — `{ last_attempt, last_success, next_check, is_stale, last_error }`
+- `basic_comparison_rate`, `basic_comparison_source`, `basic_comparison_effective_from`, `basic_comparison_component_basis`, `basic_comparison_exclusions`
+- `override_rates` — only valid configured period overrides (positive values)
+- `override_scope` — `"entire_range"` when any override is active, else null
 
 ## Panel websocket API (`/pge`)
 

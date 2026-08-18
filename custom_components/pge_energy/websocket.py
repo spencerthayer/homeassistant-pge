@@ -118,6 +118,11 @@ from .const import (
 )
 from .coordinator import PGECoordinator
 from .options import get_entry_option
+from .tod_pricing import (
+    resolve_basic_from_catalog,
+    tod_overrides_from_entry,
+)
+from .tod_tariff import serialize_tariff_catalogs
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -288,9 +293,17 @@ def _account_payload(hass: HomeAssistant, entry_id: str, coordinator: PGECoordin
     }
 
 
+def _tod_enrolled_from_programs(programs_snap: object | None) -> bool | None:
+    """Read TOD enrollment from ``ProgramsSnapshot`` (dataclass, not a mapping)."""
+    if programs_snap is None:
+        return None
+    enrolled = getattr(programs_snap, "time_of_day_enrolled", None)
+    return enrolled if isinstance(enrolled, bool) else None
+
+
 @callback
 def _tod_payload(coordinator: PGECoordinator) -> dict[str, Any]:
-    """Effective E-TOU period/rates/sources + portal snapshot for the panel."""
+    """Effective E-TOU period/rates/sources + portal snapshot + catalog data for the panel."""
     tod = coordinator.tod
     rate_card = tod.rate_card
     snapshot = coordinator.tod_snapshot
@@ -309,6 +322,41 @@ def _tod_payload(coordinator: PGECoordinator) -> dict[str, Any]:
         if savings_total is None and rate_compare.savings is not None:
             savings_total = rate_compare.savings
             savings_source = "rate_compare"
+
+    enrolled = _tod_enrolled_from_programs(coordinator.programs_snapshot)
+
+    # Effective-dated catalog data from the domain tariff updater.
+    hass = coordinator.hass
+    tariff_key = f"{DOMAIN}_tariff_updater"
+    tariff_coord = hass.data.get(DOMAIN, {}).get(tariff_key)
+    tod_rows = tariff_coord.tod_rows if tariff_coord else []
+    basic_rows = tariff_coord.basic_rows if tariff_coord else []
+
+    # Serialize catalogs for the panel.
+    catalogs_payload = serialize_tariff_catalogs(tod_rows, basic_rows)
+
+    # Tariff updater status.
+    tariff_status: dict[str, Any] = {}
+    if tariff_coord is not None:
+        sd = tariff_coord.store_data
+        tariff_status = {
+            "last_attempt": sd.last_attempt,
+            "last_success": sd.last_success,
+            "next_check": sd.next_retry,
+            "is_stale": tariff_coord.is_stale,
+            "last_error": sd.last_error,
+        }
+
+    # Manual override validity check — "entire_range" only when all three TOD
+    # periods and basic_service have overrides (estimator requires all four).
+    overrides = tod_overrides_from_entry(coordinator.entry)
+    override_valid = {k: v for k, v in overrides.items() if isinstance(v, (int, float)) and v > 0}
+    has_all_tod_overrides = all(p in override_valid for p in ("off_peak", "mid_peak", "on_peak"))
+    has_all_overrides = has_all_tod_overrides and "basic_service" in override_valid
+
+    # Resolve basic comparison rate from catalog.
+    basic_rate_val, basic_src, basic_eff, basic_basis, basic_exc = resolve_basic_from_catalog(overrides, basic_rows)
+
     return {
         "period": tod.period.value,
         "is_holiday": tod.is_holiday,
@@ -325,6 +373,17 @@ def _tod_payload(coordinator: PGECoordinator) -> dict[str, Any]:
         "portal_fetched_at": (
             snapshot.fetched_at.isoformat() if snapshot is not None and snapshot.fetched_at else None
         ),
+        # New fields for v0.10.0
+        "enrolled": enrolled,
+        "catalogs": catalogs_payload,
+        "tariff_status": tariff_status,
+        "basic_comparison_rate": basic_rate_val,
+        "basic_comparison_source": basic_src,
+        "basic_comparison_effective_from": basic_eff,
+        "basic_comparison_component_basis": basic_basis,
+        "basic_comparison_exclusions": basic_exc,
+        "override_rates": override_valid,
+        "override_scope": "entire_range" if has_all_overrides else None,
     }
 
 

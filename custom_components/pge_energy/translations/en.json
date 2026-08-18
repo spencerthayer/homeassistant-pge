@@ -101,7 +101,7 @@
           "tod_rate_off_peak": "TOD off-peak rate (USD/kWh)",
           "tod_rate_mid_peak": "TOD mid-peak rate (USD/kWh)",
           "tod_rate_on_peak": "TOD on-peak rate (USD/kWh)",
-          "tod_rate_basic_service": "Basic service rate (USD/kWh)"
+          "tod_rate_basic_service": "Basic comparison-basis rate (USD/kWh)"
         },
         "data_description": {
           "polling_interval": "How often to refresh recent usage. Default is every 4 hours on the Pacific clock grid.",
@@ -121,10 +121,10 @@
           "bill_pdf_retention": "Which downloaded PDF files to keep on disk. Normalized records and recorder history are kept independently.",
           "bill_pdf_rolling_count": "When retention is Rolling count, keep this many newest statement PDF files.",
           "backfill_concurrency": "Parallel day fetches for the hourly tier (1–4).",
-          "tod_rate_off_peak": "Leave blank to use the last portal rate, then the built-in default (0.0893).",
-          "tod_rate_mid_peak": "Leave blank to use the last portal rate, then the built-in default (0.1670).",
-          "tod_rate_on_peak": "Leave blank to use the last portal rate, then the built-in default (0.4313).",
-          "tod_rate_basic_service": "Flat Basic (Schedule 32/34) rate used for the counterfactual. Leave blank to use portal/fallback."
+          "tod_rate_off_peak": "Leave blank to use the on-device catalog (or a saved override) for each Pacific hour.",
+          "tod_rate_mid_peak": "Leave blank to use the on-device catalog (or a saved override) for each Pacific hour.",
+          "tod_rate_on_peak": "Leave blank to use the on-device catalog (or a saved override) for each Pacific hour.",
+          "tod_rate_basic_service": "Whole-range Basic comparison rate (Schedule 7 base + Schedule 125). Leave blank to use the on-device catalog effective for each hour."
         }
       },
       "credentials": {

@@ -54,8 +54,8 @@ class TestResolveTodRates:
             "mid_peak": RATE_SOURCE_DEFAULT,
             "on_peak": RATE_SOURCE_DEFAULT,
         }
-        assert card.basic_rate == 0.10
-        assert card.basic_source == RATE_SOURCE_DEFAULT
+        assert card.basic_rate is None
+        assert card.basic_source is None
 
     def test_portal_wins_over_defaults(self):
         card = resolve_tod_rates(None, _portal())
@@ -103,8 +103,8 @@ class TestResolveTodRates:
         assert card.sources["mid_peak"] == RATE_SOURCE_DEFAULT
         assert card.rates["on_peak"] == 0.42
         assert card.sources["on_peak"] == RATE_SOURCE_PORTAL
-        assert card.basic_rate == 0.10
-        assert card.basic_source == RATE_SOURCE_DEFAULT
+        assert card.basic_rate is None
+        assert card.basic_source is None
 
 
 class TestTodOverridesFromEntry:

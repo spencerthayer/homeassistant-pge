@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
-VERSION = "0.9.13"
+VERSION = "0.10.0"
 PLATFORMS = ["sensor", "binary_sensor"]
 
 # Custom panel (registered once per HA instance, not per entry).
@@ -125,9 +125,9 @@ DEFAULT_TOD_RATES: dict[str, float] = {
     TodPeriod.MID_PEAK.value: 0.1670,
     TodPeriod.ON_PEAK.value: 0.4313,
 }
-# Flat "Basic" (Schedule 32/34) counterfactual price used by the local estimate
-# when the portal does not expose a Basic rate card. Fallback estimate.
-DEFAULT_BASIC_RATE = 0.10
+# NOTE: DEFAULT_BASIC_RATE removed in v0.10.0 — replaced by effective-dated
+# BasicComparisonRow catalog in tod_tariff.py.  Every Basic value now comes from
+# a source-backed effective-dated comparison rate or an explicit override.
 
 # Portal rate-plan identifiers observed in the GQL responses.
 RATE_PLAN_TOU = "TOU"

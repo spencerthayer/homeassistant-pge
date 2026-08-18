@@ -496,6 +496,15 @@ def _optional_tod_rate_selector() -> OptionalNumberSelector:
     )
 
 
+def _optional_tod_rate_schema_item(entry: config_entries.ConfigEntry, key: str) -> tuple[Any, OptionalNumberSelector]:
+    """Optional USD/kWh override. Omit ``default=None`` so HA still renders the box."""
+    current = _clean_tod_rate(get_entry_option(entry, key, None))
+    selector = _optional_tod_rate_selector()
+    if current is not None:
+        return vol.Optional(key, default=current), selector
+    return vol.Optional(key), selector
+
+
 def _options_schema(entry: config_entries.ConfigEntry) -> vol.Schema:
     history_mode = get_entry_option(entry, CONF_HISTORY_MODE, DEFAULT_HISTORY_MODE)
     history_mode_value = history_mode.value if isinstance(history_mode, HistoryMode) else str(history_mode)
@@ -643,24 +652,17 @@ def _options_schema(entry: config_entries.ConfigEntry) -> vol.Schema:
                     mode=NumberSelectorMode.BOX,
                 )
             ),
-            # Optional Time of Day manual rate overrides. Blank = use portal
-            # cache, then offline defaults (never blank on a sync failure).
-            vol.Optional(
-                CONF_TOD_RATE_OFF_PEAK,
-                default=get_entry_option(entry, CONF_TOD_RATE_OFF_PEAK, None),
-            ): _optional_tod_rate_selector(),
-            vol.Optional(
-                CONF_TOD_RATE_MID_PEAK,
-                default=get_entry_option(entry, CONF_TOD_RATE_MID_PEAK, None),
-            ): _optional_tod_rate_selector(),
-            vol.Optional(
-                CONF_TOD_RATE_ON_PEAK,
-                default=get_entry_option(entry, CONF_TOD_RATE_ON_PEAK, None),
-            ): _optional_tod_rate_selector(),
-            vol.Optional(
-                CONF_TOD_RATE_BASIC_SERVICE,
-                default=get_entry_option(entry, CONF_TOD_RATE_BASIC_SERVICE, None),
-            ): _optional_tod_rate_selector(),
+            # Optional Time of Day manual rate overrides. Blank = on-device
+            # catalog (never a hidden 10¢ Basic default). Omit default=None so
+            # HA still renders empty number boxes.
+            **dict(
+                [
+                    _optional_tod_rate_schema_item(entry, CONF_TOD_RATE_OFF_PEAK),
+                    _optional_tod_rate_schema_item(entry, CONF_TOD_RATE_MID_PEAK),
+                    _optional_tod_rate_schema_item(entry, CONF_TOD_RATE_ON_PEAK),
+                    _optional_tod_rate_schema_item(entry, CONF_TOD_RATE_BASIC_SERVICE),
+                ]
+            ),
         }
     )
 

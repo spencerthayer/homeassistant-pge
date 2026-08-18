@@ -1,7 +1,12 @@
 """Transition coordinator + effective rate resolution for Time of Day pricing.
 
-- :func:`resolve_tod_rates` implements the plan's rate priority:
-  **manual override → last portal rates → defaults** (never blank).
+- :func:`resolve_tod_rates` implements the legacy rate priority:
+  **manual override → last portal rates → bundled defaults** (never blank).
+- :func:`resolve_tod_rates_from_catalog` uses effective-dated on-device catalogs
+  for panel estimation: **manual override → effective-dated catalog → portal
+  snapshot → bundled defaults**.
+- :func:`resolve_basic_from_catalog` resolves the Basic comparison rate:
+  **manual override → effective-dated catalog**.
 - :class:`TodPricingCoordinator` recomputes the current period/rate at Pacific
   now and schedules a wake-up at the next E-TOU transition so sensors flip on
   time even between usage polls.
@@ -31,7 +36,6 @@ from .const import (
     CONF_TOD_RATE_MID_PEAK,
     CONF_TOD_RATE_OFF_PEAK,
     CONF_TOD_RATE_ON_PEAK,
-    DEFAULT_BASIC_RATE,
     DEFAULT_TOD_RATES,
     DOMAIN,
     E_TOU_PERIODS,
@@ -43,11 +47,20 @@ from .const import (
 from .options import get_entry_option
 from .time_util import PGE_TZ
 from .tod_schedule import is_holiday, is_off_peak_day, next_transition, period_at
+from .tod_tariff import (
+    BasicComparisonRow,
+    TodTariffRow,
+    basic_comparison_rate_at,
+    tod_rate_card_at,
+)
 
 if TYPE_CHECKING:
     from .coordinator import PGECoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+# Source label for on-device catalog rows.
+RATE_SOURCE_CATALOG = "catalog"
 
 # Period value → entry options CONF key for manual overrides.
 _OVERRIDE_PERIOD_KEYS: dict[str, str] = {
@@ -62,13 +75,20 @@ class TodRateCard:
     """Effective per-period rates plus the flat Basic counterfactual rate.
 
     ``sources`` mirrors ``rates`` per period so the panel can label each band
-    (``override`` | ``portal`` | ``default``) rather than one global source.
+    (``override`` | ``catalog`` | ``portal`` | ``default``) rather than one
+    global source.
     """
 
     rates: dict[str, float]
     sources: dict[str, str]
     basic_rate: float | None
-    basic_source: str
+    basic_source: str | None
+    basic_effective_from: str | None = None
+    basic_component_basis: str | None = None
+    basic_exclusions: str | None = None
+    tod_effective_from: str | None = None
+    tod_component_basis: str | None = None
+    tod_exclusions: str | None = None
 
 
 def tod_overrides_from_entry(entry: ConfigEntry) -> dict[str, float | None]:
@@ -92,12 +112,12 @@ def resolve_tod_rates(
     *,
     defaults: Mapping[str, float] | None = None,
 ) -> TodRateCard:
-    """Resolve effective rates: override beats portal beats default.
+    """Resolve effective rates: override beats portal beats bundled default.
 
     ``overrides`` is period-keyed (see :func:`tod_overrides_from_entry`);
     ``portal`` is the last-good portal snapshot (may be partial/None).
-    ``basic_service`` falls back to ``DEFAULT_BASIC_RATE`` when neither an
-    override nor the portal provides a Basic flat rate.
+    ``basic_service`` returns None when neither override nor portal provides
+    a Basic rate (the old DEFAULT_BASIC_RATE fallback is removed in v0.10.0).
     """
     overrides = overrides or {}
     base = dict(defaults or DEFAULT_TOD_RATES)
@@ -125,8 +145,8 @@ def resolve_tod_rates(
         basic_rate = float(portal.basic_rate)
         basic_source = RATE_SOURCE_PORTAL
     else:
-        basic_rate = float(DEFAULT_BASIC_RATE)
-        basic_source = RATE_SOURCE_DEFAULT
+        basic_rate = None
+        basic_source = None
 
     return TodRateCard(
         rates=rates,
@@ -134,6 +154,98 @@ def resolve_tod_rates(
         basic_rate=basic_rate,
         basic_source=basic_source,
     )
+
+
+def resolve_tod_rates_from_catalog(
+    overrides: Mapping[str, float | None] | None,
+    portal: TodSnapshot | None,
+    tod_rows: list[TodTariffRow] | None,
+    *,
+    defaults: Mapping[str, float] | None = None,
+) -> TodRateCard:
+    """Resolve TOD rates using effective-dated catalogs.
+
+    Priority: manual override → effective-dated catalog → portal snapshot
+    → bundled defaults.
+    """
+    overrides = overrides or {}
+    base = dict(defaults or DEFAULT_TOD_RATES)
+    portal_rates = portal.rates if portal is not None else {}
+    now = datetime.now(PGE_TZ)
+
+    rates: dict[str, float] = {}
+    sources: dict[str, str] = {}
+    effective_from: str | None = None
+    component_basis: str | None = None
+    exclusions: str | None = None
+
+    # Try effective-dated catalog first
+    catalog_row = tod_rate_card_at(now, tod_rows) if tod_rows else None
+
+    for period in E_TOU_PERIODS:
+        override = overrides.get(period)
+        if isinstance(override, (int, float)) and override > 0:
+            rates[period] = float(override)
+            sources[period] = RATE_SOURCE_OVERRIDE
+        elif catalog_row is not None:
+            catalog_rate = getattr(catalog_row, period, None)
+            if catalog_rate is not None and isinstance(catalog_rate, (int, float)) and catalog_rate > 0:
+                rates[period] = float(catalog_rate)
+                sources[period] = RATE_SOURCE_CATALOG
+                effective_from = catalog_row.effective_from
+                component_basis = catalog_row.component_basis
+                exclusions = catalog_row.exclusions
+            elif period in portal_rates and isinstance(portal_rates[period], (int, float)) and portal_rates[period] > 0:
+                rates[period] = float(portal_rates[period])
+                sources[period] = RATE_SOURCE_PORTAL
+            else:
+                rates[period] = float(base.get(period, 0.0))
+                sources[period] = RATE_SOURCE_DEFAULT
+        elif period in portal_rates and isinstance(portal_rates[period], (int, float)) and portal_rates[period] > 0:
+            rates[period] = float(portal_rates[period])
+            sources[period] = RATE_SOURCE_PORTAL
+        else:
+            rates[period] = float(base.get(period, 0.0))
+            sources[period] = RATE_SOURCE_DEFAULT
+
+    return TodRateCard(
+        rates=rates,
+        sources=sources,
+        basic_rate=None,  # resolved separately
+        basic_source=None,
+        tod_effective_from=effective_from,
+        tod_component_basis=component_basis,
+        tod_exclusions=exclusions,
+    )
+
+
+def resolve_basic_from_catalog(
+    overrides: Mapping[str, float | None] | None,
+    basic_rows: list[BasicComparisonRow] | None,
+) -> tuple[float | None, str | None, str | None, str | None, str | None]:
+    """Resolve the Basic comparison rate from catalog.
+
+    Priority: manual override → effective-dated catalog.
+
+    Returns (rate, source, effective_from, component_basis, exclusions).
+    """
+    overrides = overrides or {}
+    basic_override = overrides.get("basic_service")
+    if isinstance(basic_override, (int, float)) and basic_override > 0:
+        return float(basic_override), RATE_SOURCE_OVERRIDE, None, None, None
+
+    now = datetime.now(PGE_TZ)
+    row = basic_comparison_rate_at(now, basic_rows) if basic_rows else None
+    if row is not None:
+        return (
+            row.rate,
+            RATE_SOURCE_CATALOG,
+            row.effective_from,
+            row.component_basis,
+            row.exclusions,
+        )
+
+    return None, None, None, None, None
 
 
 def tod_snapshot_to_dict(snapshot: TodSnapshot | None) -> dict[str, Any] | None:
