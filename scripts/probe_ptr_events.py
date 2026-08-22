@@ -26,7 +26,6 @@ from custom_components.pge_energy.billing_api import (
     GET_PEAK_TIME_REBATE_ENROLLMENT_DETAILS,
     PGEBillingApiClient,
 )
-from custom_components.pge_energy.exceptions import PGEAuthenticationError
 
 GRAPHQL_URL = "https://apix.portlandgeneral.com/pge-graphql"
 ORIGIN = "https://portlandgeneral.com"
@@ -97,12 +96,14 @@ async def main() -> None:
             test_dates.append(future)
 
         # Also try some dates in active PTR seasons (summer: Jun-Sep, winter: Nov-Feb)
-        test_dates.extend([
-            "2026-06-15",  # Early summer
-            "2026-08-15",  # Mid summer
-            "2026-09-15",  # Late summer
-            "2026-11-15",  # Early winter
-        ])
+        test_dates.extend(
+            [
+                "2026-06-15",  # Early summer
+                "2026-08-15",  # Mid summer
+                "2026-09-15",  # Late summer
+                "2026-11-15",  # Early winter
+            ]
+        )
 
         print("\n" + "=" * 80)
         print("PROBING getPeakTimeRebateEnrollmentDetails")

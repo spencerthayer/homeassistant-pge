@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -378,6 +379,96 @@ async def test_import_soft_fail_persists_tip_intervals():
 
 
 @pytest.mark.asyncio
+async def test_correction_import_failure_retains_marker_and_repairs():
+    """A hard import failure keeps the recovery boundary and repairs best-effort."""
+    coord = _make_coordinator()
+    repair = AsyncMock()
+    coord.async_repair_dirty_if_needed = repair
+
+    async def fake_usage(start, end, resolution=UsageResolution.HOURLY):
+        day = start.astimezone(local_day_bounds(today_local())[0].tzinfo).date()
+        return UsageResponse(
+            resolution=UsageResolution.HOURLY,
+            intervals=_full_day_intervals(day) if day != today_local() else [],
+            total_kwh=None,
+            total_cost=None,
+            is_tod=None,
+            acct_type=None,
+        )
+
+    coord.async_get_usage_with_auth_retry = AsyncMock(side_effect=fake_usage)
+
+    with (
+        patch(
+            "custom_components.pge_energy.coordinator.async_import_with_baseline",
+            AsyncMock(side_effect=RuntimeError("recorder exploded mid-import")),
+        ),
+        patch(
+            "custom_components.pge_energy.coordinator.async_save_import_state",
+            AsyncMock(),
+        ),
+        patch(
+            "custom_components.pge_energy.coordinator.async_run_billing_sync",
+            AsyncMock(),
+        ),
+    ):
+        data = await coord._async_update_data()
+
+    # The retained marker survives the failed poll (repair stub simulated
+    # failure by not clearing it) so boot/correction repair keeps its boundary.
+    assert coord._import_store.dirty_from is not None
+    # Runtime repair was attempted after the lock released.
+    repair.assert_awaited_once()
+    assert data.get("stale") is True
+
+
+@pytest.mark.asyncio
+async def test_correction_skips_import_when_recovery_marker_pending():
+    """Correction polls never import over another importer's pending boundary."""
+    coord = _make_coordinator()
+    pending_boundary = "2023-12-01T00:00:00+00:00"
+    coord._import_store.dirty_from = pending_boundary
+    repair = AsyncMock()
+    coord.async_repair_dirty_if_needed = repair
+
+    async def fake_usage(start, end, resolution=UsageResolution.HOURLY):
+        day = start.astimezone(local_day_bounds(today_local())[0].tzinfo).date()
+        return UsageResponse(
+            resolution=UsageResolution.HOURLY,
+            intervals=_full_day_intervals(day) if day != today_local() else [],
+            total_kwh=None,
+            total_cost=None,
+            is_tod=None,
+            acct_type=None,
+        )
+
+    coord.async_get_usage_with_auth_retry = AsyncMock(side_effect=fake_usage)
+    record_import = AsyncMock(return_value=ImportBaselineResult(1))
+
+    with (
+        patch(
+            "custom_components.pge_energy.coordinator.async_import_with_baseline",
+            record_import,
+        ),
+        patch(
+            "custom_components.pge_energy.coordinator.async_save_import_state",
+            AsyncMock(),
+        ),
+        patch(
+            "custom_components.pge_energy.coordinator.async_run_billing_sync",
+            AsyncMock(),
+        ),
+    ):
+        data = await coord._async_update_data()
+
+    record_import.assert_not_awaited()
+    # The pending boundary was left untouched for its owner's repair.
+    assert coord._import_store.dirty_from == pending_boundary
+    repair.assert_awaited_once()
+    assert data.get("stale") is True
+
+
+@pytest.mark.asyncio
 async def test_cognito_rate_limit_keeps_retained_data_without_reauth():
     from custom_components.pge_energy.exceptions import PGERateLimitError
 
@@ -621,3 +712,241 @@ async def test_complete_yesterday_clears_catchup_retry():
 
     assert coord._catchup_retry is False
     assert coord.update_interval == timedelta(hours=22)
+
+
+@pytest.mark.asyncio
+async def test_soft_fail_poll_contains_terminal_save_timeout():
+    """A timed-out terminal write must not defeat the retained-data soft-fail."""
+    coord = _make_coordinator()
+    coord._import_store.completed_local_dates = ["2024-01-01"]
+
+    async def _timeout_persist():
+        raise TimeoutError
+
+    coord.async_persist_sync_progress = _timeout_persist
+
+    payload = await coord._async_soft_fail_poll("api down", tracking=True)
+    assert payload["stale"] is True
+    assert coord._last_api_error == "api down"
+
+
+@pytest.mark.asyncio
+async def test_correction_checkpoint_saves_hold_import_lock():
+    """Marker save, import, and clear-save all run inside the import_lock."""
+    coord = _make_coordinator()
+    completed = (today_local() - timedelta(days=1)).isoformat()
+    coord._import_store.completed_local_dates = [completed]
+
+    async def fake_usage(start, end, resolution=UsageResolution.HOURLY):
+        day = start.astimezone(local_day_bounds(today_local())[0].tzinfo).date()
+        return UsageResponse(
+            resolution=UsageResolution.HOURLY,
+            intervals=_full_day_intervals(day) if day != today_local() else [],
+            total_kwh=None,
+            total_cost=None,
+            is_tod=None,
+            acct_type=None,
+        )
+
+    coord.async_get_usage_with_auth_retry = AsyncMock(side_effect=fake_usage)
+
+    class _PriorOwnerClearsLock(asyncio.Lock):
+        """A prior import_lock owner whose transaction cleared dirty_from."""
+
+        def __init__(self, store: ImportStoreData) -> None:
+            super().__init__()
+            self._store = store
+
+        async def acquire(self) -> None:
+            await super().acquire()
+            # Anything assigned BEFORE acquire is erased by the prior owner —
+            # only a marker assigned INSIDE the locked section can survive.
+            self._store.dirty_from = None
+
+    coord.import_lock = _PriorOwnerClearsLock(coord._import_store)
+
+    records: list[tuple[bool, bool, str | None]] = []  # (critical, locked, dirty_from)
+
+    async def _rec_save(hass, entry_id, data, *, critical=True):  # noqa: ARG001
+        records.append((critical, coord.import_lock.locked(), data.dirty_from))
+
+    async def _rec_import(*args, **kwargs):  # noqa: ARG002, ARG001
+        records.append((True, coord.import_lock.locked(), "import"))
+        return ImportBaselineResult(1)
+
+    with (
+        patch(
+            "custom_components.pge_energy.coordinator.async_import_with_baseline",
+            AsyncMock(side_effect=_rec_import),
+        ),
+        patch(
+            "custom_components.pge_energy.coordinator.async_save_import_state",
+            AsyncMock(side_effect=_rec_save),
+        ),
+    ):
+        await coord._async_update_data()
+
+    durable = [(locked, marker) for critical, locked, marker in records if critical]
+    assert len(durable) >= 3  # pre-import marker + post-import clear (+ import)
+    assert all(locked for locked, _ in durable), records
+    # The pre-import durable save must observe the call-time marker even
+    # though the simulated prior lock owner cleared anything set pre-lock.
+    # Its value is the earliest corrected-interval start, which the import
+    # records as last_imported_start.
+    assert durable[0] == (True, coord._import_store.last_imported_start)
+    assert durable[0][1] is not None
+    assert durable[-1][1] is None  # clear-save lands the emptied marker
+
+
+@pytest.mark.asyncio
+async def test_reset_checkpoint_waits_for_import_transaction():
+    """Reset synchronizes on import_lock so it cannot erase a mid-import marker."""
+    coord = _make_coordinator()
+    clear_calls: list[bool] = []
+
+    async def _rec_clear(hass, entry_id):  # noqa: ARG001
+        clear_calls.append(coord.import_lock.locked())
+
+    with patch(
+        "custom_components.pge_energy.coordinator.async_clear_import_state",
+        AsyncMock(side_effect=_rec_clear),
+    ):
+        await coord.import_lock.acquire()  # an import transaction is active
+        reset_task = asyncio.create_task(coord.async_reset_checkpoint())
+        await asyncio.sleep(0.02)
+        assert not reset_task.done()  # blocked behind the transaction
+        coord.import_lock.release()
+        await asyncio.wait_for(reset_task, 1)
+
+    assert clear_calls == [True]  # the clear ran while holding import_lock
+
+
+@pytest.mark.asyncio
+async def test_reset_checkpoint_holds_backfill_reservation():
+    """A new backfill cannot reserve the slot while a reset is in flight."""
+    coord = _make_coordinator()
+
+    async def _rec_clear(hass, entry_id):  # noqa: ARG001
+        # Mid-reset (slow empty write): the slot must stay reserved.
+        assert coord.try_reserve_backfill() is False
+
+    with patch(
+        "custom_components.pge_energy.coordinator.async_clear_import_state",
+        AsyncMock(side_effect=_rec_clear),
+    ):
+        await coord.async_reset_checkpoint()
+
+    assert coord.backfill_in_progress is False  # released afterwards
+    assert coord.try_reserve_backfill() is True
+
+
+@pytest.mark.asyncio
+async def test_repair_holds_import_lock_across_clear_and_save():
+    """Repair, marker clear, and the durable clear-save share one import_lock."""
+    coord = _make_coordinator()
+    coord._import_store.dirty_from = "2024-05-01T00:00:00+00:00"
+    events: list[tuple[str, bool]] = []
+    marker_seen_by_save: list[str | None] = []
+
+    async def fake_suffix_repair(hass, account_key, dirty, *, account_id=None):  # noqa: ARG001
+        events.append(("repair", coord.import_lock.locked()))
+        return None
+
+    async def capture_save(hass, entry_id, store, critical=True):  # noqa: ARG001
+        events.append(("save", coord.import_lock.locked()))
+        marker_seen_by_save.append(store.dirty_from)
+        return True
+
+    with (
+        patch(
+            "custom_components.pge_energy.coordinator.async_repair_suffix_sums",
+            side_effect=fake_suffix_repair,
+        ),
+        patch(
+            "custom_components.pge_energy.coordinator.async_save_import_state",
+            side_effect=capture_save,
+        ),
+    ):
+        await coord.async_repair_dirty_if_needed()
+
+    assert events == [("repair", True), ("save", True)]
+    # The clear happens before the save while still holding the lock.
+    assert marker_seen_by_save == [None]
+    assert coord._import_store.dirty_from is None
+
+
+@pytest.mark.asyncio
+async def test_repair_contains_clear_save_timeout_and_restores_marker():
+    """A timed-out clear-save never raises; the boundary stays in memory+disk."""
+    coord = _make_coordinator()
+    original_marker = "2024-06-01T00:00:00+00:00"
+    coord._import_store.dirty_from = original_marker
+
+    async def fail_save(hass, entry_id, store, critical=True):  # noqa: ARG001
+        raise TimeoutError("storage stalled")
+
+    with (
+        patch(
+            "custom_components.pge_energy.coordinator.async_repair_suffix_sums",
+            AsyncMock(),
+        ),
+        patch(
+            "custom_components.pge_energy.coordinator.async_save_import_state",
+            side_effect=fail_save,
+        ),
+    ):
+        # Must not propagate TimeoutError into poll/unload callers.
+        await coord.async_repair_dirty_if_needed()
+
+    # Memory matches the (stale) on-disk boundary so boot re-repairs harmlessly.
+    assert coord._import_store.dirty_from == original_marker
+
+
+@pytest.mark.asyncio
+async def test_repair_rereads_marker_under_lock_and_clears_exactly_it():
+    """A marker replaced while waiting on import_lock is repaired, not erased."""
+    coord = _make_coordinator()
+    stale_boundary = "2024-06-01T00:00:00+00:00"
+    newer_boundary = "2024-07-01T00:00:00+00:00"
+    coord._import_store.dirty_from = stale_boundary
+
+    class _MutatingLock:
+        """Simulates a newer boundary appearing before lock acquisition."""
+
+        def __init__(self, inner, store):
+            self._inner = inner
+            self._store = store
+            self.mutated = False
+
+        async def __aenter__(self):
+            if not self.mutated:
+                self.mutated = True
+                self._store.dirty_from = newer_boundary
+            return await self._inner.__aenter__()
+
+        async def __aexit__(self, *args):
+            return await self._inner.__aexit__(*args)
+
+    coord.import_lock = _MutatingLock(coord.import_lock, coord._import_store)
+
+    repaired: list[str] = []
+
+    async def fake_suffix_repair(hass, account_key, dirty, *, account_id=None):  # noqa: ARG001
+        repaired.append(dirty.isoformat())
+        return None
+
+    with (
+        patch(
+            "custom_components.pge_energy.coordinator.async_repair_suffix_sums",
+            side_effect=fake_suffix_repair,
+        ),
+        patch(
+            "custom_components.pge_energy.coordinator.async_save_import_state",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await coord.async_repair_dirty_if_needed()
+
+    # The NEWER boundary is what got repaired and cleared — not the stale one.
+    assert repaired == [newer_boundary]
+    assert coord._import_store.dirty_from is None

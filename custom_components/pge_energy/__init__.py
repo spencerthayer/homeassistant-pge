@@ -9,7 +9,7 @@ import voluptuous as vol
 from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -66,7 +66,11 @@ from .statistics import (
     async_migrate_signed_usage_split,
     setup_statistics_sensors,
 )
-from .store import async_save_import_state, discard_store_cache
+from .store import (
+    async_flush_import_state,
+    async_save_import_state,
+    discard_store_cache,
+)
 from .tariff_updater import TariffUpdaterCoordinator
 from .time_util import iter_local_days, today_local
 from .websocket import async_setup_websocket
@@ -163,7 +167,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
     )
 
     coordinator = PGECoordinator(hass, entry, auth_manager, client)
-    await coordinator.async_load_store()
+    try:
+        await coordinator.async_load_store()
+    except TimeoutError as exc:
+        # A parked import-state write is still draining on slow storage: retry
+        # setup rather than hydrating stale checkpoint data mid-write.
+        raise ConfigEntryNotReady("PGE import state write still draining on slow storage") from exc
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
@@ -644,6 +653,19 @@ async def _async_run_backfill(
         coordinator.reset_backfill_run_generation(token)
 
 
+async def _async_retry_checkpoint_save(hass: HomeAssistant, coordinator: PGECoordinator) -> bool:
+    """Durable checkpoint save for retry loops; False when it cannot land.
+
+    Callers must not mutate recorder data after False: without the durable
+    ``dirty_from`` marker a crash during import loses boot repair.
+    """
+    try:
+        result = await async_save_import_state(hass, coordinator.entry.entry_id, coordinator.import_store)
+    except TimeoutError:
+        return False
+    return result is not False
+
+
 async def _async_retry_failed_ranges(
     hass: HomeAssistant,
     coordinator: PGECoordinator,
@@ -664,28 +686,75 @@ async def _async_retry_failed_ranges(
             if is_invalid_closed_day(ok_complete, reason):
                 _LOGGER.warning("Retry day %s still invalid (%s)", iso, reason)
                 continue
+            import_failed: Exception | None = None
+            marker_blocked = False
             if clipped:
-                store.dirty_from = min(iv.start for iv in clipped).isoformat()
-                await async_save_import_state(hass, coordinator.entry.entry_id, store)
                 async with coordinator.import_lock:
-                    import_result = await async_import_with_baseline(
-                        hass,
-                        coordinator.account_key,
-                        clipped,
-                        include_cost=include_cost,
-                        account_id=coordinator.account_id,
-                    )
-                store.dirty_from = None
-                if iso in import_result.cost_failed_days:
-                    ok_complete = False
-                    if iso not in store.failed_local_dates:
-                        store.failed_local_dates.append(iso)
+                    # Rebind to the CURRENT store: a concurrent checkpoint
+                    # reset may have replaced it while the network fetch ran.
+                    # Mutating/persisting the captured (obsolete) object would
+                    # import without a durable marker on the live store.
+                    store = coordinator.import_store
+                    # A prior importer's hard failure left its recovery marker
+                    # unrepaired. Replacing dirty_from here would destroy that
+                    # earliest repair boundary — stop retrying until repair
+                    # clears it (best-effort below, boot/correction otherwise).
+                    if store.dirty_from is not None:
+                        marker_blocked = True
+                    else:
+                        # Crash-recovery transaction under import_lock: set the
+                        # marker, land it durably, import, then clear it. A
+                        # scheduled correction poll or backfill batch shares this
+                        # lock and dirty_from, so holding it end-to-end stops the
+                        # other importer from overwriting/clearing this day's
+                        # marker between save and clear (boot repair would lose
+                        # its boundary). The API fetch above stays lock-free.
+                        store.dirty_from = min(iv.start for iv in clipped).isoformat()
+                        # Gate on the durable marker: importing without it removes the
+                        # boot-repair guarantee on exactly the slow-storage path this
+                        # service exists for. The day stays failed for a later retry.
+                        if not await _async_retry_checkpoint_save(hass, coordinator):
+                            _LOGGER.warning("Retry %s skipped: checkpoint save timed out", iso)
+                            # Marker never reached disk — drop the in-memory value so a
+                            # later day/completion save cannot persist a phantom dirty_from.
+                            store.dirty_from = None
+                            continue
+                        try:
+                            import_result = await async_import_with_baseline(
+                                hass,
+                                coordinator.account_key,
+                                clipped,
+                                include_cost=include_cost,
+                                account_id=coordinator.account_id,
+                            )
+                        except Exception as exc:
+                            # Marker stays retained (memory + disk): a partial
+                            # recorder write may exist. Stop the loop so the next
+                            # day's transaction cannot replace this earliest
+                            # boundary; best-effort repair runs after release.
+                            import_failed = exc
+                            _LOGGER.warning("Retry import failed for %s: %s — keeping recovery marker", iso, exc)
+                        else:
+                            store.dirty_from = None
+                            if iso in import_result.cost_failed_days:
+                                ok_complete = False
+                                if iso not in store.failed_local_dates:
+                                    store.failed_local_dates.append(iso)
+                            # Land the cleared marker before releasing the lock so the
+                            # next importer starts from an on-disk clean boundary.
+                            await _async_retry_checkpoint_save(hass, coordinator)
+                if marker_blocked or import_failed is not None:
+                    # Repair outside the lock (repair takes import_lock itself).
+                    # On failure the marker persists and gates every importer
+                    # until boot or a correction poll heals it.
+                    await coordinator.async_repair_dirty_if_needed()
+                    return
             if ok_complete:
                 if iso in store.failed_local_dates:
                     store.failed_local_dates.remove(iso)
                 if iso not in store.completed_local_dates:
                     store.completed_local_dates.append(iso)
-            await async_save_import_state(hass, coordinator.entry.entry_id, store)
+            await _async_retry_checkpoint_save(hass, coordinator)
         except Exception as exc:
             _LOGGER.warning("Retry failed for %s: %s", iso, exc)
 
@@ -703,6 +772,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool
         tariff_coord = hass.data.get(DOMAIN, {}).get(tariff_key)
         if tariff_coord is not None:
             await tariff_coord.async_stop(entry)
+        with contextlib.suppress(Exception):
+            # Land any coalesced write before the store cache is dropped.
+            await async_flush_import_state(hass, entry.entry_id)
         discard_store_cache(entry.entry_id)
         hass.data[DOMAIN].pop(entry.entry_id, None)
         remaining = [key for key, value in hass.data.get(DOMAIN, {}).items() if isinstance(value, PGECoordinator)]

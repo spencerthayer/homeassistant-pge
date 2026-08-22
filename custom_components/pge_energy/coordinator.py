@@ -74,6 +74,7 @@ from .store import (
     async_clear_import_state,
     async_load_import_state,
     async_save_import_state,
+    bind_import_state_object,
 )
 from .sync_progress import (
     apply_progress_math,
@@ -101,6 +102,23 @@ def _format_statistics_import_error(hass: HomeAssistant, exc: BaseException) -> 
             "shutting down. Wait until HA is fully up, then Refresh again."
         )
     return f"Statistics import failed: {exc}"
+
+
+class _CorrectionImportError(Exception):
+    """Internal control flow: correction import raised with the marker retained.
+
+    Escapes the ``import_lock`` transaction so the handler can run runtime
+    repair AFTER the lock releases (repair takes the lock itself) and before
+    any waiting importer can replace the retained recovery boundary.
+    """
+
+    def __init__(self, message: str, cause: BaseException) -> None:
+        super().__init__(message)
+        self.cause = cause
+
+
+class _RecoveryPendingError(Exception):
+    """Internal control flow: a retained dirty_from blocks a new import."""
 
 
 def _parse_store_dt(raw: str | None) -> datetime | None:
@@ -542,10 +560,28 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             self._import_store.sync_started_at = datetime.now(UTC).isoformat()
 
+    async def _async_save_import_store_resilient(self) -> bool:
+        """Checkpoint save that survives timeouts instead of failing the poll.
+
+        Returns False when the state could not be landed durably; callers that
+        need a crash-recovery marker must not mutate recorder data afterwards.
+        """
+        try:
+            result = await async_save_import_state(self.hass, self.entry.entry_id, self._import_store)
+        except TimeoutError:
+            return False
+        return result is not False
+
     async def async_persist_sync_progress(self) -> None:
         if self._is_stale_backfill_generation():
             return
         self._apply_sync_progress_to_store()
+        if self._sync_progress.status in (SYNC_STATUS_COMPLETE, SYNC_STATUS_FAILED):
+            # Terminal states are fail-closed: a suppressed timeout here would
+            # leave the previous in-progress status on disk while the job
+            # reports done — the next boot could misreport the outcome.
+            await async_save_import_state(self.hass, self.entry.entry_id, self._import_store)
+            return
         await async_save_import_state(
             self.hass,
             self.entry.entry_id,
@@ -653,24 +689,52 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         if not self._import_store.dirty_from:
             return
-        dirty = datetime.fromisoformat(self._import_store.dirty_from)
-        _LOGGER.warning(
-            "Repairing dirty_from=%s after interrupted import",
-            self._import_store.dirty_from,
-        )
         try:
             async with self.import_lock:
+                # Re-read under the lock: the pre-lock check above may have
+                # waited behind another importer's or repair's transaction,
+                # which can replace the marker with a newer failed boundary.
+                # Repairing the stale suffix and then unconditionally clearing
+                # would erase that newer recovery boundary — repair and clear
+                # must target exactly the marker observed under the lock.
+                current = self._import_store.dirty_from
+                if not current:
+                    return
+                dirty = datetime.fromisoformat(current)
+                _LOGGER.warning("Repairing dirty_from=%s after interrupted import", current)
                 await async_repair_suffix_sums(
                     self.hass,
                     self.account_key,
                     dirty,
                     account_id=self.account_id,
                 )
+                # Clear the marker and land the cleared state inside the same
+                # import_lock transaction: releasing between repair and the
+                # clear-save would let a queued importer durably save its own
+                # new marker, and this caller's older snapshot could then land
+                # afterward and erase it. Holding the lock keeps every waiting
+                # importer behind the full repair → clear → persist sequence.
+                self._import_store.dirty_from = None
+                try:
+                    saved = await async_save_import_state(self.hass, self.entry.entry_id, self._import_store)
+                except TimeoutError:
+                    # Best-effort containment: slow storage must not turn a
+                    # successful repair into a coordinator update failure.
+                    # The parked write may still land; until then disk keeps
+                    # the old boundary — restore the in-memory marker so
+                    # memory matches disk and boot re-repairs harmlessly.
+                    _LOGGER.warning(
+                        "dirty_from clear-save timed out after repair; marker restored for boot/correction retry"
+                    )
+                    self._import_store.dirty_from = dirty.isoformat()
+                    return
+                if saved is False:
+                    # Discarded as stale: a checkpoint reset/reload replaced the
+                    # canonical store and owns the file now — nothing to clear.
+                    return
         except Exception as exc:
             _LOGGER.error("dirty_from repair failed: %s", exc)
             return
-        self._import_store.dirty_from = None
-        await async_save_import_state(self.hass, self.entry.entry_id, self._import_store)
 
     async def async_repair_monthly_collisions_if_needed(self) -> None:
         """Clear monthly billing-period lumps that share a day with hourly rows."""
@@ -692,15 +756,33 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         async with self.job_lock:
             if self.backfill_in_progress:
                 raise UpdateFailed("Cannot reset checkpoint while backfill is running")
-            await async_clear_import_state(self.hass, self.entry.entry_id)
-            self._import_store = ImportStoreData(account_key=self.account_key)
-            self._checkpoint = ImportCheckpoint(
-                last_imported_start=None,
-                last_imported_end=None,
-                last_imported_timestamp=datetime.now(UTC),
-                correction_window_start=None,
-                failed_ranges=[],
-            )
+            # Hold the backfill reservation for the full reset: the reserve
+            # path does not take job_lock, so a new backfill could otherwise
+            # start during the slow empty-state write and capture the pre-reset
+            # store object. Released in finally.
+            self._backfill_reserved = True
+            try:
+                # Reset vs import transactions: correction polling and failed-range
+                # retries hold import_lock across their marker→import→clear
+                # transaction. Taking it here (job_lock → import_lock ordering;
+                # nothing acquires job_lock while holding import_lock) guarantees
+                # this reset cannot erase a durable dirty_from mid-import.
+                async with self.import_lock:
+                    await async_clear_import_state(self.hass, self.entry.entry_id)
+                    self._import_store = ImportStoreData(account_key=self.account_key)
+                    # Bind the replacement object: straggler saves holding the
+                    # pre-reset object (e.g. billing captured it mid-flight) are
+                    # dropped/substituted instead of resurrecting wiped state.
+                    bind_import_state_object(self.hass, self.entry.entry_id, self._import_store)
+                    self._checkpoint = ImportCheckpoint(
+                        last_imported_start=None,
+                        last_imported_end=None,
+                        last_imported_timestamp=datetime.now(UTC),
+                        correction_window_start=None,
+                        failed_ranges=[],
+                    )
+            finally:
+                self.release_backfill_reservation()
 
     def persist_auth_to_entry(self) -> None:
         if self.auth_manager.auth_mode != "credential":
@@ -818,7 +900,17 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_api_error = message
         if tracking:
             self.fail_sync_job(message)
-            await self.async_persist_sync_progress()
+            try:
+                await self.async_persist_sync_progress()
+            except TimeoutError:
+                # Slow storage must not defeat the soft-fail path: contain the
+                # terminal-write timeout and still return retained data. The
+                # parked in-flight save keeps running and lands via the next
+                # durable checkpoint write.
+                _LOGGER.warning(
+                    "PGE terminal sync-status save timed out during soft-fail: %s",
+                    message,
+                )
         if auth_failed:
             self._request_reauth()
         if self.has_retained_state:
@@ -1047,52 +1139,115 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._newest_interval = newest
 
             dirty_from = min(iv.start for iv in all_intervals).isoformat()
-            self._import_store.dirty_from = dirty_from
             # Persist tip before recorder import so a soft-fail still survives restart.
             self._apply_sensor_snapshots_to_store()
-            await async_save_import_state(self.hass, self.entry.entry_id, self._import_store)
             try:
                 async with self.import_lock:
-                    import_result = await async_import_with_baseline(
-                        self.hass,
-                        self.account_key,
-                        all_intervals,
-                        include_cost=self.include_cost,
-                        account_id=self.account_id,
-                    )
+                    # Gate: a prior importer's hard failure left its recovery
+                    # marker unrepaired. Overwriting dirty_from here would
+                    # destroy the earliest repair boundary — bail out and let
+                    # the post-transaction handler repair instead.
+                    if self._import_store.dirty_from is not None:
+                        raise _RecoveryPendingError
+                    # Crash-recovery transaction under import_lock: land the
+                    # marker durably, import, then clear it — backfill batches and
+                    # failed-range retries share this lock and dirty_from, so
+                    # holding it end-to-end stops them from overwriting or erasing
+                    # this marker mid-import (a crash would lose boot repair).
+                    # Assign INSIDE the lock: a prior lock owner clears the shared
+                    # field as part of its own transaction, so a pre-lock
+                    # assignment could be erased before we ever save it.
+                    self._import_store.dirty_from = dirty_from
+                    if not await self._async_save_import_store_resilient():
+                        # The durable dirty_from marker did not land: a crash during the
+                        # recorder import would lose boot repair. Soft-fail this cycle —
+                        # days stay incomplete and the next poll retries; the tip merge
+                        # above remains valid in memory and Store keeps last-good data.
+                        # Clear the in-memory marker so terminal soft-fail persistence
+                        # cannot write a phantom dirty_from that never reached disk.
+                        self._import_store.dirty_from = None
+                        err = "import-state checkpoint save timed out before correction import"
+                        self._last_api_error = err
+                        return await self._async_soft_fail_poll(err, tracking=tracking)
+                    try:
+                        import_result = await async_import_with_baseline(
+                            self.hass,
+                            self.account_key,
+                            all_intervals,
+                            include_cost=self.include_cost,
+                            account_id=self.account_id,
+                        )
+                    except Exception as exc:
+                        # Marker stays retained (memory + disk): a partial recorder
+                        # write may exist. Escape the transaction so the handler
+                        # below can run runtime repair AFTER import_lock releases —
+                        # repairing under the lock would deadlock, and releasing
+                        # without repair would let a waiting importer replace this
+                        # boundary before it is rebuilt.
+                        raise _CorrectionImportError(
+                            _format_statistics_import_error(self.hass, exc),
+                            exc,
+                        ) from exc
+
+                    # Cost/temperature ack soft-fails still clear dirty_from so the
+                    # correction window is not stranded; mark those days for retry.
+                    soft_failed = set(import_result.cost_failed_days)
+                    for iso in soft_failed:
+                        if iso not in failed_days:
+                            failed_days.append(iso)
+                        if iso in verified_days:
+                            verified_days.remove(iso)
+                        if iso not in self._import_store.failed_local_dates:
+                            self._import_store.failed_local_dates.append(iso)
+                        if iso in self._import_store.completed_local_dates:
+                            self._import_store.completed_local_dates.remove(iso)
+
+                    self._import_store.dirty_from = None
+                    self._import_store.last_imported_start = min(iv.start for iv in all_intervals).isoformat()
+                    self._import_store.last_imported_end = max(iv.end for iv in all_intervals).isoformat()
+                    for iso in verified_days:
+                        if iso not in self._import_store.completed_local_dates:
+                            self._import_store.completed_local_dates.append(iso)
+                        if iso in self._import_store.failed_local_dates:
+                            self._import_store.failed_local_dates.remove(iso)
+                    # Clear the durable pre-import marker (and land completions) while
+                    # still holding the lock. Retry once so a single slow-storage stall
+                    # does not leave dirty_from on disk after a successful import.
+                    post_saved = False
+                    for _attempt in range(2):
+                        if await self._async_save_import_store_resilient():
+                            post_saved = True
+                            break
+                    if not post_saved:
+                        _LOGGER.warning(
+                            "Post-import checkpoint save timed out after retry; "
+                            "dirty_from/completions may lag on disk until the next durable save"
+                        )
+            except _CorrectionImportError as exc:
+                # Best-effort immediate repair of the dirty suffix so the next
+                # importer is not gated on the retained marker; if repair fails
+                # the marker persists for boot repair and the gates in the
+                # backfill/retry/correction paths defer until it heals.
+                await self.async_repair_dirty_if_needed()
+                return await self._async_soft_fail_poll(
+                    str(exc),
+                    tracking=tracking,
+                    hard_exc=exc.cause,
+                )
+            except _RecoveryPendingError:
+                await self.async_repair_dirty_if_needed()
+                err = "correction import skipped: retained recovery marker awaiting repair"
+                self._last_api_error = err
+                return await self._async_soft_fail_poll(err, tracking=tracking)
+            try:
                 await self.async_refresh_lifetime_totals()
             except Exception as exc:
                 err = _format_statistics_import_error(self.hass, exc)
-                # Import merge failed — tip already persisted above; keep prior
-                # lifetime; do not mark the whole entry unavailable or clear history.
                 return await self._async_soft_fail_poll(
                     err,
                     tracking=tracking,
                     hard_exc=exc,
                 )
-
-            # Cost/temperature ack soft-fails still clear dirty_from so the
-            # correction window is not stranded; mark those days for retry.
-            soft_failed = set(import_result.cost_failed_days)
-            for iso in soft_failed:
-                if iso not in failed_days:
-                    failed_days.append(iso)
-                if iso in verified_days:
-                    verified_days.remove(iso)
-                if iso not in self._import_store.failed_local_dates:
-                    self._import_store.failed_local_dates.append(iso)
-                if iso in self._import_store.completed_local_dates:
-                    self._import_store.completed_local_dates.remove(iso)
-
-            self._import_store.dirty_from = None
-            self._import_store.last_imported_start = min(iv.start for iv in all_intervals).isoformat()
-            self._import_store.last_imported_end = max(iv.end for iv in all_intervals).isoformat()
-            for iso in verified_days:
-                if iso not in self._import_store.completed_local_dates:
-                    self._import_store.completed_local_dates.append(iso)
-                if iso in self._import_store.failed_local_dates:
-                    self._import_store.failed_local_dates.remove(iso)
-            await async_save_import_state(self.hass, self.entry.entry_id, self._import_store)
             self.update_checkpoint(
                 min(iv.start for iv in all_intervals),
                 max(iv.end for iv in all_intervals),
