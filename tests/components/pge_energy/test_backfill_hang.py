@@ -6,6 +6,7 @@ import asyncio
 import inspect
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,6 +18,7 @@ from custom_components.pge_energy import (
     _async_watch_backfill_stall,
     _start_backfill_task,
     async_unload_entry,
+    backfill,
 )
 from custom_components.pge_energy.backfill import _async_backfill_hourly, async_backfill_range
 from custom_components.pge_energy.const import (
@@ -380,7 +382,9 @@ async def test_tier_timeout_continues_to_daily(monkeypatch):
     async def hang_hourly(*_a, **_k):
         await asyncio.sleep(3600)
 
-    daily = AsyncMock()
+    # Daily reports "no fatal batch" (False): this test exercises tier
+    # continuation after an hourly TIMEOUT, not fatal gating.
+    daily = AsyncMock(return_value=False)
     monthly = AsyncMock()
 
     with (
@@ -714,3 +718,387 @@ async def test_backfill_exit_requests_tip_refresh():
     ):
         await _async_run_backfill(coord.hass, coord.entry.entry_id, coord, start, end)
     coord.async_request_refresh.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_checkpoint_transaction_holds_import_lock(monkeypatch):
+    """Marker save, import, and clear-save all run inside the import_lock."""
+    coord = SimpleNamespace(
+        import_store=ImportStoreData(account_key="k"),
+        import_lock=asyncio.Lock(),
+        account_key="acct",
+        account_id="aid",
+        entry=SimpleNamespace(options={}, data={}),
+        async_refresh_lifetime_totals=AsyncMock(),
+    )
+    interval = SimpleNamespace(
+        start=datetime(2024, 1, 1, tzinfo=UTC),
+        end=datetime(2024, 1, 2, tzinfo=UTC),
+    )
+    events = []
+
+    async def _rec_save(hass, entry_id, data, *, critical=True):  # noqa: ARG001
+        events.append(("save", coord.import_lock.locked()))
+
+    async def _rec_import(*args, **kwargs):  # noqa: ARG002, ARG001
+        events.append(("import", coord.import_lock.locked()))
+        return SimpleNamespace(cost_failed_days=[])
+
+    monkeypatch.setattr(backfill, "async_save_import_state", _rec_save)
+    monkeypatch.setattr(backfill, "async_import_with_baseline", _rec_import)
+
+    ok = await backfill._async_import_batch(MagicMock(), "entry1", coord, [interval])
+    assert ok == backfill.BATCH_OK
+    assert coord.import_store.dirty_from is None
+    # Every step of the crash-recovery transaction holds the lock.
+    assert events == [("save", True), ("import", True), ("save", True)]
+
+
+@pytest.mark.asyncio
+async def test_retry_rebinds_store_replaced_by_reset_during_fetch(monkeypatch):
+    """A retry must mutate/persist the CURRENT store, not a pre-reset capture."""
+    import custom_components.pge_energy as pge_root
+
+    coord = SimpleNamespace(
+        import_store=ImportStoreData(account_key="k"),
+        import_lock=asyncio.Lock(),
+        account_key="acct",
+        account_id="aid",
+        entry=SimpleNamespace(entry_id="entry1", options={}, data={}),
+    )
+    old_store = coord.import_store
+    old_store.failed_local_dates = ["2024-01-01"]
+    new_store = ImportStoreData(account_key="k")
+    saved_ids: list[int] = []
+    import_markers: list[str | None] = []
+
+    async def _fetch(coordinator, day):  # noqa: ARG001
+        # The reset replaces the store while this network fetch is running.
+        coordinator.import_store = new_store
+        return None, [
+            UsageInterval(
+                account_key="acct",
+                resolution=UsageResolution.HOURLY,
+                start=datetime(2024, 1, 1, tzinfo=UTC),
+                end=datetime(2024, 1, 1, 1, tzinfo=UTC),
+                kwh=Decimal("1.0"),
+                amount=Decimal("0.1"),
+                temperature=None,
+                usage_status=None,
+                interval_size=None,
+                source_timestamp=None,
+            )
+        ]
+
+    async def _rec_save(hass, entry_id, data, *, critical=True):  # noqa: ARG001
+        saved_ids.append(id(data))
+
+    async def _rec_import(hass, account_key, intervals, **kwargs):  # noqa: ARG002, ARG001
+        import_markers.append(coord.import_store.dirty_from)
+        return SimpleNamespace(cost_failed_days=[])
+
+    monkeypatch.setattr(pge_root, "async_fetch_hourly_day", _fetch)
+    monkeypatch.setattr(pge_root, "clip_hourly_to_local_day", lambda day, iv, **k: iv)
+    monkeypatch.setattr(pge_root, "validate_hourly_day", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(pge_root, "is_invalid_closed_day", lambda ok, reason: not ok)
+    monkeypatch.setattr(pge_root, "async_import_with_baseline", _rec_import)
+    monkeypatch.setattr(pge_root, "async_save_import_state", _rec_save)
+
+    await pge_root._async_retry_failed_ranges(MagicMock(), coord)
+
+    # The transaction mutated and persisted the CURRENT store object.
+    assert saved_ids and all(sid == id(new_store) for sid in saved_ids)
+    assert import_markers == ["2024-01-01T00:00:00+00:00"]  # marker on live store
+    assert new_store.dirty_from is None  # cleared after successful import
+    assert old_store.dirty_from is None  # obsolete capture untouched
+
+
+@pytest.mark.asyncio
+async def test_batch_defers_when_store_discards_stale_critical_save(monkeypatch):
+    """An orphaned batch whose checkpoint is stale-deferred never imports."""
+    coord = SimpleNamespace(
+        import_store=ImportStoreData(account_key="k"),
+        import_lock=asyncio.Lock(),
+        account_key="acct",
+        account_id="aid",
+        entry=SimpleNamespace(options={}, data={}),
+    )
+    interval = SimpleNamespace(
+        start=datetime(2024, 1, 1, tzinfo=UTC),
+        end=datetime(2024, 1, 2, tzinfo=UTC),
+    )
+    record_import = AsyncMock(return_value=SimpleNamespace(cost_failed_days=[]))
+
+    async def _rec_save(hass, entry_id, data, *, critical=True):  # noqa: ARG001
+        return False  # store layer discarded the save as stale
+
+    monkeypatch.setattr(backfill, "async_save_import_state", _rec_save)
+    monkeypatch.setattr(backfill, "async_import_with_baseline", record_import)
+
+    ok = await backfill._async_import_batch(MagicMock(), "entry1", coord, [interval])
+    assert ok == backfill.BATCH_DEFERRED
+    assert coord.import_store.dirty_from is None
+    record_import.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_fatal_on_import_error_retains_marker(monkeypatch):
+    """Import exception keeps dirty_from, repairs best-effort, returns FATAL."""
+    coord = SimpleNamespace(
+        import_store=ImportStoreData(account_key="k"),
+        import_lock=asyncio.Lock(),
+        account_key="acct",
+        account_id="aid",
+        entry=SimpleNamespace(options={}, data={}),
+        async_repair_dirty_if_needed=AsyncMock(),
+    )
+    interval = SimpleNamespace(
+        start=datetime(2024, 1, 1, tzinfo=UTC),
+        end=datetime(2024, 1, 2, tzinfo=UTC),
+    )
+
+    async def _rec_save(hass, entry_id, data, *, critical=True):  # noqa: ARG001
+        return None
+
+    async def _boom(hass, account_key, intervals, **kwargs):  # noqa: ARG001
+        raise RuntimeError("recorder exploded mid-import")
+
+    monkeypatch.setattr(backfill, "async_save_import_state", _rec_save)
+    monkeypatch.setattr(backfill, "async_import_with_baseline", _boom)
+
+    ok = await backfill._async_import_batch(MagicMock(), "entry1", coord, [interval])
+    assert ok == backfill.BATCH_FATAL
+    assert coord.import_store.dirty_from == "2024-01-01T00:00:00+00:00"
+    # Best-effort runtime repair runs after the lock releases so waiters are
+    # gated on a repaired marker instead of replacing the boundary.
+    coord.async_repair_dirty_if_needed.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_batch_defers_when_recovery_marker_retained(monkeypatch):
+    """A batch must not replace a prior importer's unrepaired recovery marker."""
+    coord = SimpleNamespace(
+        import_store=ImportStoreData(account_key="k"),
+        import_lock=asyncio.Lock(),
+        account_key="acct",
+        account_id="aid",
+        entry=SimpleNamespace(options={}, data={}),
+    )
+    coord.import_store.dirty_from = "2023-12-01T00:00:00+00:00"
+    interval = SimpleNamespace(
+        start=datetime(2024, 1, 1, tzinfo=UTC),
+        end=datetime(2024, 1, 2, tzinfo=UTC),
+    )
+    record_import = AsyncMock(return_value=SimpleNamespace(cost_failed_days=[]))
+    monkeypatch.setattr(backfill, "async_save_import_state", AsyncMock())
+    monkeypatch.setattr(backfill, "async_import_with_baseline", record_import)
+
+    ok = await backfill._async_import_batch(MagicMock(), "entry1", coord, [interval])
+    assert ok == backfill.BATCH_DEFERRED
+    record_import.assert_not_awaited()
+    # The earliest repair boundary stays exactly as the failed importer left it.
+    assert coord.import_store.dirty_from == "2023-12-01T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_hourly_fatal_stops_daily_and_monthly_tiers(monkeypatch):
+    """A fatal hourly batch stops the job before daily/monthly replace the marker."""
+    coord = _make_coordinator()
+    coord.async_repair_dirty_if_needed = AsyncMock()
+    day = today_local() - timedelta(days=2)
+    start = datetime(day.year, day.month, day.day, tzinfo=UTC)
+    end = start + timedelta(days=1)
+
+    interval = UsageInterval(
+        account_key="keykeykeykeykeyk",
+        resolution=UsageResolution.HOURLY,
+        start=start,
+        end=start + timedelta(hours=1),
+        kwh=Decimal("1.0"),
+        amount=Decimal("0.1"),
+        temperature=None,
+        usage_status=None,
+        interval_size=None,
+        source_timestamp=None,
+    )
+
+    async def fake_fetch(coordinator, d):  # noqa: ARG001
+        return d, [interval]
+
+    async def _boom(hass, account_key, intervals, **kwargs):  # noqa: ARG001
+        raise RuntimeError("recorder exploded mid-import")
+
+    daily = AsyncMock()
+    monthly = AsyncMock()
+
+    with (
+        patch.object(backfill, "async_fetch_hourly_day", fake_fetch),
+        patch.object(backfill, "clip_hourly_to_local_day", lambda d, iv, **k: iv),
+        patch.object(backfill, "validate_hourly_day", lambda *a, **k: (True, "")),
+        patch.object(backfill, "is_invalid_closed_day", lambda ok, reason: not ok),
+        patch.object(backfill, "async_import_with_baseline", _boom),
+        patch.object(backfill, "async_save_import_state", AsyncMock()),
+        patch.object(backfill, "_async_backfill_daily", daily),
+        patch.object(backfill, "_async_backfill_monthly", monthly),
+        patch("custom_components.pge_energy.coordinator.async_save_import_state", AsyncMock()),
+        patch.object(coord.auth_manager, "ensure_valid_token", AsyncMock()),
+        patch.object(coord, "persist_auth_to_entry", MagicMock()),
+    ):
+        await async_backfill_range(coord.hass, coord.entry.entry_id, coord, start, end)
+
+    daily.assert_not_awaited()
+    monthly.assert_not_awaited()
+    # Marker retained for repair; repair was attempted at the source.
+    assert coord.import_store.dirty_from == start.isoformat()
+    coord.async_repair_dirty_if_needed.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_batch_defers_when_generation_stale(monkeypatch):
+    """A hard-released orphan defers instead of adopting the live store."""
+    coord = SimpleNamespace(
+        import_store=ImportStoreData(account_key="k"),
+        import_lock=asyncio.Lock(),
+        account_key="acct",
+        account_id="aid",
+        entry=SimpleNamespace(options={}, data={}),
+        _is_stale_backfill_generation=lambda: True,
+    )
+    interval = SimpleNamespace(
+        start=datetime(2024, 1, 1, tzinfo=UTC),
+        end=datetime(2024, 1, 2, tzinfo=UTC),
+    )
+    record_import = AsyncMock(return_value=SimpleNamespace(cost_failed_days=[]))
+    monkeypatch.setattr(backfill, "async_save_import_state", AsyncMock())
+    monkeypatch.setattr(backfill, "async_import_with_baseline", record_import)
+
+    ok = await backfill._async_import_batch(MagicMock(), "entry1", coord, [interval])
+    assert ok == backfill.BATCH_DEFERRED
+    record_import.assert_not_awaited()
+    assert coord.import_store.dirty_from is None
+
+
+def _retry_interval(day_start: datetime) -> UsageInterval:
+    return UsageInterval(
+        account_key="acct",
+        resolution=UsageResolution.HOURLY,
+        start=day_start,
+        end=day_start + timedelta(hours=1),
+        kwh=Decimal("1.0"),
+        amount=Decimal("0.1"),
+        temperature=None,
+        usage_status=None,
+        interval_size=None,
+        source_timestamp=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_stops_after_import_failure_keeping_marker(monkeypatch):
+    """An import failure stops the retry loop so later days cannot replace the marker."""
+    import custom_components.pge_energy as pge_root
+
+    coord = SimpleNamespace(
+        import_store=ImportStoreData(account_key="k"),
+        import_lock=asyncio.Lock(),
+        account_key="acct",
+        account_id="aid",
+        entry=SimpleNamespace(entry_id="entry1", options={}, data={}),
+        async_repair_dirty_if_needed=AsyncMock(),
+    )
+    coord.import_store.failed_local_dates = ["2024-01-01", "2024-01-02"]
+    fetched: list[str] = []
+    imported: list[str] = []
+
+    async def _fetch(coordinator, day):  # noqa: ARG001
+        fetched.append(day.isoformat())
+        start = datetime(day.year, day.month, day.day, tzinfo=UTC)
+        return day, [_retry_interval(start)]
+
+    async def _boom(hass, account_key, intervals, **kwargs):  # noqa: ARG001
+        imported.append(intervals[0].start.date().isoformat())
+        raise RuntimeError("recorder exploded mid-import")
+
+    monkeypatch.setattr(pge_root, "async_fetch_hourly_day", _fetch)
+    monkeypatch.setattr(pge_root, "clip_hourly_to_local_day", lambda d, iv, **k: iv)
+    monkeypatch.setattr(pge_root, "validate_hourly_day", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(pge_root, "is_invalid_closed_day", lambda ok, reason: not ok)
+    monkeypatch.setattr(pge_root, "async_import_with_baseline", _boom)
+    monkeypatch.setattr(pge_root, "async_save_import_state", AsyncMock())
+
+    await pge_root._async_retry_failed_ranges(MagicMock(), coord)
+
+    # The second day was never attempted: its transaction would have replaced
+    # the first day's retained repair boundary.
+    assert fetched == ["2024-01-01"]
+    assert imported == ["2024-01-01"]
+    assert coord.import_store.dirty_from == "2024-01-01T00:00:00+00:00"
+    assert coord.import_store.completed_local_dates == []
+    coord.async_repair_dirty_if_needed.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_retry_skips_when_recovery_marker_already_pending(monkeypatch):
+    """Retries must not run while another importer's recovery marker is unrepaired."""
+    import custom_components.pge_energy as pge_root
+
+    coord = SimpleNamespace(
+        import_store=ImportStoreData(account_key="k"),
+        import_lock=asyncio.Lock(),
+        account_key="acct",
+        account_id="aid",
+        entry=SimpleNamespace(entry_id="entry1", options={}, data={}),
+        async_repair_dirty_if_needed=AsyncMock(),
+    )
+    coord.import_store.failed_local_dates = ["2024-01-01"]
+    coord.import_store.dirty_from = "2023-12-01T00:00:00+00:00"
+    fetched: list[str] = []
+
+    async def _fetch(coordinator, day):  # noqa: ARG001
+        fetched.append(day.isoformat())
+        start = datetime(day.year, day.month, day.day, tzinfo=UTC)
+        return day, [_retry_interval(start)]
+
+    record_import = AsyncMock(return_value=SimpleNamespace(cost_failed_days=[]))
+    monkeypatch.setattr(pge_root, "async_fetch_hourly_day", _fetch)
+    monkeypatch.setattr(pge_root, "clip_hourly_to_local_day", lambda d, iv, **k: iv)
+    monkeypatch.setattr(pge_root, "validate_hourly_day", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(pge_root, "is_invalid_closed_day", lambda ok, reason: not ok)
+    monkeypatch.setattr(pge_root, "async_import_with_baseline", record_import)
+    monkeypatch.setattr(pge_root, "async_save_import_state", AsyncMock())
+
+    await pge_root._async_retry_failed_ranges(MagicMock(), coord)
+
+    # Fetch is lock-free and still ran, but the transaction never replaced the
+    # pending marker and nothing was imported.
+    assert fetched == ["2024-01-01"]
+    record_import.assert_not_awaited()
+    assert coord.import_store.dirty_from == "2023-12-01T00:00:00+00:00"
+    coord.async_repair_dirty_if_needed.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_daily_fatal_stops_monthly_tier_even_after_repair(monkeypatch):
+    """A fatal daily batch keeps monthly from starting once repair clears the marker."""
+    coord = _make_coordinator()
+    coord.async_repair_dirty_if_needed = AsyncMock()
+    day = today_local() - timedelta(days=2)
+    start = datetime(day.year, day.month, day.day, tzinfo=UTC)
+    end = start + timedelta(days=1)
+
+    daily = AsyncMock(return_value=True)  # tier reports BATCH_FATAL
+    monthly = AsyncMock()
+
+    with (
+        patch.object(backfill, "compute_hourly_date_range", lambda *a, **k: None),
+        patch.object(backfill, "_async_backfill_daily", daily),
+        patch.object(backfill, "_async_backfill_monthly", monthly),
+        patch.object(backfill, "async_save_import_state", AsyncMock()),
+        patch("custom_components.pge_energy.coordinator.async_save_import_state", AsyncMock()),
+    ):
+        await async_backfill_range(coord.hass, coord.entry.entry_id, coord, start, end)
+
+    daily.assert_awaited_once()
+    # The captured fatal outcome (not just the retained marker) gates monthly:
+    # even if the immediate repair cleared dirty_from, monthly must not start.
+    monthly.assert_not_awaited()

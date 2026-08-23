@@ -1,14 +1,25 @@
 {
   "domain": "pge_energy",
   "name": "Portland General Electric Energy Usage",
-  "after_dependencies": ["recorder"],
-  "codeowners": ["@spencerthayer"],
+  "after_dependencies": [
+    "recorder"
+  ],
+  "codeowners": [
+    "@spencerthayer"
+  ],
   "config_flow": true,
-  "dependencies": ["frontend", "http", "panel_custom", "websocket_api"],
+  "dependencies": [
+    "frontend",
+    "http",
+    "panel_custom",
+    "websocket_api"
+  ],
   "documentation": "https://github.com/spencerthayer/homeassistant-pge",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/spencerthayer/homeassistant-pge/issues",
-  "requirements": ["pypdf==6.14.2"],
-  "version": "0.10.1"
+  "requirements": [
+    "pypdf==6.14.2"
+  ],
+  "version": "0.10.4"
 }

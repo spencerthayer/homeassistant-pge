@@ -17,7 +17,7 @@ Home Assistant custom integration for **Portland General Electric (PGE)** — im
 ### HACS (recommended)
 
 1. HACS → **⋯** → **Custom repositories**, add `https://github.com/spencerthayer/homeassistant-pge` with category **Integration**.
-2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.10.1`).
+2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.10.4`).
 3. Restart Home Assistant.
 
 ### Manual

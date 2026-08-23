@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import replace
 from datetime import date, datetime, timedelta
@@ -167,6 +168,43 @@ def _mark_failed(store: ImportStoreData, iso: str) -> None:
         store.failed_local_dates.append(iso)
 
 
+_CHECKPOINT_SAVE_ATTEMPTS = 2
+
+
+async def _async_save_checkpoint(
+    hass: HomeAssistant,
+    entry_id: str,
+    store: ImportStoreData,
+    *,
+    durable: bool = False,
+) -> bool:
+    """Save backfill checkpoints with an explicit durability mode.
+
+    ``durable=True`` (pre-import ``dirty_from`` markers): inline write retried
+    once so a crash mid-import can still find its recovery marker. Returns
+    False when the marker could not be landed; callers must then keep the
+    batch's days incomplete instead of touching recorder data.
+
+    ``durable=False`` (post-import / progress / tier saves): enqueue through the
+    debounced writer — losing one only narrows crash-recovery coverage until the
+    next batch's durable checkpoint absorbs it (recorder overwrite semantics).
+    """
+    if not durable:
+        with contextlib.suppress(TimeoutError):
+            await async_save_import_state(hass, entry_id, store, critical=False)
+        return True
+    for _attempt in range(_CHECKPOINT_SAVE_ATTEMPTS):
+        try:
+            result = await async_save_import_state(hass, entry_id, store)
+        except TimeoutError:
+            continue
+        # A discarded-as-stale save returns False: the store was replaced by a
+        # reset/reload and retrying with the same obsolete object cannot
+        # succeed, so the caller defers the batch.
+        return result is not False
+    return False
+
+
 async def _async_note_completed(
     coordinator: PGECoordinator,
     store: ImportStoreData,
@@ -193,19 +231,76 @@ async def _async_note_failed(coordinator: PGECoordinator, iso: str, error: str) 
     await coordinator.async_persist_sync_progress()
 
 
+# Batch outcomes. FAILED covers recorder import errors/conflicts where callers
+# may still close days (monthly's deliberate conflict policy); DEFERRED means
+# nothing was imported (durable checkpoint unavailable) and NO day may be
+# closed — history must stay incomplete for a later retry.
+BATCH_OK = "ok"
+BATCH_FAILED = "failed"
+BATCH_DEFERRED = "deferred"
+# Import raised with the recovery marker retained on disk: callers must STOP
+# scheduling further imports so later batches cannot overwrite the earliest
+# repair boundary (the next batch would otherwise replace dirty_from).
+BATCH_FATAL = "fatal"
+
+
 async def _async_import_batch(
     hass: HomeAssistant,
     entry_id: str,
     coordinator: PGECoordinator,
     intervals: list[UsageInterval],
-) -> bool:
+) -> str:
     if not intervals:
-        return True
+        return BATCH_OK
     store = coordinator.import_store
-    store.dirty_from = min(iv.start for iv in intervals).isoformat()
-    await async_save_import_state(hass, entry_id, store, critical=True)
-    try:
-        async with coordinator.import_lock:
+    fatal_exc: BaseException | None = None
+    async with coordinator.import_lock:
+        # A hard-released orphaned run carries a revoked generation (its task
+        # context captured the old run generation). Defer before touching
+        # checkpoint or recorder state so a successor job owns the store.
+        stale_check = getattr(coordinator, "_is_stale_backfill_generation", None)
+        if callable(stale_check) and stale_check():
+            _LOGGER.warning(
+                "Backfill batch stale after hard release; deferring %s interval(s)",
+                len(intervals),
+            )
+            return BATCH_DEFERRED
+        # Rebind to the CURRENT store: a hard-released/orphaned run can wait
+        # here while a checkpoint reset or reload replaces and rebinds it.
+        # Adopting the live object keeps the durable marker on the store the
+        # rest of the integration reads — otherwise this critical save would
+        # be discarded as stale yet report success, and the import would run
+        # without crash recovery.
+        store = coordinator.import_store
+        # A prior importer whose recorder import raised left its recovery
+        # marker retained (memory + disk). Overwriting dirty_from here would
+        # destroy the earliest repair boundary — defer until repair clears it.
+        if store.dirty_from is not None:
+            _LOGGER.warning(
+                "Backfill batch deferred: recovery marker %s awaiting repair",
+                store.dirty_from,
+            )
+            return BATCH_DEFERRED
+        # Crash-recovery transaction under import_lock: set the recovery
+        # marker, land it durably, run the recorder import, then clear it.
+        # Correction polling / failed-range retries share this lock and the
+        # dirty_from field, so holding it end-to-end stops another importer
+        # from overwriting or erasing this batch's marker mid-import (a crash
+        # would then have no valid repair boundary). The durable gate still
+        # defers the whole batch when slow storage will not land the marker.
+        store.dirty_from = min(iv.start for iv in intervals).isoformat()
+        if not await _async_save_checkpoint(hass, entry_id, store, durable=True):
+            _LOGGER.warning(
+                "Pre-import checkpoint timed out after %s attempt(s); deferring %s interval(s)",
+                _CHECKPOINT_SAVE_ATTEMPTS,
+                len(intervals),
+            )
+            # Marker never reached disk — clear the in-memory value so a later
+            # debounced progress save cannot persist a phantom dirty_from and
+            # trigger a spurious boot repair.
+            store.dirty_from = None
+            return BATCH_DEFERRED
+        try:
             import_result = await async_import_with_baseline(
                 hass,
                 coordinator.account_key,
@@ -213,20 +308,39 @@ async def _async_import_batch(
                 include_cost=_include_cost(coordinator),
                 account_id=coordinator.account_id,
             )
+        except Exception as exc:
+            # Keep the marker (memory + disk): a partial recorder write may
+            # exist. Handle outside the lock — runtime repair takes
+            # import_lock itself, and any waiter that grabs the lock first
+            # now hits the gate above and defers instead of replacing this
+            # boundary.
+            fatal_exc = exc
+        else:
+            # Soft cost/temperature ack failures still clear dirty_from; mark days for retry.
+            for iso in import_result.cost_failed_days:
+                _mark_failed(store, iso)
+                if iso in store.completed_local_dates:
+                    store.completed_local_dates.remove(iso)
+            store.dirty_from = None
+            store.last_imported_start = min(iv.start for iv in intervals).isoformat()
+            store.last_imported_end = max(iv.end for iv in intervals).isoformat()
+            # Clear-save enqueued while still holding the lock so no other importer
+            # can interleave before the cleared state is queued for disk.
+            await _async_save_checkpoint(hass, entry_id, store)
+    if fatal_exc is not None:
+        _LOGGER.warning("Backfill import failed: %s", fatal_exc)
+        # Best-effort immediate repair of the dirty suffix so later batches are
+        # not blocked on the retained marker; if repair itself fails the marker
+        # persists and the gate above defers later batches until boot or a
+        # correction poll heals it.
+        await coordinator.async_repair_dirty_if_needed()
+        return BATCH_FATAL
+    try:
         await coordinator.async_refresh_lifetime_totals()
     except Exception as exc:
         _LOGGER.warning("Backfill import failed: %s", exc)
-        return False
-    # Soft cost/temperature ack failures still clear dirty_from; mark days for retry.
-    for iso in import_result.cost_failed_days:
-        _mark_failed(store, iso)
-        if iso in store.completed_local_dates:
-            store.completed_local_dates.remove(iso)
-    store.dirty_from = None
-    store.last_imported_start = min(iv.start for iv in intervals).isoformat()
-    store.last_imported_end = max(iv.end for iv in intervals).isoformat()
-    await async_save_import_state(hass, entry_id, store, critical=True)
-    return not import_result.cost_failed_days
+        return BATCH_FAILED
+    return BATCH_OK if not import_result.cost_failed_days else BATCH_FAILED
 
 
 async def async_fetch_hourly_day(
@@ -254,13 +368,14 @@ async def _async_backfill_hourly(
     coordinator: PGECoordinator,
     start: date,
     end: date,
-) -> None:
+) -> bool:
+    """Run the hourly tier; True when a fatal batch must stop all tiers."""
     store = coordinator.import_store
     completed = set(store.completed_local_dates)
     pending = [d for d in _iter_days(start, end) if d.isoformat() not in completed]
     pending.reverse()  # newest closed days first so the tip cannot stall behind a 365-day walk
     if not pending:
-        return
+        return False
 
     concurrency = _concurrency(coordinator)
     sem = asyncio.Semaphore(concurrency)
@@ -316,18 +431,35 @@ async def _async_backfill_hourly(
                 days_to_complete.append(iso)
 
         if batch_intervals:
-            ok = await _async_import_batch(hass, entry_id, coordinator, batch_intervals)
-            if not ok:
+            result = await _async_import_batch(hass, entry_id, coordinator, batch_intervals)
+            if result == BATCH_DEFERRED:
+                # Checkpoint never landed and nothing was imported — do not
+                # classify these as failed. Leave them incomplete for retry.
+                _LOGGER.warning(
+                    "Hourly statistics deferred: pre-import checkpoint timed out; "
+                    "leaving %s day(s) incomplete for retry",
+                    len(batch),
+                )
+                await _async_save_checkpoint(hass, entry_id, store)
+            elif result == BATCH_FATAL:
+                # Marker retained for boot repair: stop scheduling further
+                # imports so later batches cannot replace the boundary.
                 for day in sorted(batch):
                     await _async_note_failed(coordinator, day.isoformat(), "Hourly import failed")
-                await async_save_import_state(hass, entry_id, store)
+                _LOGGER.error("Hourly statistics stopping after fatal batch failure")
+                return True
+            elif result != BATCH_OK:
+                for day in sorted(batch):
+                    await _async_note_failed(coordinator, day.isoformat(), "Hourly import failed")
+                await _async_save_checkpoint(hass, entry_id, store)
             else:
                 await _async_note_completed(coordinator, store, days_to_complete, phase=SYNC_PHASE_HOURLY)
-                await async_save_import_state(hass, entry_id, store)
+                await _async_save_checkpoint(hass, entry_id, store)
         else:
-            await async_save_import_state(hass, entry_id, store)
+            await _async_save_checkpoint(hass, entry_id, store)
 
         await asyncio.sleep(BACKFILL_DELAY_BETWEEN_CHUNKS)
+    return False
 
 
 def _daily_request_window(
@@ -352,7 +484,8 @@ async def _async_backfill_daily(
     coordinator: PGECoordinator,
     start: date,
     end: date,
-) -> None:
+) -> bool:
+    """Run the daily tier; True when a fatal batch must stop all tiers."""
     store = coordinator.import_store
     coordinator.update_sync_progress(phase=SYNC_PHASE_DAILY)
     for month_start, month_end in iter_month_windows(start, end):
@@ -372,7 +505,7 @@ async def _async_backfill_daily(
             _LOGGER.warning("Daily backfill fetch failed for %s..%s: %s", need_start, need_end, exc)
             for day in month_incomplete:
                 await _async_note_failed(coordinator, day.isoformat(), f"Daily fetch failed: {exc}")
-            await async_save_import_state(hass, entry_id, store)
+            await _async_save_checkpoint(hass, entry_id, store)
             continue
 
         needed = {d.isoformat() for d in month_incomplete}
@@ -387,8 +520,19 @@ async def _async_backfill_daily(
             covered.append(day_iso)
 
         if normalized:
-            ok = await _async_import_batch(hass, entry_id, coordinator, normalized)
-            if ok:
+            result = await _async_import_batch(hass, entry_id, coordinator, normalized)
+            if result == BATCH_DEFERRED:
+                # Same policy as hourly/monthly: deferred means unimported, not failed.
+                _LOGGER.warning(
+                    "Daily statistics deferred: pre-import checkpoint timed out; "
+                    "leaving %s day(s) incomplete for retry",
+                    len(month_incomplete),
+                )
+            elif result == BATCH_FATAL:
+                # Marker retained for boot repair; stop further daily imports.
+                _LOGGER.error("Daily statistics stopping after fatal batch failure")
+                return True
+            elif result == BATCH_OK:
                 await _async_note_completed(coordinator, store, covered, phase=SYNC_PHASE_DAILY)
             else:
                 for day in month_incomplete:
@@ -396,8 +540,9 @@ async def _async_backfill_daily(
         else:
             for day in month_incomplete:
                 await _async_note_failed(coordinator, day.isoformat(), "Daily response empty")
-        await async_save_import_state(hass, entry_id, store)
+        await _async_save_checkpoint(hass, entry_id, store)
         await asyncio.sleep(BACKFILL_DELAY_BETWEEN_CHUNKS)
+    return False
 
 
 async def _async_backfill_monthly(
@@ -406,7 +551,7 @@ async def _async_backfill_monthly(
     coordinator: PGECoordinator,
     start: date,
     end: date,
-) -> None:
+) -> bool:
     """Fill remaining days from MONTHLY billing periods (paged from yesterday).
 
     Important: PGE returns ~12 periods relative to the requested *end*. Asking
@@ -415,14 +560,15 @@ async def _async_backfill_monthly(
     Always page from yesterday back to ``start`` so covering periods are present.
 
     Days before the oldest returned period have no PGE history — mark them
-    complete as before-service rather than failing the job forever.
+    complete as before-service rather than failing the job forever. Returns
+    True when a fatal batch must stop all subsequent tiers.
     """
     store = coordinator.import_store
     coordinator.update_sync_progress(phase=SYNC_PHASE_MONTHLY)
     completed = set(store.completed_local_dates)
     incomplete = [d for d in _iter_days(start, end) if d.isoformat() not in completed]
     if not incomplete:
-        return
+        return False
 
     # Page from yesterday (or the range end, whichever is later) so the billing
     # period that covers the newest incomplete day is included.
@@ -441,14 +587,14 @@ async def _async_backfill_monthly(
         _LOGGER.warning("Monthly backfill fetch failed for %s..%s: %s", incomplete[0], fetch_end_day, exc)
         for day in incomplete:
             await _async_note_failed(coordinator, day.isoformat(), f"Monthly fetch failed: {exc}")
-        await async_save_import_state(hass, entry_id, store)
-        return
+        await _async_save_checkpoint(hass, entry_id, store)
+        return False
 
     if not response.intervals:
         for day in incomplete:
             await _async_note_failed(coordinator, day.isoformat(), "Monthly response empty")
-        await async_save_import_state(hass, entry_id, store)
-        return
+        await _async_save_checkpoint(hass, entry_id, store)
+        return False
 
     needed_days = set(incomplete)
     oldest_period_start = min(iv.start for iv in response.intervals).astimezone(PGE_TZ).date()
@@ -492,8 +638,24 @@ async def _async_backfill_monthly(
 
     if to_import:
         merged = _merge_by_month_start(to_import)
-        ok = await _async_import_batch(hass, entry_id, coordinator, merged)
-        if not ok:
+        result = await _async_import_batch(hass, entry_id, coordinator, merged)
+        if result == BATCH_DEFERRED:
+            # The durable checkpoint never landed, so nothing was imported.
+            # Closing covered days here would permanently skip unimported
+            # history — leave them incomplete for a later retry instead.
+            _LOGGER.warning(
+                "Monthly statistics deferred: pre-import checkpoint timed out; "
+                "leaving %s covered day(s) incomplete for retry",
+                len(set(covered_days)),
+            )
+            await _async_save_checkpoint(hass, entry_id, store)
+            return False
+        if result == BATCH_FATAL:
+            # Marker retained on disk for boot repair: stop the monthly tier so
+            # later work cannot replace the earliest repair boundary.
+            _LOGGER.error("Monthly statistics stopping after fatal batch failure")
+            return True
+        if result != BATCH_OK:
             # Finer hourly/daily rows often already occupy the month-start hour;
             # a recorder mismatch must not leave the history checkpoint stuck.
             # Escalated to error: this also swallows genuine import failures, and
@@ -510,7 +672,8 @@ async def _async_backfill_monthly(
         # The response had periods, just none covering these days (mid-service gap).
         for day in sorted(needed_days):
             await _async_note_failed(coordinator, day.isoformat(), "No monthly period covers this day")
-    await async_save_import_state(hass, entry_id, store)
+    await _async_save_checkpoint(hass, entry_id, store)
+    return False
 
 
 async def async_backfill_range(
@@ -563,6 +726,11 @@ async def async_backfill_range(
     hourly_days = _hourly_days(coordinator)
     hourly_range = compute_hourly_date_range(range_start, range_end, hourly_days)
 
+    # A fatal batch retains the recovery marker for repair; running later
+    # tiers would replace that earliest repair boundary with a newer batch.
+    # Subsequent tiers are skipped while the marker is retained — this covers
+    # fatal batches AND interrupted/cancelled transactions alike.
+    fatal_stop = False
     if hourly_range is not None:
         _LOGGER.info(
             "Backfill hourly tier %s..%s (max %s days)",
@@ -574,25 +742,35 @@ async def async_backfill_range(
             # Timeout only fires if the tier is at a cancellable await; hard release
             # covers non-cancellable hangs. A cancelled tier may leave dirty_from set
             # for async_repair_dirty_if_needed on the next boot.
-            await asyncio.wait_for(
-                _async_backfill_hourly(hass, entry_id, coordinator, hourly_range[0], hourly_range[1]),
-                timeout=BACKFILL_TIER_TIMEOUT.total_seconds(),
+            fatal_stop = bool(
+                await asyncio.wait_for(
+                    _async_backfill_hourly(hass, entry_id, coordinator, hourly_range[0], hourly_range[1]),
+                    timeout=BACKFILL_TIER_TIMEOUT.total_seconds(),
+                )
             )
         except TimeoutError:
             _LOGGER.error("Hourly tier exceeded %s — continuing to daily", BACKFILL_TIER_TIMEOUT)
 
-    remaining = [d for d in days if d.isoformat() not in store.completed_local_dates]
+    marker_retained = fatal_stop or coordinator.import_store.dirty_from is not None
+    remaining = [] if marker_retained else [d for d in days if d.isoformat() not in store.completed_local_dates]
     if remaining:
         _LOGGER.info("Backfill daily tier for %s incomplete day(s)", len(remaining))
         try:
-            await asyncio.wait_for(
-                _async_backfill_daily(hass, entry_id, coordinator, remaining[0], remaining[-1]),
-                timeout=BACKFILL_TIER_TIMEOUT.total_seconds(),
+            # Capture the daily tier's fatal outcome (same as hourly): if a
+            # daily batch hit BATCH_FATAL and the immediate repair cleared
+            # dirty_from, marker_retained below would otherwise turn false
+            # and let the monthly tier start over that lost boundary.
+            fatal_stop = bool(
+                await asyncio.wait_for(
+                    _async_backfill_daily(hass, entry_id, coordinator, remaining[0], remaining[-1]),
+                    timeout=BACKFILL_TIER_TIMEOUT.total_seconds(),
+                )
             )
         except TimeoutError:
             _LOGGER.error("Daily tier exceeded %s — continuing to monthly", BACKFILL_TIER_TIMEOUT)
 
-    remaining = [d for d in days if d.isoformat() not in store.completed_local_dates]
+    marker_retained = fatal_stop or coordinator.import_store.dirty_from is not None
+    remaining = [] if marker_retained else [d for d in days if d.isoformat() not in store.completed_local_dates]
     if remaining:
         _LOGGER.info("Backfill monthly tier for %s incomplete day(s)", len(remaining))
         try:
