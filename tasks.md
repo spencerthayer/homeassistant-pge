@@ -176,6 +176,12 @@
 - [x] HITL merge PR #18; HACS release `v0.9.0` published (`e2597ca`)
 - [x] v0.9.1: remove nonexistent speculative TOD pricing op (see Programs / TOD section above)
 
+## Panel styling polish — v0.10.5 (PATCH)
+
+- [x] `#tod` Tariff sources block spacing: `details.tariff-status-block` margin-top 20px
+- [x] Bill statement header: style `View bill PDF` link (`bill-pdf-header .button`) as themed outline button with hover/focus/active + external-link arrow
+- [x] VERSION bump `0.10.4 → 0.10.5` synced (const.py / manifest.json / frontend `?v=` / README); panel tests green; live HA verified serving new CSS
+
 ## Active agents
 
 - None
