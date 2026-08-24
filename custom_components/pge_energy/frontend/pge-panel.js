@@ -49,7 +49,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.10.4";
+} from "./data.js?v=0.10.5";
 import {
   createBarChart,
   createLineChart,
@@ -59,9 +59,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.10.4";
-import { sparklineSvg } from "./svg-helpers.js?v=0.10.4";
-import { applyPanelTheme } from "./theme.js?v=0.10.4";
+} from "./charts.js?v=0.10.5";
+import { sparklineSvg } from "./svg-helpers.js?v=0.10.5";
+import { applyPanelTheme } from "./theme.js?v=0.10.5";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -697,6 +697,30 @@ details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 
   .entity-row { flex-wrap: wrap; gap: 4px 12px; }
 }
 
+  /* ---- Bill PDF ---- */
+  .bill-pdf-header .button {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 14px; border-radius: 8px;
+    border: 1px solid var(--primary-color);
+    color: var(--primary-color);
+    background: transparent;
+    font-size: 0.85rem; font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+    transition:
+      background 180ms ease,
+      box-shadow 180ms ease;
+  }
+  .bill-pdf-header .button::after { content: "↗"; font-size: 0.9em; opacity: 0.75; }
+  .bill-pdf-header .button:hover,
+  .bill-pdf-header .button:focus-visible {
+    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--primary-text-color) 10%, transparent);
+  }
+  .bill-pdf-header .button:active {
+    background: color-mix(in srgb, var(--primary-color) 22%, transparent);
+  }
+
   /* ---- Time of Day hub (#tod) ---- */
   .tod-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
   .tod-source { font-size: 0.78rem; }
@@ -796,6 +820,7 @@ details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 
   .tod-range { margin: 0 0 12px; }
   .tod-range-caption { margin: 0; flex: 1 1 100%; font-size: 0.85rem; }
   .tod-range .range-label { font-size: 0.82rem; color: var(--secondary-text-color); }
+  details.tariff-status-block { margin-top: 20px; }
 `;
 
 class PgeEnergyPanel extends HTMLElement {
