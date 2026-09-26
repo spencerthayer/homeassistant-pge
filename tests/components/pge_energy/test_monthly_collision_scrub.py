@@ -129,6 +129,63 @@ def test_two_lumps_and_no_fine_rows_are_left_alone():
     assert overlays == {}
 
 
+def test_large_daily_total_is_not_treated_as_monthly():
+    """A 250 kWh DAILY row on the 15th is a day total, not a billing period."""
+    from datetime import timedelta
+
+    from custom_components.pge_energy.const import DAILY_LUMP_MIN_KWH
+
+    midnight = datetime(2026, 7, 15, 7, tzinfo=UTC)  # Pacific midnight, not month start
+    existing = {midnight: {"state": 250.0}}
+    for hour in range(1, 4):
+        existing[midnight + timedelta(hours=hour)] = {"state": 1.0}
+    overlays = _collision_zero_overlays(
+        existing,
+        lump_min=MONTHLY_LUMP_MIN_KWH,
+        daily_lump_min=DAILY_LUMP_MIN_KWH,
+    )
+    assert midnight not in overlays
+    assert len(overlays) == 3
+
+
+def test_monthly_lump_on_month_start_still_retires_immediately():
+    from datetime import timedelta
+
+    from custom_components.pge_energy.const import DAILY_LUMP_MIN_KWH
+
+    month_start = datetime(2026, 7, 1, 7, tzinfo=UTC)  # Pacific midnight of the 1st
+    existing = {month_start: {"state": 648.0}}
+    for hour in range(1, 4):
+        existing[month_start + timedelta(hours=hour)] = {"state": 1.0}
+    overlays = _collision_zero_overlays(
+        existing,
+        lump_min=MONTHLY_LUMP_MIN_KWH,
+        daily_lump_min=DAILY_LUMP_MIN_KWH,
+    )
+    assert overlays == {month_start: 0.0}
+
+
+def test_large_daily_import_defers_partial_hours():
+    from datetime import timedelta
+
+    from custom_components.pge_energy.const import DAILY_LUMP_MIN_KWH
+
+    midnight = datetime(2026, 7, 15, 7, tzinfo=UTC)
+    existing = {midnight: {"state": 1.0}}
+    for hour in range(1, 4):
+        existing[midnight + timedelta(hours=hour)] = {"state": 1.0}
+    overlay = {midnight: 250.0}
+    adjusted = _reconcile_coarse_fine_rows(
+        existing,
+        overlay,
+        lump_min=MONTHLY_LUMP_MIN_KWH,
+        daily_lump_min=DAILY_LUMP_MIN_KWH,
+    )
+    assert adjusted == 3
+    assert overlay[midnight] == 250.0
+    assert set(overlay.values()) == {0.0, 250.0}
+
+
 def test_scrub_leaves_deep_history_month_only_row():
     """A lone monthly row (no finer siblings that day) must stay — that is deep history."""
     month_start = datetime(2021, 1, 1, 8, tzinfo=UTC)

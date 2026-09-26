@@ -902,6 +902,21 @@ async def async_repair_suffix_sums(
             )
 
 
+def _is_monthly_lump(start: datetime, state: float, lump_min: float) -> bool:
+    """Identify a MONTHLY row by where it sits, not how big it is.
+
+    MONTHLY backfill always parks a billing period on calendar month-start, so a
+    coarse row on the 1st that is also monthly-sized is a period total. Any other
+    midnight row is a DAILY total and stays valid however large that day was.
+    """
+    return state >= lump_min and start.astimezone(PGE_TZ).day == 1
+
+
+def _is_daily_lump(start: datetime, state: float, day_start: datetime, daily_lump_min: float | None) -> bool:
+    """A DAILY row is the local-midnight total of one day, at any magnitude."""
+    return daily_lump_min is not None and start == day_start and state >= daily_lump_min
+
+
 def _reconcile_coarse_fine_rows(
     existing_map: dict[datetime, dict[str, Any]],
     overlay: dict[datetime, float],
@@ -941,12 +956,12 @@ def _reconcile_coarse_fine_rows(
         except (KeyError, TypeError, ValueError):
             continue
         day_start, day_end = local_day_bounds(day)
-        if state >= lump_min:
+        if _is_monthly_lump(start, state, lump_min):
             if start not in overlay:
                 overlay[start] = 0.0
                 adjusted += 1
             continue
-        if daily_lump_min is None or start != day_start or state < daily_lump_min:
+        if not _is_daily_lump(start, state, day_start, daily_lump_min):
             continue
         if hours >= (day_end - day_start).total_seconds() / 3600:
             if start not in overlay:
@@ -964,7 +979,7 @@ def _reconcile_coarse_fine_rows(
         day = start.astimezone(PGE_TZ).date()
         day_start, day_end = local_day_bounds(day)
         state = overlay[start]
-        if daily_lump_min is None or start != day_start or state < daily_lump_min or state >= lump_min:
+        if not _is_daily_lump(start, state, day_start, daily_lump_min) or _is_monthly_lump(start, state, lump_min):
             continue
         day_rows = existing_days.get(day) or []
         if not day_rows:
@@ -1014,12 +1029,11 @@ def _collision_zero_overlays(
         fine_rows = [row for row in rows if daily_lump_min is None or row[1] < daily_lump_min]
         complete = len(fine_rows) >= expected_hours
         for start, state in rows:
-            if state >= lump_min:
+            if _is_monthly_lump(start, state, lump_min):
                 if fine_rows:
                     overlays[start] = 0.0
                 continue
-            is_daily_lump = daily_lump_min is not None and start == day_start and state >= daily_lump_min
-            if not is_daily_lump:
+            if not _is_daily_lump(start, state, day_start, daily_lump_min):
                 continue
             if complete:
                 overlays[start] = 0.0
