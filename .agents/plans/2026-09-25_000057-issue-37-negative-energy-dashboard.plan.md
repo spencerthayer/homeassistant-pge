@@ -55,7 +55,7 @@ todos:
       - task-9-bump-version
   - id: task-11-ship-gate
     content: Commit, push, pass CI, and stop at merge and release authorization gates
-    status: in_progress
+    status: completed
     dependencies:
       - task-10-verify-live
 isProject: false
@@ -114,12 +114,12 @@ If the same check fails again without new evidence, change the diagnostic method
 
 | Field | Current state |
 |---|---|
-| Phase | Double-check corrections ready; awaiting CI on the new head |
-| Active task | `task-11-ship-gate` |
-| Last confirmed result | Double check found and fixed two real defects in the collision completeness rule; local suite `536 passed` + recorder `9 passed` + node `41 pass`, `ruff format --check` clean, recorder suite green 5 consecutive runs |
-| Current approach | Push the corrections and re-confirm green CI on the new head, then stop for authorization |
+| Phase | Ship gate reached again after the double check: committed, pushed, green CI |
+| Active task | None |
+| Last confirmed result | Double check fixed three defects; PR #38 head `c90f229` has `CI` success (`test`, `hassfest`, `hacs`) and `Prek Checks` success on that exact SHA |
+| Current approach | Stop. Every technical step in the plan is done |
 | Blockers / open decisions | Merge and HACS `v0.10.6` release are unauthorized. Issue #37 stays open until the reporter retests |
-| Next action | Commit and push the double-check fixes, then confirm CI on the new head |
+| Next action | Ask the user to authorize the merge of PR #38, then the HACS release |
 
 ## Task dependency graph
 
@@ -140,7 +140,7 @@ flowchart TD
     task_8_document_contract("☑ task-8-document-contract<br/>Document import and repair contracts")
     task_9_bump_version{{"☑ task-9-bump-version<br/>Sync PATCH version locations"}}
     task_10_verify_live(["☑ task-10-verify-live<br/>Run local and live verification"])
-    task_11_ship_gate{"◐ task-11-ship-gate<br/>Commit, push, CI, authorization gates"}
+    task_11_ship_gate{"☑ task-11-ship-gate<br/>Commit, push, CI, authorization gates"}
   end
   task_1_branch_baseline -->|clean named branch| task_2_recorder_red_test
   task_2_recorder_red_test -->|intended red behavior| task_3_collision_safe_merge
@@ -175,6 +175,7 @@ flowchart TD
   style task_8_document_contract stroke-width:4px
   style task_9_bump_version stroke-width:4px
   style task_10_verify_live stroke-width:4px
+  style task_11_ship_gate stroke-width:4px
 ```
 
 ---
@@ -642,3 +643,4 @@ Use the SHA-specific Actions run and require conclusion `success` for every job.
 | 2026-09-25 | Double check / defect 2 | MONTHLY lumps keep retiring only when finer rows exist | The rewritten `_collision_zero_overlays` dropped the old `if not fine: continue` guard, so a day with only large rows would have zeroed them | Restored the guard via `fine_rows`; added `test_two_lumps_and_no_fine_rows_are_left_alone` |
 | 2026-09-25 | Double check / defect 3 | Incoming coarse rows are not finer evidence for their own day | The existing-lump branch counted the incoming DAILY row as a finer hour, popped it, and left the stored 23 hours in place (day total 198 instead of 175) | Excluded coarse incoming rows from `overlay_hours_by_day`; the same recorder test now proves 175 |
 | 2026-09-25 | Double check / test flake | Recorder-backed tests must be deterministic | Two recorder tests passed locally but failed intermittently, and once only after an extra statistics read warmed the recorder view | Added `_wait_for_rows`, which drains the queue and polls until the expected row count is readable; 5 consecutive recorder runs green |
+| 2026-09-25 | Double check / CI re-confirm | Corrected head is green | `c90f229`: `CI` `success` (`test`, `hassfest`, `hacs`) and `Prek Checks` `success`; local `536 passed`, recorder `9 passed`, node `41 pass` | Ship gate complete again; merge and release still require explicit authorization |
