@@ -55,7 +55,7 @@ todos:
       - task-9-bump-version
   - id: task-11-ship-gate
     content: Commit, push, pass CI, and stop at merge and release authorization gates
-    status: in_progress
+    status: completed
     dependencies:
       - task-10-verify-live
 isProject: false
@@ -114,12 +114,12 @@ If the same check fails again without new evidence, change the diagnostic method
 
 | Field | Current state |
 |---|---|
-| Phase | Implementation verified; PR open; awaiting CI and authorization |
-| Active task | `task-11-ship-gate` |
-| Last confirmed result | Full suite `533 passed` + recorder `8 passed` + node `41 pass` + secret scan; live `/pge` on `?v=0.10.6` populated with sync `complete 100%`; Energy dashboard positive; recorder DB shows no negative daily total across full history and `0` negative states; startup repair cleared 6 rows once and is a no-op on restart; `a140bc1` committed and pushed, PR #38 open against `main` |
-| Current approach | Stop here. Merge and HACS release need explicit current-conversation authorization, and CI must be green on this SHA first |
-| Blockers / open decisions | GitHub Actions has not started any run for `a140bc1` on PR #38 (four checks over ~3 minutes, zero runs on the branch). Local full suite is green; the release gate stays closed |
-| Next action | Ask the user whether to merge PR #38 and to authorize the HACS `v0.10.6` release once CI is green |
+| Phase | Ship gate reached: committed, pushed, green CI, stopped for authorization |
+| Active task | None |
+| Last confirmed result | PR #38 head `d635281`: `CI` success (`test`, `hassfest`, `hacs` all `success`) and `Prek Checks` success on that exact SHA |
+| Current approach | Stop. Every technical step in the plan is done |
+| Blockers / open decisions | Merge and HACS `v0.10.6` release are unauthorized. Issue #37 stays open until the reporter retests |
+| Next action | Ask the user to authorize the merge of PR #38, then the HACS release |
 
 ## Task dependency graph
 
@@ -140,7 +140,7 @@ flowchart TD
     task_8_document_contract("☑ task-8-document-contract<br/>Document import and repair contracts")
     task_9_bump_version{{"☑ task-9-bump-version<br/>Sync PATCH version locations"}}
     task_10_verify_live(["☑ task-10-verify-live<br/>Run local and live verification"])
-    task_11_ship_gate{"◐ task-11-ship-gate<br/>Commit, push, CI, authorization gates"}
+    task_11_ship_gate{"☑ task-11-ship-gate<br/>Commit, push, CI, authorization gates"}
   end
   task_1_branch_baseline -->|clean named branch| task_2_recorder_red_test
   task_2_recorder_red_test -->|intended red behavior| task_3_collision_safe_merge
@@ -175,6 +175,7 @@ flowchart TD
   style task_8_document_contract stroke-width:4px
   style task_9_bump_version stroke-width:4px
   style task_10_verify_live stroke-width:4px
+  style task_11_ship_gate stroke-width:4px
 ```
 
 ---
@@ -635,3 +636,6 @@ Use the SHA-specific Actions run and require conclusion `success` for every job.
 | 2026-09-25 | Decision / Task 11 | PR was opened against `dev` | `ci.yml` only triggers on `main`; prior feature PRs (#24, #25, #35) targeted `main` | `PR base dev -> main so the CI workflow runs; no code impact` |
 | 2026-09-25 | Task 11 / CI | A run should start for `a140bc1` after the retarget | No run listed for `a140bc1` after repeated checks | Waiting on GitHub Actions; release stays blocked until a green run on this SHA |
 | 2026-09-25 | Task 11 / CI final check | A run should exist for `a140bc1` after the retarget | `actions/runs?branch=issue-37` returned zero runs; PR #38 is open with `base=main` | `Task 11 stays in_progress: no green CI run on this SHA, and merge/release are unauthorized. Next action is the user's merge and release decision` |
+| 2026-09-25 | Task 11 / CI trigger | The retarget alone should start a run | It did not; reopening PR #38 fired the `pull_request` event and CI started | `Retarget-only -> close/reopen the PR to emit pull_request; no code change needed` |
+| 2026-09-25 | Task 11 / CI failures | CI green on the first push | Run `36212437190` Prek failed on `ruff-format` (`backfill.py`, `test_backfill_hang.py`), then `36212518440` CI `test` failed on `test_startup_repair_resolves_stale_daily_lump` (`assert 0 == 3`) | Fixed by `f0b9378` (ruff format) and `d635281` (drain the recorder queue with `async_wait_recorder_queue` before the repair reads rows); local full suite green after both |
+| 2026-09-25 | Task 11 / CI green | All required jobs success on the PR head | `d635281`: `CI` `success` (`test`, `hassfest`, `hacs`) and `Prek Checks` `success` | Task 11 complete; merge and release still require explicit authorization |
