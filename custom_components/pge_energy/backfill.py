@@ -484,13 +484,19 @@ async def _async_backfill_daily(
     coordinator: PGECoordinator,
     start: date,
     end: date,
+    *,
+    blocked_days: frozenset[date] = frozenset(),
 ) -> bool:
     """Run the daily tier; True when a fatal batch must stop all tiers."""
     store = coordinator.import_store
     coordinator.update_sync_progress(phase=SYNC_PHASE_DAILY)
     for month_start, month_end in iter_month_windows(start, end):
         completed = set(store.completed_local_dates)
-        month_incomplete = [d for d in _iter_days(month_start, month_end) if d.isoformat() not in completed]
+        month_incomplete = [
+            d
+            for d in _iter_days(month_start, month_end)
+            if d.isoformat() not in completed and d not in blocked_days
+        ]
         if not month_incomplete:
             continue
         need_start, need_end = month_incomplete[0], month_incomplete[-1]
@@ -551,6 +557,8 @@ async def _async_backfill_monthly(
     coordinator: PGECoordinator,
     start: date,
     end: date,
+    *,
+    blocked_days: frozenset[date] = frozenset(),
 ) -> bool:
     """Fill remaining days from MONTHLY billing periods (paged from yesterday).
 
@@ -566,7 +574,11 @@ async def _async_backfill_monthly(
     store = coordinator.import_store
     coordinator.update_sync_progress(phase=SYNC_PHASE_MONTHLY)
     completed = set(store.completed_local_dates)
-    incomplete = [d for d in _iter_days(start, end) if d.isoformat() not in completed]
+    incomplete = [
+        d
+        for d in _iter_days(start, end)
+        if d.isoformat() not in completed and d not in blocked_days
+    ]
     if not incomplete:
         return False
 
@@ -751,6 +763,20 @@ async def async_backfill_range(
         except TimeoutError:
             _LOGGER.error("Hourly tier exceeded %s — continuing to daily", BACKFILL_TIER_TIMEOUT)
 
+    # A closed day inside the hourly window that hourly could not validate stays on
+    # the hourly tier: PGE is still publishing it. Completing it with a coarse
+    # total would mark a day whose fine hours are still arriving.
+    blocked_days: frozenset[date] = frozenset()
+    if hourly_range is not None:
+        frontier = today_local() - timedelta(days=1)
+        frontier_iso = frontier.isoformat()
+        if hourly_range[0] <= frontier <= hourly_range[1] and frontier_iso not in store.completed_local_dates:
+            blocked_days = frozenset({frontier})
+            _LOGGER.info(
+                "Keeping hourly frontier %s incomplete; coarse tiers skip it until hourly validates",
+                frontier_iso,
+            )
+
     marker_retained = fatal_stop or coordinator.import_store.dirty_from is not None
     remaining = [] if marker_retained else [d for d in days if d.isoformat() not in store.completed_local_dates]
     if remaining:
@@ -762,7 +788,14 @@ async def async_backfill_range(
             # and let the monthly tier start over that lost boundary.
             fatal_stop = bool(
                 await asyncio.wait_for(
-                    _async_backfill_daily(hass, entry_id, coordinator, remaining[0], remaining[-1]),
+                    _async_backfill_daily(
+                        hass,
+                        entry_id,
+                        coordinator,
+                        remaining[0],
+                        remaining[-1],
+                        blocked_days=blocked_days,
+                    ),
                     timeout=BACKFILL_TIER_TIMEOUT.total_seconds(),
                 )
             )
@@ -775,7 +808,14 @@ async def async_backfill_range(
         _LOGGER.info("Backfill monthly tier for %s incomplete day(s)", len(remaining))
         try:
             await asyncio.wait_for(
-                _async_backfill_monthly(hass, entry_id, coordinator, remaining[0], remaining[-1]),
+                _async_backfill_monthly(
+                    hass,
+                    entry_id,
+                    coordinator,
+                    remaining[0],
+                    remaining[-1],
+                    blocked_days=blocked_days,
+                ),
                 timeout=BACKFILL_TIER_TIMEOUT.total_seconds(),
             )
         except TimeoutError:

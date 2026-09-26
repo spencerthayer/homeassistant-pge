@@ -30,7 +30,7 @@ from custom_components.pge_energy.coordinator import PGECoordinator
 from custom_components.pge_energy.models import UsageInterval, UsageResolution, UsageResponse
 from custom_components.pge_energy.statistics import ImportBaselineResult, async_wait_recorder_queue
 from custom_components.pge_energy.store import ImportStoreData, async_save_import_state
-from custom_components.pge_energy.time_util import local_day_bounds, today_local
+from custom_components.pge_energy.time_util import PGE_TZ, local_day_bounds, today_local
 
 
 def _make_coordinator() -> PGECoordinator:
@@ -1102,3 +1102,90 @@ async def test_daily_fatal_stops_monthly_tier_even_after_repair(monkeypatch):
     # The captured fatal outcome (not just the retained marker) gates monthly:
     # even if the immediate repair cleared dirty_from, monthly must not start.
     monthly.assert_not_awaited()
+
+
+def _usage_interval(day: date, hour: int, kwh: str, resolution: UsageResolution) -> UsageInterval:
+    day_start, day_end = local_day_bounds(day)
+    hourly = resolution is UsageResolution.HOURLY
+    return UsageInterval(
+        account_key="keykeykeykeykeyk",
+        resolution=resolution,
+        start=day_start + timedelta(hours=hour if hourly else 0),
+        end=day_start + timedelta(hours=hour + 1) if hourly else day_end,
+        kwh=Decimal(kwh),
+        amount=Decimal("1"),
+        temperature=None,
+        usage_status=None,
+        interval_size=None,
+        source_timestamp=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_gapped_hourly_frontier_skips_coarse_tiers(monkeypatch):
+    """A gapped day inside the hourly window stays incomplete; older gaps still use coarse tiers."""
+    coord = _make_coordinator()
+    frontier = today_local() - timedelta(days=1)
+    older = frontier - timedelta(days=1)
+    start, _ = local_day_bounds(older)
+    end, _ = local_day_bounds(frontier)
+
+    async def fake_fetch(_coordinator, day):
+        count = 3 if day == frontier else 24
+        return day, [_usage_interval(day, hour, "1", UsageResolution.HOURLY) for hour in range(count)]
+
+    async def fake_daily(_start, _end, resolution=UsageResolution.DAILY):
+        return UsageResponse(
+            resolution=resolution,
+            intervals=[
+                _usage_interval(day, 0, "20", UsageResolution.DAILY) for day in (older, frontier)
+            ],
+            total_kwh=None,
+            total_cost=None,
+            is_tod=None,
+            acct_type=None,
+        )
+
+    async def fake_monthly(_start, _end):
+        return UsageResponse(
+            resolution=UsageResolution.MONTHLY,
+            intervals=[
+                _usage_interval(day, 0, "600", UsageResolution.MONTHLY) for day in (older, frontier)
+            ],
+            total_kwh=None,
+            total_cost=None,
+            is_tod=None,
+            acct_type=None,
+        )
+
+    imported: list[UsageInterval] = []
+
+    async def capture_batch(_hass, _entry_id, _coordinator, intervals):
+        imported.extend(intervals)
+        return backfill.BATCH_OK
+
+    monkeypatch.setattr(backfill, "BACKFILL_DELAY_BETWEEN_CHUNKS", 0)
+    monkeypatch.setattr(backfill, "_hourly_days", lambda _coordinator: 1)
+    with (
+        patch.object(backfill, "async_fetch_hourly_day", fake_fetch),
+        patch.object(backfill, "_async_import_batch", capture_batch),
+        patch.object(backfill, "async_save_import_state", AsyncMock()),
+        patch.object(coord, "async_get_usage_with_auth_retry", fake_daily),
+        patch.object(coord, "async_get_monthly_usage_with_auth_retry", fake_monthly),
+        patch("custom_components.pge_energy.coordinator.async_save_import_state", AsyncMock()),
+        patch.object(coord.auth_manager, "ensure_valid_token", AsyncMock()),
+        patch.object(coord, "persist_auth_to_entry", MagicMock()),
+    ):
+        await async_backfill_range(coord.hass, coord.entry.entry_id, coord, start, end)
+
+    store = coord.import_store
+    assert frontier.isoformat() not in store.completed_local_dates
+    assert frontier.isoformat() in store.failed_local_dates
+    assert older.isoformat() in store.completed_local_dates
+    coarse_frontier = [
+        iv
+        for iv in imported
+        if iv.resolution is not UsageResolution.HOURLY
+        and iv.start.astimezone(PGE_TZ).date() == frontier
+    ]
+    assert coarse_frontier == []

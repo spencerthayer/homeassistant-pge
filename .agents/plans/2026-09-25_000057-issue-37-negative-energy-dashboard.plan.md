@@ -4,58 +4,58 @@ overview: Harden the hourly publication frontier and coarse/fine statistics repa
 todos:
   - id: task-1-branch-baseline
     content: Create the issue-37 branch and record a focused green baseline
-    status: pending
+    status: completed
     dependencies: []
   - id: task-2-recorder-red-test
     content: Add synthetic recorder contract tests for coarse and frontier sequences
-    status: pending
+    status: completed
     dependencies:
       - task-1-branch-baseline
   - id: task-3-collision-safe-merge
     content: Make cumulative overlay replacement collision-safe and monotonic
-    status: pending
+    status: completed
     dependencies:
       - task-2-recorder-red-test
   - id: task-4-startup-repair-red-test
     content: Add synthetic tests for existing sparse coarse/fine collision repair
-    status: pending
+    status: completed
     dependencies:
       - task-3-collision-safe-merge
   - id: task-5-coarse-fine-repair
     content: Extend startup repair to daily and monthly coarse collisions
-    status: pending
+    status: completed
     dependencies:
       - task-4-startup-repair-red-test
   - id: task-6-backfill-red-test
     content: Add a backfill regression for a gapped active hourly frontier
-    status: pending
+    status: completed
     dependencies:
       - task-3-collision-safe-merge
       - task-5-coarse-fine-repair
   - id: task-7-frontier-guard
     content: Prevent coarse tiers from completing the active hourly frontier
-    status: pending
+    status: completed
     dependencies:
       - task-6-backfill-red-test
   - id: task-8-document-contract
     content: Document the repaired import and repair contracts
-    status: pending
+    status: in_progress
     dependencies:
       - task-5-coarse-fine-repair
       - task-7-frontier-guard
   - id: task-9-bump-version
     content: Bump the PATCH version in every shipped location
-    status: pending
+    status: completed
     dependencies:
       - task-8-document-contract
   - id: task-10-verify-live
     content: Run focused, full-suite, and live Home Assistant verification
-    status: pending
+    status: completed
     dependencies:
       - task-9-bump-version
   - id: task-11-ship-gate
     content: Commit, push, pass CI, and stop at merge and release authorization gates
-    status: pending
+    status: in_progress
     dependencies:
       - task-10-verify-live
 isProject: false
@@ -114,33 +114,33 @@ If the same check fails again without new evidence, change the diagnostic method
 
 | Field | Current state |
 |---|---|
-| Phase | Planning complete; implementation not started |
-| Active task | None |
-| Last confirmed result | Repository and issue paths inspected; no affected-account data is available or required by the revised plan; no tests or runtime reproduction executed during planning |
-| Current approach | Synthetic recorder contract matrix → collision-safe cumulative merge → startup repair → frontier backfill guard |
-| Blockers / open decisions | None for implementation. Direct confirmation on the affected account is unavailable and becomes optional post-release reporter follow-up |
-| Next action | After implementation is requested, begin Task 1 and create/check out `issue-37` from the current integration branch |
+| Phase | Implementation verified |
+| Active task | `task-11-ship-gate` |
+| Last confirmed result | Full suite `533 passed` + recorder `8 passed` + node `41 pass` + secret scan; live `/pge` on `?v=0.10.6` populated with sync `complete 100%`; Energy dashboard positive; recorder DB shows no negative daily total across full history and `0` negative states; startup repair cleared 6 rows once and is a no-op on restart |
+| Current approach | Commit on `issue-37`, push, open the PR, wait for green CI, then stop for merge and release authorization |
+| Blockers / open decisions | Affected-account verification is unavailable; live UAT was a no-regression check, not reproduction |
+| Next action | Commit, push `issue-37`, open the PR, and watch CI |
 
 ## Task dependency graph
 
 ```mermaid
 flowchart TD
   subgraph discover [Discover]
-    task_1_branch_baseline["☐ task-1-branch-baseline<br/>Create issue-37 branch and record baseline"]
-    task_2_recorder_red_test(["☐ task-2-recorder-red-test<br/>Exercise coarse and frontier sequences in recorder"])
+    task_1_branch_baseline["☑ task-1-branch-baseline<br/>Create issue-37 branch and record baseline"]
+    task_2_recorder_red_test(["☑ task-2-recorder-red-test<br/>Exercise coarse and frontier sequences in recorder"])
   end
   subgraph implement [Implement]
-    task_3_collision_safe_merge{{"☐ task-3-collision-safe-merge<br/>Make cumulative replacement collision-safe"}}
-    task_4_startup_repair_red_test(["☐ task-4-startup-repair-red-test<br/>Exercise existing collision repair synthetically"])
-    task_5_coarse_fine_repair{{"☐ task-5-coarse-fine-repair<br/>Repair daily and monthly coarse collisions"}}
-    task_6_backfill_red_test(["☐ task-6-backfill-red-test<br/>Reproduce frontier coarse fallback"])
-    task_7_frontier_guard{{"☐ task-7-frontier-guard<br/>Keep active hourly frontier incomplete"}}
+    task_3_collision_safe_merge{{"☑ task-3-collision-safe-merge<br/>Make cumulative replacement collision-safe"}}
+    task_4_startup_repair_red_test(["☑ task-4-startup-repair-red-test<br/>Exercise existing collision repair synthetically"])
+    task_5_coarse_fine_repair{{"☑ task-5-coarse-fine-repair<br/>Repair daily and monthly coarse collisions"}}
+    task_6_backfill_red_test(["☑ task-6-backfill-red-test<br/>Reproduce frontier coarse fallback"])
+    task_7_frontier_guard{{"☑ task-7-frontier-guard<br/>Keep active hourly frontier incomplete"}}
   end
   subgraph closeout [Closeout]
-    task_8_document_contract("☐ task-8-document-contract<br/>Document import and repair contracts")
-    task_9_bump_version{{"☐ task-9-bump-version<br/>Sync PATCH version locations"}}
-    task_10_verify_live(["☐ task-10-verify-live<br/>Run local and live verification"])
-    task_11_ship_gate{"☐ task-11-ship-gate<br/>Commit, push, CI, authorization gates"}
+    task_8_document_contract("☑ task-8-document-contract<br/>Document import and repair contracts")
+    task_9_bump_version{{"☑ task-9-bump-version<br/>Sync PATCH version locations"}}
+    task_10_verify_live(["☑ task-10-verify-live<br/>Run local and live verification"])
+    task_11_ship_gate{"◐ task-11-ship-gate<br/>Commit, push, CI, authorization gates"}
   end
   task_1_branch_baseline -->|clean named branch| task_2_recorder_red_test
   task_2_recorder_red_test -->|intended red behavior| task_3_collision_safe_merge
@@ -165,6 +165,16 @@ flowchart TD
   style discover fill:#f5f3ff,stroke:#7c3aed,color:#111827
   style implement fill:#fff7f7,stroke:#dc2626,color:#111827
   style closeout fill:#f8fafc,stroke:#111827,color:#111827
+  style task_1_branch_baseline stroke-width:4px
+  style task_2_recorder_red_test stroke-width:4px
+  style task_3_collision_safe_merge stroke-width:4px
+  style task_4_startup_repair_red_test stroke-width:4px
+  style task_5_coarse_fine_repair stroke-width:4px
+  style task_6_backfill_red_test stroke-width:4px
+  style task_7_frontier_guard stroke-width:4px
+  style task_8_document_contract stroke-width:4px
+  style task_9_bump_version stroke-width:4px
+  style task_10_verify_live stroke-width:4px
 ```
 
 ---
@@ -607,3 +617,17 @@ Use the SHA-specific Actions run and require conclusion `success` for every job.
 | 2026-09-25 | Planning / `usage_direction.py` | HOURLY direction and coarse net semantics remain correct | Observed explicit contract: coarse negatives do not fabricate return/compensation | Preserve unless a failing recorder test proves a separate overwrite defect |
 | 2026-09-25 | Planning / access constraint | Original plan assumed affected `state`/`sum` evidence might be obtained for exact reproduction | Confirmed: no access to the affected account or Home Assistant recorder DB, and the reporter cannot supply it | `Affected-instance data unavailable -> synthetic recorder contract matrix plus conservative code-risk hardening; affected confirmation moved to optional post-release reporter follow-up; invalidated the exact-reproduction gate in Task 2 and live resolution claim in Task 10/AC1` |
 | 2026-09-25 | Planning / tests | No baseline or runtime reproduction claimed | No tests, live HA actions, commits, pushes, or releases run during planning | Begin Task 1 only after implementation authorization |
+| 2026-09-25 | Implementation start / repository | Begin only on a named ticket branch with a clean worktree | Observed `dev` at `608d4a8` with clean worktree; `issue-37` did not exist | Create `issue-37` from current `dev`; preserve the existing plan commit as the starting point |
+| 2026-09-25 | Task 1 / `issue-37` branch | Named branch from current integration head; focused baseline green | Created `issue-37` from `608d4a8`; `61 passed, 6 warnings` exit 0 | Mark task 1 complete; start synthetic recorder contract matrix |
+| 2026-09-25 | Task 2 / recorder matrix | Coarse/fine orderings expose a wrong Energy-period total | `3 failed, 4 passed`: `partial_then_daily` 177 vs 175, `daily_then_partial` 3 vs 175, `partial_daily_partial` 4 vs 175; 24/23/25-hour day cases all reproduce the same three; no `sum` decrease in any case | Direction correction: the reported negative is not reproducible synthetically; the proven defect is coarse/fine double count and total loss. Task 3 reconciles the collision instead of clamping `sum` |
+| 2026-09-25 | Decision / Task 3 | Original plan assumed a synthetic negative `sum` transition would be reproducible | Matrix shows monotonic `sum` in every ordering; the wrong values are the day totals | `Negative-sum hypothesis -> coarse/fine reconciliation; no blanket sum clamp; no claim that the reporter's negative was reproduced` |
+| 2026-09-25 | Task 3 / collision reconciliation | Coarse totals own incomplete finer days; complete finer days replace them | `_reconcile_coarse_fine_rows` handles both arrival orders; recorder matrix `7 passed`, collision + ack units `12 passed`, Ruff clean | Mark task 3 complete; cover the same rule in startup repair |
+| 2026-09-25 | Decision / Task 3 | Plan proposed deferring only the same-start replacement | Matrix required the whole finer day to defer, and the coarse row to win when it arrives after fine rows | `Same-start-only defer -> whole-day reconciliation in both directions; monthly-sized lumps keep the existing retire-on-finer-row behavior` |
+| 2026-09-25 | Task 4/5 / startup repair | Stored DAILY lump beside partial hours must resolve idempotently | Red first (`0 == 3`), then green: repaired to `[175, 0, 0, 0]`, second pass cleared `0`; recorder `8 passed`, repair + coordinator `39 passed`; renamed to `async_repair_coarse_fine_collisions` with no compatibility alias | Mark tasks 4 and 5 complete; move to the backfill frontier guard |
+| 2026-09-25 | Decision / Task 5 | Plan proposed zeroing the DAILY lump during startup repair | Zeroing the lump drops the only complete total for the day (`175 -> 3`), so the finer rows defer instead | `Zero the daily lump -> zero the finer rows while the stored day is incomplete; a complete stored day retires the lump; monthly-sized lumps keep retiring immediately` |
+| 2026-09-25 | Task 6/7 / frontier guard | A gapped day inside the hourly window must not be completed by DAILY/MONTHLY while older gaps still can | Red first (frontier completed and failure cleared), then green with `blocked_days` on both coarse tiers; backfill + coordinator `66 passed`, Ruff clean | Mark tasks 6 and 7 complete; document the contract |
+| 2026-09-25 | Decision / Task 6 | Plan proposed a new `tests/components/pge_energy/test_backfill_frontier.py` | Reusing `_make_coordinator` from `test_backfill_hang.py` avoids duplicating the coordinator fixture | `New test file -> add test_gapped_hourly_frontier_skips_coarse_tiers to test_backfill_hang.py; no new fixture module` |
+| 2026-09-25 | Task 8/9 / docs and version | Contract documented and PATCH version synchronized | `ARCHITECTURE.md` items 4-7, `DATA_CONTRACT.md` history section, `tasks.md` issue #37 section; `0.10.6` in const/manifest/frontend/README; `test_migrate.py` `2 passed` | Mark tasks 8 and 9 complete; run full verification |
+| 2026-09-25 | Task 10 / local suite | Focused and canonical suites green | `bash scripts/run_tests.sh`: `533 passed`, recorder `8 passed`, node `41 pass`, secret scan passed | Mark task 10 local half complete |
+| 2026-09-25 | Task 10 / live UAT | Own instance shows no regression after a full process restart | `/pge` loaded `?v=0.10.6`, KPIs populated, Sync status `complete` 100% with no failed days, latest interval Sep 25 01:00 PT; Energy dashboard Grid 350 Wh / Home 350 Wh with a positive bar; recorder DB over 2019-11 to 2026-09 shows zero negative Pacific day totals and zero negative states; 24 hourly rows on each recent day | No-regression evidence recorded; affected-account confirmation stays post-release |
+| 2026-09-25 | Task 10 / startup repair live | One-time repair then stable no-op | First restart: `Cleared 6 coarse/fine collision row(s) ... rebuilt sums from 2025-08-01T07:00:00+00:00`; second restart: zero repair lines, zero recorder `UNIQUE constraint` errors, zero pge errors | The 4 unique-constraint errors were a one-time startup race with HA `compile_missing_statistics` on the first repair write; clean on the second run |

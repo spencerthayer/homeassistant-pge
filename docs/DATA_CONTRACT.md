@@ -200,12 +200,14 @@ The default-off `capture_graphql_diagnostics` switch remains available for follo
 - **Poll / correction:** HOURLY one local day per request; clip starts to `[day_start, day_end)`.
   - Scheduled poll (default every **4 hours** from **00:00** America/Los_Angeles) always re-fetches the correction window, including while history backfill is importing older days (`import_lock` serializes writes; do not skip the fetch).
   - If yesterday’s hourly is still gap/empty (PGE not finished publishing), **still import any hours returned**, demote the day from `completed_local_dates`, and **catch up every 2 hours** until yesterday validates complete — do not leave a stale daily midnight lump until the next grid slot.
+  - The newest closed day inside `hourly_backfill_days` stays on the hourly tier: DAILY/MONTHLY must neither import nor complete it while hourly has not validated. Older gaps still fall through to DAILY/MONTHLY.
 - **History backfill (tiered):**
   1. HOURLY for newest `hourly_backfill_days` (newest incomplete local day first — do not walk 2019→yesterday while the tip stalls)
   2. DAILY for older gaps (request windows padded to ≥31 days)
   3. MONTHLY via `get_monthly_usage_paged` from **yesterday** back through the gap; mark days before the oldest period complete (no PGE history); mark billing-period-covered days complete even if month-start statistic import conflicts with finer hourly rows
   - **Do not import MONTHLY into `_consumption`/`_cost` when that calendar month already has any completed finer day** — still close the gap days. Parking a full billing-period total on month-start atop hourly rows double-counts (live: 2025-09-01 showed 677 kWh = 648 monthly lump + ~29 hourly).
-  - On finer import / startup repair: zero any `state ≥ 200 kWh` (or `≥ $50` cost) row that shares a Pacific day with smaller sibling rows, then rebuild cumulative sums.
+  - **Coarse/fine rows never count the same energy twice.** A DAILY row at Pacific midnight is that day's complete total. While the finer overlay for that day is incomplete, the coarse total wins and the finer rows are written as zero; once the local day is complete (23/24/25 hours) the finer rows replace the coarse row. This applies whichever arrives first, and cumulative `sum` is rebuilt from the predecessor anchor.
+  - On finer import / startup repair: zero any `state ≥ 200 kWh` (or `≥ $50` cost) row that shares a Pacific day with smaller sibling rows, and for a DAILY-sized midnight row zero the smaller siblings instead while that day is still incomplete. Then rebuild cumulative sums.
 - Daily import rows use local-midnight starts; monthly use calendar month starts for external sum statistics **only when the month has no finer history**.
 - Interval `temperature` (when present) is imported as external statistic `pge_energy:<account_key>_temperature` (mean °F, no cumulative sum) alongside `_consumption` / `_cost`.
 - The same hourly rows are mirrored onto recorder entity statistics for `sensor.pge_*_energy`, `sensor.pge_*_cost`, and `sensor.pge_*_outdoor_temperature` so entity pickers and Statistics graphs can use them.
