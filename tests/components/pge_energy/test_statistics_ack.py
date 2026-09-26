@@ -16,7 +16,7 @@ from custom_components.pge_energy.const import (
 from custom_components.pge_energy.models import UsageInterval, UsageResolution
 from custom_components.pge_energy.statistics import (
     ImportBaselineResult,
-    _scrub_monthly_lumps_for_days,
+    _reconcile_coarse_fine_rows,
     async_ack_external_statistics,
     async_import_with_baseline,
     async_verify_statistic_states,
@@ -145,8 +145,8 @@ def test_scrub_zero_starts_stay_in_expected_states_path():
     hour = datetime(2025, 9, 1, 8, tzinfo=UTC)
     existing = {month_start: {"state": 648.0}, hour: {"state": 0.28}}
     overlay = {hour: 0.31}
-    scrubbed = _scrub_monthly_lumps_for_days(existing, overlay, lump_min=MONTHLY_LUMP_MIN_KWH)
-    assert scrubbed == 1
+    adjusted = _reconcile_coarse_fine_rows(existing, overlay, lump_min=MONTHLY_LUMP_MIN_KWH)
+    assert adjusted == 1
     assert overlay[month_start] == 0.0
     # Simulate expected_states construction used by import/repair paths.
     expected = {start: float(state) for start, state in overlay.items()}
@@ -158,8 +158,8 @@ def test_scrub_zero_cost_lump_also_in_overlay():
     hour = datetime(2025, 9, 1, 8, tzinfo=UTC)
     existing = {month_start: {"state": 120.0}, hour: {"state": 0.04}}
     overlay = {hour: 0.05}
-    scrubbed = _scrub_monthly_lumps_for_days(existing, overlay, lump_min=MONTHLY_LUMP_MIN_COST)
-    assert scrubbed == 1
+    adjusted = _reconcile_coarse_fine_rows(existing, overlay, lump_min=MONTHLY_LUMP_MIN_COST)
+    assert adjusted == 1
     assert overlay[month_start] == 0.0
 
 

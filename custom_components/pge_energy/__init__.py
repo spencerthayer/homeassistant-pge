@@ -215,7 +215,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
             # Continue to repair/backfill attempts only after a successful refresh.
 
         await coordinator.async_repair_dirty_if_needed()
-        await coordinator.async_repair_monthly_collisions_if_needed()
+        await coordinator.async_repair_coarse_fine_if_needed()
         await async_cleanup_orphaned_billing_entity_mirrors(
             hass,
             entry_id=entry.entry_id,

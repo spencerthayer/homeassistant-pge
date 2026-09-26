@@ -182,6 +182,20 @@
 - [x] Bill statement header: style `View bill PDF` link (`bill-pdf-header .button`) as themed outline button with hover/focus/active + external-link arrow
 - [x] VERSION bump `0.10.4 → 0.10.5` synced (const.py / manifest.json / frontend `?v=` / README); panel tests green; live HA verified serving new CSS
 
+## Negative Energy consumption — issue #37 (branch `issue-37`)
+
+**Constraint:** the affected account/Home Assistant instance is unavailable and the reporter cannot supply recorder rows, so the exact historical sequence is unconfirmed. The work is defensive invariant hardening, verified with a synthetic recorder matrix.
+
+- [x] Synthetic recorder contract matrix across coarse/fine orderings and 23/24/25-hour days
+- [x] Reproduced and fixed coarse/fine double count: partial→daily gave `177` instead of `175`; daily→partial and partial→daily→partial dropped the total to `3` / `4`
+- [x] `_reconcile_coarse_fine_rows` — coarse total wins while the finer day is incomplete, finer rows replace it once complete (both arrival orders)
+- [x] `_collision_zero_overlays` + `async_repair_coarse_fine_collisions` — startup repair covers DAILY collisions and is idempotent (renamed from the monthly-only helper; no alias)
+- [x] `backfill.py` `blocked_days` — the newest closed day inside `hourly_backfill_days` is not completed by DAILY/MONTHLY while hourly has not validated
+- [x] Docs: `ARCHITECTURE.md`, `DATA_CONTRACT.md`
+- [x] Version bump + full suite + live no-regression UAT
+- [ ] HITL merge / HACS release authorization
+- [ ] Reporter retest after release; issue stays open until then
+
 ## Active agents
 
 - None
