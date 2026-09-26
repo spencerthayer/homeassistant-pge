@@ -55,7 +55,7 @@ todos:
       - task-9-bump-version
   - id: task-11-ship-gate
     content: Commit, push, pass CI, and stop at merge and release authorization gates
-    status: in_progress
+    status: completed
     dependencies:
       - task-10-verify-live
 isProject: false
@@ -114,12 +114,12 @@ If the same check fails again without new evidence, change the diagnostic method
 
 | Field | Current state |
 |---|---|
-| Phase | Copilot review triaged; fixes ready; awaiting CI on the new head |
-| Active task | `task-11-ship-gate` |
-| Last confirmed result | Copilot review `5324518098` raised 1 high + 1 low. Both valid and fixed: coarse grain is now classified by position (calendar month-start) instead of magnitude, and the plan's `task-8` status was corrected. Local `539 passed` + recorder `9 passed` + node `41 pass` |
-| Current approach | Push the review fixes, confirm green CI, then stop for merge and release authorization |
-| Blockers / open decisions | Merge and HACS `v0.10.6` release are unauthorized. Issue #37 stays open until the reporter retests |
-| Next action | Commit and push the review fixes, reply to both review threads, then confirm CI |
+| Phase | Ship gate reached after the Copilot review loop: committed, pushed, green CI, findings triaged |
+| Active task | None |
+| Last confirmed result | PR #38 head `b1a95d0`: `CI` success (`test`, `hassfest`, `hacs`) and `Prek Checks` success. Copilot review `5324518098` triaged: both findings valid, fixed, and answered in-thread |
+| Current approach | Stop. Merge and release still need explicit authorization |
+| Blockers / open decisions | Merge and HACS `v0.10.6` release are unauthorized. Issue #37 stays open until the reporter retests. `mergeStateStatus` is `BLOCKED` only because the repo requires one approving review |
+| Next action | Ask the user to authorize the merge of PR #38, then the HACS release |
 
 ## Task dependency graph
 
@@ -140,7 +140,7 @@ flowchart TD
     task_8_document_contract("☑ task-8-document-contract<br/>Document import and repair contracts")
     task_9_bump_version{{"☑ task-9-bump-version<br/>Sync PATCH version locations"}}
     task_10_verify_live(["☑ task-10-verify-live<br/>Run local and live verification"])
-    task_11_ship_gate{"◐ task-11-ship-gate<br/>Commit, push, CI, authorization gates"}
+    task_11_ship_gate{"☑ task-11-ship-gate<br/>Commit, push, CI, authorization gates"}
   end
   task_1_branch_baseline -->|clean named branch| task_2_recorder_red_test
   task_2_recorder_red_test -->|intended red behavior| task_3_collision_safe_merge
@@ -175,6 +175,7 @@ flowchart TD
   style task_8_document_contract stroke-width:4px
   style task_9_bump_version stroke-width:4px
   style task_10_verify_live stroke-width:4px
+  style task_11_ship_gate stroke-width:4px
 ```
 
 ---
@@ -646,3 +647,4 @@ Use the SHA-specific Actions run and require conclusion `success` for every job.
 | 2026-09-25 | Copilot review / high | Coarse grain must not be classified by magnitude | Valid: a legitimate 250 kWh DAILY row on the 15th was treated as a MONTHLY lump, so partial hourly evidence zeroed the complete day total | Added `_is_monthly_lump` (requires calendar month-start) and `_is_daily_lump` (local midnight, any magnitude), used in both call sites; the three new tests fail on the old code |
 | 2026-09-25 | Copilot review / low | Plan frontmatter status was inconsistent | Valid: `task-8-document-contract` was still `in_progress` while the checkpoint and `tasks.md` said complete | Set to `completed` and the diagram mark updated |
 | 2026-09-25 | Copilot review / residual risk | A large DAILY row on the 1st of a month is still ambiguous | Recorder rows carry no resolution, and both DAILY and MONTHLY land on Pacific midnight | Accepted: month-start position plus magnitude is the strongest available signal; documented in the helper docstring |
+| 2026-09-25 | Copilot review / CI re-confirm | Review fixes are green on the PR head | `b1a95d0`: `CI` `success` (`test`, `hassfest`, `hacs`), `Prek Checks` `success`; local `539 passed`, recorder `9 passed`, node `41 pass`, 11 collision unit tests | Review loop closed; both threads answered with the fix and the residual 1st-of-month ambiguity |
