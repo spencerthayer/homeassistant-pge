@@ -55,7 +55,7 @@ todos:
       - task-9-bump-version
   - id: task-11-ship-gate
     content: Commit, push, pass CI, and stop at merge and release authorization gates
-    status: completed
+    status: in_progress
     dependencies:
       - task-10-verify-live
 isProject: false
@@ -114,12 +114,12 @@ If the same check fails again without new evidence, change the diagnostic method
 
 | Field | Current state |
 |---|---|
-| Phase | Ship gate reached: committed, pushed, green CI, stopped for authorization |
-| Active task | None |
-| Last confirmed result | PR #38 head `d635281`: `CI` success (`test`, `hassfest`, `hacs` all `success`) and `Prek Checks` success on that exact SHA |
-| Current approach | Stop. Every technical step in the plan is done |
+| Phase | Double-check corrections ready; awaiting CI on the new head |
+| Active task | `task-11-ship-gate` |
+| Last confirmed result | Double check found and fixed two real defects in the collision completeness rule; local suite `536 passed` + recorder `9 passed` + node `41 pass`, `ruff format --check` clean, recorder suite green 5 consecutive runs |
+| Current approach | Push the corrections and re-confirm green CI on the new head, then stop for authorization |
 | Blockers / open decisions | Merge and HACS `v0.10.6` release are unauthorized. Issue #37 stays open until the reporter retests |
-| Next action | Ask the user to authorize the merge of PR #38, then the HACS release |
+| Next action | Commit and push the double-check fixes, then confirm CI on the new head |
 
 ## Task dependency graph
 
@@ -140,7 +140,7 @@ flowchart TD
     task_8_document_contract("☑ task-8-document-contract<br/>Document import and repair contracts")
     task_9_bump_version{{"☑ task-9-bump-version<br/>Sync PATCH version locations"}}
     task_10_verify_live(["☑ task-10-verify-live<br/>Run local and live verification"])
-    task_11_ship_gate{"☑ task-11-ship-gate<br/>Commit, push, CI, authorization gates"}
+    task_11_ship_gate{"◐ task-11-ship-gate<br/>Commit, push, CI, authorization gates"}
   end
   task_1_branch_baseline -->|clean named branch| task_2_recorder_red_test
   task_2_recorder_red_test -->|intended red behavior| task_3_collision_safe_merge
@@ -175,7 +175,6 @@ flowchart TD
   style task_8_document_contract stroke-width:4px
   style task_9_bump_version stroke-width:4px
   style task_10_verify_live stroke-width:4px
-  style task_11_ship_gate stroke-width:4px
 ```
 
 ---
@@ -639,3 +638,7 @@ Use the SHA-specific Actions run and require conclusion `success` for every job.
 | 2026-09-25 | Task 11 / CI trigger | The retarget alone should start a run | It did not; reopening PR #38 fired the `pull_request` event and CI started | `Retarget-only -> close/reopen the PR to emit pull_request; no code change needed` |
 | 2026-09-25 | Task 11 / CI failures | CI green on the first push | Run `36212437190` Prek failed on `ruff-format` (`backfill.py`, `test_backfill_hang.py`), then `36212518440` CI `test` failed on `test_startup_repair_resolves_stale_daily_lump` (`assert 0 == 3`) | Fixed by `f0b9378` (ruff format) and `d635281` (drain the recorder queue with `async_wait_recorder_queue` before the repair reads rows); local full suite green after both |
 | 2026-09-25 | Task 11 / CI green | All required jobs success on the PR head | `d635281`: `CI` `success` (`test`, `hassfest`, `hacs`) and `Prek Checks` `success` | Task 11 complete; merge and release still require explicit authorization |
+| 2026-09-25 | Double check / defect 1 | Day completeness must not count the coarse row itself | Both `_collision_zero_overlays` and the incoming-coarse branch counted the lump among the day's rows, so a lump plus 23 hours looked complete and the lump retired, leaving a 23-hour day | Fixed both to count finer rows only; added `test_stored_lump_does_not_make_its_own_day_look_complete`, a 25-hour DST variant, and a recorder test for the import path |
+| 2026-09-25 | Double check / defect 2 | MONTHLY lumps keep retiring only when finer rows exist | The rewritten `_collision_zero_overlays` dropped the old `if not fine: continue` guard, so a day with only large rows would have zeroed them | Restored the guard via `fine_rows`; added `test_two_lumps_and_no_fine_rows_are_left_alone` |
+| 2026-09-25 | Double check / defect 3 | Incoming coarse rows are not finer evidence for their own day | The existing-lump branch counted the incoming DAILY row as a finer hour, popped it, and left the stored 23 hours in place (day total 198 instead of 175) | Excluded coarse incoming rows from `overlay_hours_by_day`; the same recorder test now proves 175 |
+| 2026-09-25 | Double check / test flake | Recorder-backed tests must be deterministic | Two recorder tests passed locally but failed intermittently, and once only after an extra statistics read warmed the recorder view | Added `_wait_for_rows`, which drains the queue and polls until the expected row count is readable; 5 consecutive recorder runs green |

@@ -6,6 +6,7 @@ Run:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -90,6 +91,18 @@ async def _read_rows(hass, statistic_id: str, start: datetime, end: datetime):
         None,
         {"state", "sum"},
     )
+
+
+async def _wait_for_rows(hass, statistic_id: str, start: datetime, end: datetime, expected: int):
+    """Direct external-statistics writes are queued; wait until every row is readable."""
+    rows: list = []
+    for _ in range(50):
+        await async_wait_recorder_queue(hass)
+        rows = (await _read_rows(hass, statistic_id, start, end)).get(statistic_id) or []
+        if len(rows) >= expected:
+            return rows
+        await asyncio.sleep(0.05)
+    return rows
 
 
 @pytest.mark.asyncio
@@ -261,9 +274,9 @@ async def test_startup_repair_resolves_stale_daily_lump(recorder_mock, hass):
         running += state
         rows.append(_stat_row(day_start + timedelta(hours=hour), state, running))
     async_add_external_statistics(hass, _build_consumption_metadata(account_key), rows)
-    await async_wait_recorder_queue(hass)
 
     sid = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_CONSUMPTION)
+    assert len(await _wait_for_rows(hass, sid, day_start, day_end, 4)) == 4
     assert await async_repair_coarse_fine_collisions(hass, account_key) == 3
     await async_wait_recorder_queue(hass)
     assert await async_repair_coarse_fine_collisions(hass, account_key) == 0
@@ -272,3 +285,34 @@ async def test_startup_repair_resolves_stale_daily_lump(recorder_mock, hass):
     repaired = (await _read_rows(hass, sid, day_start, day_end))[sid]
     assert [float(row["state"]) for row in repaired] == [175.0, 0.0, 0.0, 0.0]
     assert float(repaired[-1]["sum"]) == pytest.approx(175.0)
+
+
+@pytest.mark.asyncio
+async def test_stored_day_of_23_hours_plus_lump_keeps_the_lump_on_new_daily_import(recorder_mock, hass):
+    """A nearly complete stored day must not look complete just because the lump sits on it."""
+    assert await async_setup_component(hass, "homeassistant", {})
+    await hass.async_block_till_done()
+
+    account_key = "recordercoarseimport"
+    day_start, day_end = local_day_bounds(date(2025, 7, 2))
+    states = [175.0, *[1.0] * 23]
+    rows = []
+    running = 0.0
+    for hour, state in enumerate(states):
+        running += state
+        rows.append(_stat_row(day_start + timedelta(hours=hour), state, running))
+    async_add_external_statistics(hass, _build_consumption_metadata(account_key), rows)
+
+    sid = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_CONSUMPTION)
+    assert len(await _wait_for_rows(hass, sid, day_start, day_end, 24)) == 24
+
+    await async_import_with_baseline(
+        hass,
+        account_key,
+        [_row(account_key, day_start, 175.0, resolution=UsageResolution.DAILY, end=day_end)],
+    )
+    await async_wait_recorder_queue(hass)
+
+    imported = (await _read_rows(hass, sid, day_start, day_end))[sid]
+    assert float(imported[0]["state"]) == pytest.approx(175.0)
+    assert float(imported[-1]["sum"]) == pytest.approx(175.0)

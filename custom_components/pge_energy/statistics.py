@@ -920,8 +920,12 @@ def _reconcile_coarse_fine_rows(
     if not existing_map or not overlay:
         return 0
     overlay_hours_by_day: dict[date, int] = defaultdict(int)
-    for start in overlay:
-        overlay_hours_by_day[start.astimezone(PGE_TZ).date()] += 1
+    for start, value in overlay.items():
+        day = start.astimezone(PGE_TZ).date()
+        # An incoming coarse row is not finer evidence for its own day.
+        if start == local_day_bounds(day)[0] and value >= (daily_lump_min or float("inf")):
+            continue
+        overlay_hours_by_day[day] += 1
     existing_days: dict[date, list[datetime]] = defaultdict(list)
     for start in existing_map:
         existing_days[start.astimezone(PGE_TZ).date()].append(start)
@@ -965,7 +969,10 @@ def _reconcile_coarse_fine_rows(
         day_rows = existing_days.get(day) or []
         if not day_rows:
             continue
-        if len(day_rows) >= (day_end - day_start).total_seconds() / 3600:
+        expected_hours = int((day_end - day_start).total_seconds() // 3600)
+        # A stored lump on this day is not finer evidence, so exclude it.
+        fine_rows = [row_start for row_start in day_rows if float(existing_map[row_start]["state"]) < daily_lump_min]
+        if len(fine_rows) >= expected_hours:
             overlay.pop(start, None)
             adjusted += 1
             continue
@@ -1001,12 +1008,20 @@ def _collision_zero_overlays(
         if len(rows) < 2:
             continue
         day_start, day_end = local_day_bounds(day)
-        complete = len(rows) >= (day_end - day_start).total_seconds() / 3600
+        expected_hours = int((day_end - day_start).total_seconds() // 3600)
+        # Completeness counts finer rows only: the lump itself must never make
+        # its own day look complete, or the lump would retire and leave a gap.
+        fine_rows = [row for row in rows if daily_lump_min is None or row[1] < daily_lump_min]
+        complete = len(fine_rows) >= expected_hours
         for start, state in rows:
-            is_daily_lump = daily_lump_min is not None and start == day_start and daily_lump_min <= state < lump_min
-            if state < lump_min and not is_daily_lump:
+            if state >= lump_min:
+                if fine_rows:
+                    overlays[start] = 0.0
                 continue
-            if complete or state >= lump_min:
+            is_daily_lump = daily_lump_min is not None and start == day_start and state >= daily_lump_min
+            if not is_daily_lump:
+                continue
+            if complete:
                 overlays[start] = 0.0
                 continue
             for finer_start, finer_state in rows:
