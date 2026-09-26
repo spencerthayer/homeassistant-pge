@@ -493,9 +493,7 @@ async def _async_backfill_daily(
     for month_start, month_end in iter_month_windows(start, end):
         completed = set(store.completed_local_dates)
         month_incomplete = [
-            d
-            for d in _iter_days(month_start, month_end)
-            if d.isoformat() not in completed and d not in blocked_days
+            d for d in _iter_days(month_start, month_end) if d.isoformat() not in completed and d not in blocked_days
         ]
         if not month_incomplete:
             continue
@@ -574,11 +572,7 @@ async def _async_backfill_monthly(
     store = coordinator.import_store
     coordinator.update_sync_progress(phase=SYNC_PHASE_MONTHLY)
     completed = set(store.completed_local_dates)
-    incomplete = [
-        d
-        for d in _iter_days(start, end)
-        if d.isoformat() not in completed and d not in blocked_days
-    ]
+    incomplete = [d for d in _iter_days(start, end) if d.isoformat() not in completed and d not in blocked_days]
     if not incomplete:
         return False
 

@@ -114,12 +114,12 @@ If the same check fails again without new evidence, change the diagnostic method
 
 | Field | Current state |
 |---|---|
-| Phase | Implementation verified |
+| Phase | Implementation verified; PR open; awaiting CI and authorization |
 | Active task | `task-11-ship-gate` |
-| Last confirmed result | Full suite `533 passed` + recorder `8 passed` + node `41 pass` + secret scan; live `/pge` on `?v=0.10.6` populated with sync `complete 100%`; Energy dashboard positive; recorder DB shows no negative daily total across full history and `0` negative states; startup repair cleared 6 rows once and is a no-op on restart |
-| Current approach | Commit on `issue-37`, push, open the PR, wait for green CI, then stop for merge and release authorization |
-| Blockers / open decisions | Affected-account verification is unavailable; live UAT was a no-regression check, not reproduction |
-| Next action | Commit, push `issue-37`, open the PR, and watch CI |
+| Last confirmed result | Full suite `533 passed` + recorder `8 passed` + node `41 pass` + secret scan; live `/pge` on `?v=0.10.6` populated with sync `complete 100%`; Energy dashboard positive; recorder DB shows no negative daily total across full history and `0` negative states; startup repair cleared 6 rows once and is a no-op on restart; `a140bc1` committed and pushed, PR #38 open against `main` |
+| Current approach | Stop here. Merge and HACS release need explicit current-conversation authorization, and CI must be green on this SHA first |
+| Blockers / open decisions | GitHub Actions has not started any run for `a140bc1` on PR #38 (four checks over ~3 minutes, zero runs on the branch). Local full suite is green; the release gate stays closed |
+| Next action | Ask the user whether to merge PR #38 and to authorize the HACS `v0.10.6` release once CI is green |
 
 ## Task dependency graph
 
@@ -631,3 +631,7 @@ Use the SHA-specific Actions run and require conclusion `success` for every job.
 | 2026-09-25 | Task 10 / local suite | Focused and canonical suites green | `bash scripts/run_tests.sh`: `533 passed`, recorder `8 passed`, node `41 pass`, secret scan passed | Mark task 10 local half complete |
 | 2026-09-25 | Task 10 / live UAT | Own instance shows no regression after a full process restart | `/pge` loaded `?v=0.10.6`, KPIs populated, Sync status `complete` 100% with no failed days, latest interval Sep 25 01:00 PT; Energy dashboard Grid 350 Wh / Home 350 Wh with a positive bar; recorder DB over 2019-11 to 2026-09 shows zero negative Pacific day totals and zero negative states; 24 hourly rows on each recent day | No-regression evidence recorded; affected-account confirmation stays post-release |
 | 2026-09-25 | Task 10 / startup repair live | One-time repair then stable no-op | First restart: `Cleared 6 coarse/fine collision row(s) ... rebuilt sums from 2025-08-01T07:00:00+00:00`; second restart: zero repair lines, zero recorder `UNIQUE constraint` errors, zero pge errors | The 4 unique-constraint errors were a one-time startup race with HA `compile_missing_statistics` on the first repair write; clean on the second run |
+| 2026-09-25 | Task 11 / commit and push | Named branch, one commit, pushed, PR open | Committed `a140bc1` on `issue-37` (17 files), pushed `origin/issue-37`, opened PR #38 | No merge or release performed |
+| 2026-09-25 | Decision / Task 11 | PR was opened against `dev` | `ci.yml` only triggers on `main`; prior feature PRs (#24, #25, #35) targeted `main` | `PR base dev -> main so the CI workflow runs; no code impact` |
+| 2026-09-25 | Task 11 / CI | A run should start for `a140bc1` after the retarget | No run listed for `a140bc1` after repeated checks | Waiting on GitHub Actions; release stays blocked until a green run on this SHA |
+| 2026-09-25 | Task 11 / CI final check | A run should exist for `a140bc1` after the retarget | `actions/runs?branch=issue-37` returned zero runs; PR #38 is open with `base=main` | `Task 11 stays in_progress: no green CI run on this SHA, and merge/release are unauthorized. Next action is the user's merge and release decision` |

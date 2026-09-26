@@ -1137,9 +1137,7 @@ async def test_gapped_hourly_frontier_skips_coarse_tiers(monkeypatch):
     async def fake_daily(_start, _end, resolution=UsageResolution.DAILY):
         return UsageResponse(
             resolution=resolution,
-            intervals=[
-                _usage_interval(day, 0, "20", UsageResolution.DAILY) for day in (older, frontier)
-            ],
+            intervals=[_usage_interval(day, 0, "20", UsageResolution.DAILY) for day in (older, frontier)],
             total_kwh=None,
             total_cost=None,
             is_tod=None,
@@ -1149,9 +1147,7 @@ async def test_gapped_hourly_frontier_skips_coarse_tiers(monkeypatch):
     async def fake_monthly(_start, _end):
         return UsageResponse(
             resolution=UsageResolution.MONTHLY,
-            intervals=[
-                _usage_interval(day, 0, "600", UsageResolution.MONTHLY) for day in (older, frontier)
-            ],
+            intervals=[_usage_interval(day, 0, "600", UsageResolution.MONTHLY) for day in (older, frontier)],
             total_kwh=None,
             total_cost=None,
             is_tod=None,
@@ -1185,7 +1181,6 @@ async def test_gapped_hourly_frontier_skips_coarse_tiers(monkeypatch):
     coarse_frontier = [
         iv
         for iv in imported
-        if iv.resolution is not UsageResolution.HOURLY
-        and iv.start.astimezone(PGE_TZ).date() == frontier
+        if iv.resolution is not UsageResolution.HOURLY and iv.start.astimezone(PGE_TZ).date() == frontier
     ]
     assert coarse_frontier == []
