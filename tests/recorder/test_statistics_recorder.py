@@ -29,6 +29,7 @@ from custom_components.pge_energy.statistics import (
     async_import_with_baseline,
     async_repair_coarse_fine_collisions,
     async_repair_suffix_sums,
+    async_wait_recorder_queue,
 )
 from custom_components.pge_energy.time_util import local_day_bounds
 
@@ -260,13 +261,13 @@ async def test_startup_repair_resolves_stale_daily_lump(recorder_mock, hass):
         running += state
         rows.append(_stat_row(day_start + timedelta(hours=hour), state, running))
     async_add_external_statistics(hass, _build_consumption_metadata(account_key), rows)
-    await hass.async_block_till_done()
+    await async_wait_recorder_queue(hass)
 
     sid = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_CONSUMPTION)
     assert await async_repair_coarse_fine_collisions(hass, account_key) == 3
-    await hass.async_block_till_done()
+    await async_wait_recorder_queue(hass)
     assert await async_repair_coarse_fine_collisions(hass, account_key) == 0
-    await hass.async_block_till_done()
+    await async_wait_recorder_queue(hass)
 
     repaired = (await _read_rows(hass, sid, day_start, day_end))[sid]
     assert [float(row["state"]) for row in repaired] == [175.0, 0.0, 0.0, 0.0]
