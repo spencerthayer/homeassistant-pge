@@ -13,7 +13,7 @@ dist/
 build/
 *.egg-info/
 outputs/
-.cursor/
+.agents/
 .DS_Store
 */.DS_Store
 *.code-workspace
