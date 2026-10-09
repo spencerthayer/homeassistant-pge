@@ -31,7 +31,7 @@ from .models import (
 
 _LOGGER = logging.getLogger(__name__)
 
-GRAPHQL_URL = "https://apix.portlandgeneral.com/pge-graphql"
+GRAPHQL_URL = "https://api.portlandgeneral.com/pge-graphql"
 OPERATION_NAME = "GetUsageCompare"
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30)
 MAX_RETRIES = 3

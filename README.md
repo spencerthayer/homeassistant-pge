@@ -93,7 +93,7 @@ sequenceDiagram
     participant U as User / HA
     participant C as Cognito<br/>(USER_PASSWORD_AUTH)
     participant A as Apigee<br/>(token exchange)
-    participant G as GraphQL API<br/>(apix.portlandgeneral.com)
+    participant G as GraphQL API<br/>(api.portlandgeneral.com)
 
     U->>C: email + password
     C-->>A: access token + encrypted IDs

@@ -27,7 +27,7 @@ from custom_components.pge_energy.billing_api import (
     PGEBillingApiClient,
 )
 
-GRAPHQL_URL = "https://apix.portlandgeneral.com/pge-graphql"
+GRAPHQL_URL = "https://api.portlandgeneral.com/pge-graphql"
 ORIGIN = "https://portlandgeneral.com"
 REFERER = "https://portlandgeneral.com/"
 TIMEOUT = aiohttp.ClientTimeout(total=30)

@@ -412,7 +412,7 @@ class TestApiClient:
         assert client.introspection_attempted is True
         assert client.captured_response_count == 1
         introspection_call = session.post.call_args_list[1]
-        assert introspection_call.args[0] == "https://apix.portlandgeneral.com/pge-graphql"
+        assert introspection_call.args[0] == "https://api.portlandgeneral.com/pge-graphql"
         assert introspection_call.kwargs["allow_redirects"] is False
         text = caplog.text
         assert ALPHA_CAPTURE_PREFIX in text

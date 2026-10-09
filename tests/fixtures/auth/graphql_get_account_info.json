@@ -3,7 +3,7 @@
   "source": "observed_portal_js_getAccountInfo_fragment",
   "request": {
     "method": "POST",
-    "url": "https://apix.portlandgeneral.com/pge-graphql",
+    "url": "https://api.portlandgeneral.com/pge-graphql",
     "headers": {
       "Authorization": "Bearer <APIGEE_ACCESS_TOKEN>",
       "aws_graphql_server": "graphql_server",

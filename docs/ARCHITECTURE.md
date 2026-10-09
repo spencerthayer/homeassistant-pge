@@ -14,7 +14,7 @@ flowchart TD
 
   PortalAuth --> AuthSnapshot[AuthSnapshot]
   AuthSnapshot --> AuthManager[Auth Manager]
-  AuthManager --> PGEAPI["PGE GraphQL API<br/>(apix.portlandgeneral.com)"]
+  AuthManager --> PGEAPI["PGE GraphQL API<br/>(api.portlandgeneral.com)"]
 
   PGEAPI --> PGEUsage["PGE API Client<br/>(usage)"]
   PGEAPI --> PGEBilling[PGEBillingApiClient]

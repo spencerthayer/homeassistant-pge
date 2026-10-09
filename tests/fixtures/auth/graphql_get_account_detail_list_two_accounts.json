@@ -3,7 +3,7 @@
   "source": "issue_20_getAccountDetailList_ALL_ACCTS_ACTIVE",
   "request": {
     "method": "POST",
-    "url": "https://apix.portlandgeneral.com/pge-graphql",
+    "url": "https://api.portlandgeneral.com/pge-graphql",
     "headers": {
       "Authorization": "Bearer <APIGEE_ACCESS_TOKEN>",
       "aws_graphql_server": "graphql_server",

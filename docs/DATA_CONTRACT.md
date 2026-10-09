@@ -3,7 +3,7 @@
 ## Endpoint
 
 ```none
-POST https://apix.portlandgeneral.com/pge-graphql
+POST https://api.portlandgeneral.com/pge-graphql
 ```
 
 ## Required Headers
@@ -215,7 +215,7 @@ The default-off `capture_graphql_diagnostics` switch remains available for follo
 
 ## Account / billing / programs (structured)
 
-Same Apigee endpoint (`https://apix.portlandgeneral.com/pge-graphql`) and bearer as usage. Prefer portal Origin/Referer (`https://portlandgeneral.com`). Implemented in `billing_api.py`.
+Same Apigee endpoint (`https://api.portlandgeneral.com/pge-graphql`) and bearer as usage. Prefer portal Origin/Referer (`https://portlandgeneral.com`). Implemented in `billing_api.py`.
 
 ### Account discovery (credential setup / renew)
 
@@ -304,7 +304,7 @@ This speculative GraphQL operation was never verified against a live portal and 
 
 ### Bill PDF REST / normalized parsing (shipped v0.7.0)
 
-- **Download:** `POST https://apix.portlandgeneral.com/pge-bill-api/pdf/bills` with the Apigee bearer, portal Origin/Referer, and `{ encryptedBillId, isSummary: false, isNonDetailed: false }` for the detailed form.
+- **Download:** `POST https://api.portlandgeneral.com/pge-bill-api/pdf/bills` with the Apigee bearer, portal Origin/Referer, and `{ encryptedBillId, isSummary: false, isNonDetailed: false }` for the detailed form.
 - **Live matrix (2026-07-28):** three recent bills in both `detailed` and `simplified` form (six PDFs total), including a move/multi-meter statement. All were valid, unencrypted, text-backed letter PDFs (2-4 pages / ~121-145 KB); OCR was not required. Layout extraction keeps rotated payment-stub text (`layout_mode_strip_rotated=False`); a plain variant is still merged for Form XObject coverage. Core fields reconcile across both variants; complementary metric keys merge without double-counting values across variants. Accounted-for pypdf rotation log lines are filtered in `bill_pdf_parser` (exact message match only).
 - **Normalized contract:** statement/due/service dates, amount due, total kWh, multi-service provenance, and 16 USD metric families (balance/payment; energy/delivery totals and primary components; regulatory/pass-through/program/Green Future/tax totals). All six live PDFs reconciled their core amount/kWh/period identity against GraphQL. Missing/mismatched core fields block publication; incomplete known-line-item arithmetic and a GraphQL segment period contained by a multi-service PDF period are explicit non-blocking advisories.
 - **Golden fixtures:** public-sample arithmetic plus digit-tokenized single-service and multi-service layouts cover rotated fallback text, glued labels/values, `for N days`, detailed/simplified variants, multiple meter totals, and complementary extraction modes.

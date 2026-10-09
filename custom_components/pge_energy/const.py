@@ -294,7 +294,7 @@ CONF_BILL_PDF_RETENTION = "bill_pdf_retention"
 DEFAULT_BILL_PDF_RETENTION = "latest"
 CONF_BILL_PDF_ROLLING_COUNT = "bill_pdf_rolling_count"
 DEFAULT_BILL_PDF_ROLLING_COUNT = 12
-BILL_PDF_API_URL = "https://apix.portlandgeneral.com/pge-bill-api/pdf/bills"
+BILL_PDF_API_URL = "https://api.portlandgeneral.com/pge-bill-api/pdf/bills"
 BILL_PDF_PARSER_VERSION = 1
 BILL_PDF_MAX_BYTES = 10 * 1024 * 1024
 BILL_PDF_MAX_PAGES = 24
@@ -361,5 +361,5 @@ CONF_MANUAL_SYNC_ACTION = "manual_sync_action"
 MANUAL_SYNC_ACTION_REFRESH = "refresh"
 MANUAL_SYNC_ACTION_BACKFILL = "backfill"
 
-GRAPHQL_URL = "https://apix.portlandgeneral.com/pge-graphql"
+GRAPHQL_URL = "https://api.portlandgeneral.com/pge-graphql"
 OPERATION_NAME = "GetUsageCompare"

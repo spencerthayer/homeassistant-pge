@@ -38,11 +38,12 @@ COGNITO_URL = f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/"
 COGNITO_AUTH_FLOW = "USER_PASSWORD_AUTH"
 COGNITO_REFRESH_FLOW = "REFRESH_TOKEN_AUTH"
 
-APIGEE_AUTH_BASE = "https://apix.portlandgeneral.com"
+# api.portlandgeneral.com as of 2026-10-09; apix.portlandgeneral.com returns 503.
+APIGEE_AUTH_BASE = "https://api.portlandgeneral.com"
 APIGEE_CLIENT_ID = "rHuS10KrfsLwFAr2sZ7MHh7oHELGx6YK"
 APIGEE_TOKEN_PATH = "/pg-token-implicit-aws/token"
 
-GRAPHQL_URL = "https://apix.portlandgeneral.com/pge-graphql"
+GRAPHQL_URL = "https://api.portlandgeneral.com/pge-graphql"
 
 # Cap password InitiateAuth calls to avoid account lockout.
 MAX_LOGIN_ATTEMPTS = 2

@@ -42,7 +42,7 @@ The issue #5 capture uses PGE GraphQL only and is disabled by default:
 5. Review the file before sharing it. The page's visible `filter=pge` filter may not limit the downloaded file; prefer sharing only lines containing `PGE_ALPHA_GRID_CAPTURE` if unrelated logs are sensitive.
 6. Disable the alpha switch when capture is complete.
 
-Capture logs allowlist interval timestamps, kWh, amount, usage status, interval size, and temperature. They exclude request headers, tokens, account/person IDs, config-entry data, and unknown response fields, but the allowed usage values remain privacy-sensitive. Introspection is a one-shot best-effort request to `apix.portlandgeneral.com/pge-graphql`; failure is non-fatal. Never commit a live capture body.
+Capture logs allowlist interval timestamps, kWh, amount, usage status, interval size, and temperature. They exclude request headers, tokens, account/person IDs, config-entry data, and unknown response fields, but the allowed usage values remain privacy-sensitive. Introspection is a one-shot best-effort request to `api.portlandgeneral.com/pge-graphql`; failure is non-fatal. Never commit a live capture body.
 
 ## Automated suite
 
