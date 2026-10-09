@@ -66,7 +66,7 @@ from .options import get_entry_option, resolve_polling_timedelta
 from .statistics import (
     async_import_with_baseline,
     async_refresh_lifetime_totals,
-    async_repair_monthly_hourly_collisions,
+    async_repair_coarse_fine_collisions,
     async_repair_suffix_sums,
 )
 from .store import (
@@ -736,18 +736,18 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.error("dirty_from repair failed: %s", exc)
             return
 
-    async def async_repair_monthly_collisions_if_needed(self) -> None:
-        """Clear monthly billing-period lumps that share a day with hourly rows."""
+    async def async_repair_coarse_fine_if_needed(self) -> None:
+        """Clear stored coarse DAILY/MONTHLY rows that collide with finer rows."""
         try:
             async with self.import_lock:
-                cleared = await async_repair_monthly_hourly_collisions(
+                cleared = await async_repair_coarse_fine_collisions(
                     self.hass,
                     self.account_key,
                     account_id=self.account_id,
                     include_cost=self.include_cost,
                 )
         except Exception as exc:
-            _LOGGER.error("Monthly/hourly collision repair failed: %s", exc)
+            _LOGGER.error("Coarse/fine collision repair failed: %s", exc)
             return
         if cleared:
             await self.async_refresh_lifetime_totals()

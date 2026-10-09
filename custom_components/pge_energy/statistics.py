@@ -902,51 +902,114 @@ async def async_repair_suffix_sums(
             )
 
 
-def _scrub_monthly_lumps_for_days(
+def _is_monthly_lump(start: datetime, state: float, lump_min: float) -> bool:
+    """Identify a MONTHLY row by where it sits, not how big it is.
+
+    MONTHLY backfill always parks a billing period on calendar month-start, so a
+    coarse row on the 1st that is also monthly-sized is a period total. Any other
+    midnight row is a DAILY total and stays valid however large that day was.
+    """
+    return state >= lump_min and start.astimezone(PGE_TZ).day == 1
+
+
+def _is_daily_lump(start: datetime, state: float, day_start: datetime, daily_lump_min: float | None) -> bool:
+    """A DAILY row is the local-midnight total of one day, at any magnitude."""
+    return daily_lump_min is not None and start == day_start and state >= daily_lump_min
+
+
+def _reconcile_coarse_fine_rows(
     existing_map: dict[datetime, dict[str, Any]],
     overlay: dict[datetime, float],
     *,
     lump_min: float,
     daily_lump_min: float | None = None,
 ) -> int:
-    """Zero coarse lumps on Pacific days that are receiving finer overlays.
+    """Keep a coarse total and finer rows from counting the same energy twice.
 
     MONTHLY backfill parks a billing-period total on month-start; DAILY parks a
-    whole day on midnight. When hourly rows later land on that day, keeping the
-    lump double-counts (e.g. 28 kWh midnight daily + real hours, or 648 monthly).
+    whole day on Pacific midnight. A MONTHLY-sized lump retires as soon as finer
+    rows share its day. A DAILY-sized lump is that day's complete total, so
+    whichever side it arrives from, it wins while the finer day is incomplete
+    and the finer rows defer to zero; a complete finer day replaces it instead.
     """
     if not existing_map or not overlay:
         return 0
     overlay_hours_by_day: dict[date, int] = defaultdict(int)
-    for start in overlay:
-        overlay_hours_by_day[start.astimezone(PGE_TZ).date()] += 1
-    scrubbed = 0
+    for start, value in overlay.items():
+        day = start.astimezone(PGE_TZ).date()
+        # An incoming coarse row is not finer evidence for its own day.
+        if start == local_day_bounds(day)[0] and value >= (daily_lump_min or float("inf")):
+            continue
+        overlay_hours_by_day[day] += 1
+    existing_days: dict[date, list[datetime]] = defaultdict(list)
+    for start in existing_map:
+        existing_days[start.astimezone(PGE_TZ).date()].append(start)
+    adjusted = 0
+
     for start, row in existing_map.items():
-        if start in overlay:
+        day = start.astimezone(PGE_TZ).date()
+        hours = overlay_hours_by_day.get(day, 0)
+        if hours <= 0:
             continue
         try:
             state = float(row["state"])
         except (KeyError, TypeError, ValueError):
             continue
+        day_start, day_end = local_day_bounds(day)
+        if _is_monthly_lump(start, state, lump_min):
+            if start not in overlay:
+                overlay[start] = 0.0
+                adjusted += 1
+            continue
+        if not _is_daily_lump(start, state, day_start, daily_lump_min):
+            continue
+        if hours >= (day_end - day_start).total_seconds() / 3600:
+            if start not in overlay:
+                overlay[start] = 0.0
+                adjusted += 1
+            continue
+        day_overlay = [finer for finer in overlay if finer.astimezone(PGE_TZ).date() == day]
+        overlay.pop(start, None)
+        for finer in day_overlay:
+            if finer != start and overlay.get(finer) != 0.0:
+                overlay[finer] = 0.0
+                adjusted += 1
+
+    for start in list(overlay):
         day = start.astimezone(PGE_TZ).date()
-        hours = overlay_hours_by_day.get(day, 0)
-        if hours <= 0:
+        day_start, day_end = local_day_bounds(day)
+        state = overlay[start]
+        if not _is_daily_lump(start, state, day_start, daily_lump_min) or _is_monthly_lump(start, state, lump_min):
             continue
-        # Monthly-sized always; daily-sized when a substantial hourly batch arrives.
-        drop = state >= lump_min or (daily_lump_min is not None and state >= daily_lump_min and hours >= 12)
-        if not drop:
+        day_rows = existing_days.get(day) or []
+        if not day_rows:
             continue
-        overlay[start] = 0.0
-        scrubbed += 1
-    return scrubbed
+        expected_hours = int((day_end - day_start).total_seconds() // 3600)
+        # A stored lump on this day is not finer evidence, so exclude it.
+        fine_rows = [row_start for row_start in day_rows if float(existing_map[row_start]["state"]) < daily_lump_min]
+        if len(fine_rows) >= expected_hours:
+            overlay.pop(start, None)
+            adjusted += 1
+            continue
+        for finer in day_rows:
+            if finer != start and overlay.get(finer) != 0.0:
+                overlay[finer] = 0.0
+                adjusted += 1
+    return adjusted
 
 
 def _collision_zero_overlays(
     existing_map: dict[datetime, dict[str, Any]],
     *,
     lump_min: float,
+    daily_lump_min: float | None = None,
 ) -> dict[datetime, float]:
-    """Return start→0 overlays for monthly lumps that share a day with fine rows."""
+    """Return start→0 overlays for stored coarse rows that collide with finer rows.
+
+    A MONTHLY-sized lump retires whenever finer rows share its day. A DAILY-sized
+    midnight lump is that day's total: it retires only once the stored day is
+    complete, otherwise the finer rows defer to zero so the two never add up.
+    """
     by_day: dict[date, list[tuple[datetime, float]]] = defaultdict(list)
     for start, row in existing_map.items():
         try:
@@ -956,26 +1019,39 @@ def _collision_zero_overlays(
         by_day[start.astimezone(PGE_TZ).date()].append((start, state))
 
     overlays: dict[datetime, float] = {}
-    for rows in by_day.values():
+    for day, rows in by_day.items():
         if len(rows) < 2:
             continue
-        lumps = [r for r in rows if r[1] >= lump_min]
-        fine = [r for r in rows if r[1] < lump_min]
-        if not lumps or not fine:
-            continue
-        for start, _state in lumps:
-            overlays[start] = 0.0
+        day_start, day_end = local_day_bounds(day)
+        expected_hours = int((day_end - day_start).total_seconds() // 3600)
+        # Completeness counts finer rows only: the lump itself must never make
+        # its own day look complete, or the lump would retire and leave a gap.
+        fine_rows = [row for row in rows if daily_lump_min is None or row[1] < daily_lump_min]
+        complete = len(fine_rows) >= expected_hours
+        for start, state in rows:
+            if _is_monthly_lump(start, state, lump_min):
+                if fine_rows:
+                    overlays[start] = 0.0
+                continue
+            if not _is_daily_lump(start, state, day_start, daily_lump_min):
+                continue
+            if complete:
+                overlays[start] = 0.0
+                continue
+            for finer_start, finer_state in rows:
+                if finer_start != start and finer_state != 0.0:
+                    overlays[finer_start] = 0.0
     return overlays
 
 
-async def async_repair_monthly_hourly_collisions(
+async def async_repair_coarse_fine_collisions(
     hass: HomeAssistant,
     account_key: str,
     *,
     account_id: str | None = None,
     include_cost: bool = True,
 ) -> int:
-    """Zero monthly lumps that coexist with hourly/daily rows; rebuild sums.
+    """Zero stored coarse/fine collision rows; rebuild sums.
 
     Safe to run on every startup — no-op when the series is clean.
     """
@@ -994,7 +1070,11 @@ async def async_repair_monthly_hourly_collisions(
     if not existing:
         return 0
 
-    kwh_overlays = _collision_zero_overlays(existing, lump_min=MONTHLY_LUMP_MIN_KWH)
+    kwh_overlays = _collision_zero_overlays(
+        existing,
+        lump_min=MONTHLY_LUMP_MIN_KWH,
+        daily_lump_min=DAILY_LUMP_MIN_KWH,
+    )
     cost_overlays: dict[datetime, float] = {}
     if include_cost:
         cost_id = _get_statistic_id(account_key, STATISTIC_ID_SUFFIX_COST)
@@ -1006,7 +1086,11 @@ async def async_repair_monthly_hourly_collisions(
                 floor_start.astimezone(UTC),
                 cost_last[1] + timedelta(hours=1),
             )
-            cost_overlays = _collision_zero_overlays(cost_existing, lump_min=MONTHLY_LUMP_MIN_COST)
+            cost_overlays = _collision_zero_overlays(
+                cost_existing,
+                lump_min=MONTHLY_LUMP_MIN_COST,
+                daily_lump_min=DAILY_LUMP_MIN_COST,
+            )
 
     if not kwh_overlays and not cost_overlays:
         return 0
@@ -1093,7 +1177,7 @@ async def async_repair_monthly_hourly_collisions(
             )
 
     _LOGGER.warning(
-        "Cleared %s monthly/hourly collision row(s) from %s (rebuilt sums from %s)",
+        "Cleared %s coarse/fine collision row(s) from %s (rebuilt sums from %s)",
         cleared,
         account_key[:8],
         dirty_from.isoformat(),
@@ -1141,19 +1225,21 @@ async def _async_upsert_cumulative_overlay(
     existing_map = await _async_get_stats_map(hass, statistic_id, read_from, suffix_end + timedelta(hours=1))
 
     if lump_min is not None and daily_lump_min is not None:
-        scrubbed = _scrub_monthly_lumps_for_days(
+        adjusted = _reconcile_coarse_fine_rows(
             existing_map,
             overlay,
             lump_min=lump_min,
             daily_lump_min=daily_lump_min,
         )
-        if scrubbed:
+        if adjusted:
             _LOGGER.info(
-                "Scrubbed %s monthly %s lump(s) on days receiving finer intervals",
-                scrubbed,
+                "Reconciled %s coarse/fine %s row(s) sharing a day",
+                adjusted,
                 statistic_suffix.lstrip("_"),
             )
             changed_from = min([changed_from, *overlay.keys()])
+        if not overlay:
+            return ()
 
     merged_starts = sorted(set(existing_map) | set(overlay))
     if not merged_starts:
