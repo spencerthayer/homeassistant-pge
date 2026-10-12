@@ -3,7 +3,7 @@
   "source": "observed_portal_js_pg-token-implicit-aws",
   "request": {
     "method": "POST",
-    "url": "https://apix.portlandgeneral.com/pg-token-implicit-aws/token?client_id=rHuS10KrfsLwFAr2sZ7MHh7oHELGx6YK&response_type=token&redirect_uri=",
+    "url": "https://api.portlandgeneral.com/pg-token-implicit-aws/token?client_id=rHuS10KrfsLwFAr2sZ7MHh7oHELGx6YK&response_type=token&redirect_uri=",
     "headers": {
       "idp_access_token": "<COGNITO_ID_TOKEN>"
     },

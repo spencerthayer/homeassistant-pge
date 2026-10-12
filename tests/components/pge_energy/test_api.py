@@ -18,6 +18,7 @@ from custom_components.pge_energy.api import (
     _parse_usage_response,
     _safe_decimal,
 )
+from custom_components.pge_energy.api_host import graphql_url
 from custom_components.pge_energy.exceptions import (
     PGEAuthenticationError,
     PGESchemaError,
@@ -412,7 +413,7 @@ class TestApiClient:
         assert client.introspection_attempted is True
         assert client.captured_response_count == 1
         introspection_call = session.post.call_args_list[1]
-        assert introspection_call.args[0] == "https://apix.portlandgeneral.com/pge-graphql"
+        assert introspection_call.args[0] == graphql_url()
         assert introspection_call.kwargs["allow_redirects"] is False
         text = caplog.text
         assert ALPHA_CAPTURE_PREFIX in text
@@ -549,6 +550,8 @@ class TestApiClient:
         )
         mock_response_ok.__aenter__ = AsyncMock(return_value=mock_response_ok)
         mock_response_ok.__aexit__ = AsyncMock(return_value=False)
+        mock_response_ok.read = AsyncMock(return_value=b"{}")
+        mock_response_ok.headers = {"Content-Type": "application/json"}
 
         call_count = 0
 
@@ -563,8 +566,7 @@ class TestApiClient:
 
         client = PGEApiClient(mock_session, "token", "enc", "acct")
         now = datetime.now(UTC)
-        with patch("custom_components.pge_energy.api.asyncio.sleep", new_callable=AsyncMock):
-            resp = await client.get_usage(UsageResolution.HOURLY, now - timedelta(days=1), now, "key1")
+        resp = await client.get_usage(UsageResolution.HOURLY, now - timedelta(days=1), now, "key1")
         assert len(resp.intervals) == 1
 
     @pytest.mark.asyncio

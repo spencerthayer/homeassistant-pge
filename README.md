@@ -17,7 +17,7 @@ Home Assistant custom integration for **Portland General Electric (PGE)** — im
 ### HACS (recommended)
 
 1. HACS → **⋯** → **Custom repositories**, add `https://github.com/spencerthayer/homeassistant-pge` with category **Integration**.
-2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.10.6`).
+2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.11.0`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -93,7 +93,7 @@ sequenceDiagram
     participant U as User / HA
     participant C as Cognito<br/>(USER_PASSWORD_AUTH)
     participant A as Apigee<br/>(token exchange)
-    participant G as GraphQL API<br/>(apix.portlandgeneral.com)
+    participant G as GraphQL API<br/>(resolved PGE host)
 
     U->>C: email + password
     C-->>A: access token + encrypted IDs
@@ -415,11 +415,13 @@ Time-of-Day rates are resolved per poll: manual overrides → effective-dated on
 - Grid export uses signed HOURLY rows only; DAILY/MONTHLY net totals are not split into gross import/export.
 - PGE's hourly temperature records are not _always_ in sync with the energy data.
 - PGE has told customers they are moving away from third-party data providers to their own in-house portal, and the Opower-backed endpoints used by the upstream `opower` integration have started returning 503 ([`tronikos/opower#210`](https://github.com/tronikos/opower/issues/210)). This integration talks to PGE's own portal API and is unaffected by that shutdown.
-- PGE may return transient 502s (retried). PGE's API is unofficial and may change without notice.
+- A dead API host fails over to the next probed origin. HTTP 401, 403, and 429 stay on the host that answered. PGE's API is unofficial and may change without notice.
 
 ## Troubleshooting
 
-Common issues — including quiet expected log warnings (`pypdf` layout warnings, caught soft-failures), `sqlite3.IntegrityError: UNIQUE constraint failed` on pre-0.7.4 installs, and the logger filters that keep Settings → System → Logs focused — are collected in [`docs/HA_TROUBLESHOOTING.md`](docs/HA_TROUBLESHOOTING.md).
+If PGE moves their API host, set `PGE_API_HOST` to an `https://` origin on `portlandgeneral.com`, or enter that origin under Configure, Sync settings, API host. Hosts outside that domain are ignored unless `PGE_API_HOST_ALLOW_FOREIGN=1`, which is unsupported.
+
+Common issues, including quiet expected log warnings (`pypdf` layout warnings, caught soft-failures), `sqlite3.IntegrityError: UNIQUE constraint failed` on pre-0.7.4 installs, and the logger filters that keep Settings → System → Logs focused, are collected in [`docs/HA_TROUBLESHOOTING.md`](docs/HA_TROUBLESHOOTING.md).
 
 ## Development
 

@@ -153,6 +153,7 @@ class PGEAuthManager:
         self._encrypted_premise_id = encrypted_premise_id
         self._encrypted_sa_id = encrypted_sa_id
         self._hass = hass
+        self.host_resolver = None
         self._lock = asyncio.Lock()
         self._cognito_rate_limit_until: datetime | None = None
         # Preserve stored key when provided; otherwise fall back to the legacy
@@ -393,6 +394,7 @@ class PGEAuthManager:
                 email=self._email or "",
                 password=self._password,
                 refresh_credential=self._refresh_credential,
+                host_resolver=self.host_resolver,
             )
         except PGERateLimitError as exc:
             self.mark_cognito_rate_limited(exc.retry_after)

@@ -146,6 +146,8 @@ class ImportStoreData:
     tip_intervals: list[dict[str, Any]] = field(default_factory=list)
     last_successful_update: str | None = None
     newest_interval: str | None = None
+    # Sticky API host and cooldown clocks. No tokens. Missing on older stores.
+    api_host: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -201,6 +203,7 @@ class ImportStoreData:
             tip_intervals=list(tip_raw) if isinstance(tip_raw, list) else [],
             last_successful_update=data.get("last_successful_update"),
             newest_interval=data.get("newest_interval"),
+            api_host=_load_dict_snapshot(data, "api_host"),
         )
 
 

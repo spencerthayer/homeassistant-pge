@@ -101,7 +101,8 @@
           "tod_rate_off_peak": "TOD off-peak rate (USD/kWh)",
           "tod_rate_mid_peak": "TOD mid-peak rate (USD/kWh)",
           "tod_rate_on_peak": "TOD on-peak rate (USD/kWh)",
-          "tod_rate_basic_service": "Basic comparison-basis rate (USD/kWh)"
+          "tod_rate_basic_service": "Basic comparison-basis rate (USD/kWh)",
+          "api_host": "API host"
         },
         "data_description": {
           "polling_interval": "How often to refresh recent usage. Default is every 4 hours on the Pacific clock grid.",
@@ -124,7 +125,8 @@
           "tod_rate_off_peak": "Leave blank to use the on-device catalog (or a saved override) for each Pacific hour.",
           "tod_rate_mid_peak": "Leave blank to use the on-device catalog (or a saved override) for each Pacific hour.",
           "tod_rate_on_peak": "Leave blank to use the on-device catalog (or a saved override) for each Pacific hour.",
-          "tod_rate_basic_service": "Whole-range Basic comparison rate (Schedule 7 base + Schedule 125). Leave blank to use the on-device catalog effective for each hour."
+          "tod_rate_basic_service": "Whole-range Basic comparison rate (Schedule 7 base + Schedule 125). Leave blank to use the on-device catalog effective for each hour.",
+          "api_host": "Optional https origin for the PGE API. Leave blank to use automatic host failover. The PGE_API_HOST environment variable wins when it is set."
         }
       },
       "credentials": {
@@ -147,6 +149,7 @@
       "discovery_incomplete": "Email/password login is not ready yet",
       "history_start_required": "History start date is required when mode is From start date",
       "invalid_history_start": "History start date must be YYYY-MM-DD",
+      "api_host_invalid": "API host must be an https origin on the PGE API domain with no path, query, or credentials",
       "sync_busy": "A sync job is already running",
       "sync_start_failed": "Could not start the sync job",
       "invalid_sidebar_title": "Sidebar title cannot be empty",

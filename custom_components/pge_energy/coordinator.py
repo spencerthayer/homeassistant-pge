@@ -13,6 +13,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import PGEApiClient
+from .api_host import resolver_from_client
 from .auth import PGEAuthManager
 from .billing_models import (
     AccountSnapshot,
@@ -483,6 +484,8 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         last_ok = _parse_store_dt(store.last_successful_update)
         if last_ok is not None:
             self._last_successful_update = last_ok
+        if isinstance(store.api_host, dict):
+            resolver_from_client(self.client).restore(store.api_host)
         if store.billing_last_success:
             success = _parse_store_dt(store.billing_last_success)
             self.billing_freshness = BillingFreshness(
@@ -505,6 +508,7 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             store.newest_interval = self._newest_interval.isoformat()
         if self._last_successful_update is not None:
             store.last_successful_update = self._last_successful_update.isoformat()
+        store.api_host = resolver_from_client(self.client).snapshot()
 
     async def async_persist_sensor_snapshots(self, *, critical: bool = False) -> None:
         """Persist tip/billing snapshots used to keep sensors warm across restarts."""
@@ -559,6 +563,7 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pass  # preserve first stamp for this job
         else:
             self._import_store.sync_started_at = datetime.now(UTC).isoformat()
+        self._import_store.api_host = resolver_from_client(self.client).snapshot()
 
     async def _async_save_import_store_resilient(self) -> bool:
         """Checkpoint save that survives timeouts instead of failing the poll.
