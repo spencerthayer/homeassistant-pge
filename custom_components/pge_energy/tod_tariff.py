@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
+from .const import PGE_TOD_PAGE_URL
 from .time_util import PGE_TZ
 
 # ---------------------------------------------------------------------------
@@ -125,7 +126,7 @@ _TOD_SEED_ROWS: list[TodTariffRow] = [
         mid_peak=0.1670,
         on_peak=0.4313,
         source=SourceInfo(
-            url="https://portlandgeneral.com/about/info/pricing-plans/time-of-day",
+            url=PGE_TOD_PAGE_URL,
             title="PGE Time of Day pricing page (July 8)",
             effective_date="2026-07-08",
             observed_at="2026-08-16T00:00:00Z",

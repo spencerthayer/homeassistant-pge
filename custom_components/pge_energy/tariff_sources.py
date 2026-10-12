@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from .const import PGE_TARIFF_PAGE_DATA_URL, PGE_TOD_PAGE_DATA_URL
 from .tod_tariff import (
     BasicComparisonRow,
     SourceInfo,
@@ -35,9 +36,9 @@ _PDF_MAX_BYTES = 10 * 1024 * 1024
 _PDF_MAX_PAGES = 24
 _PARSER_VERSION = 2
 
-# Gatsby page-data URLs
-_TOD_PAGE_DATA_URL = "https://portlandgeneral.com/page-data/about/info/pricing-plans/time-of-day/page-data.json"
-_TARIFF_PAGE_DATA_URL = "https://portlandgeneral.com/page-data/about/info/rates-and-regulatory/tariff/page-data.json"
+# Gatsby page-data URLs (public website, not the Apigee API host).
+_TOD_PAGE_DATA_URL = PGE_TOD_PAGE_DATA_URL
+_TARIFF_PAGE_DATA_URL = PGE_TARIFF_PAGE_DATA_URL
 
 
 @dataclass(frozen=True, slots=True)

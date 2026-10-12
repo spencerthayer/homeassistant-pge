@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from homeassistant.core import HomeAssistant
 
+from custom_components.pge_energy.api_host import ApiHostResolver, set_resolver
 from custom_components.pge_energy.const import (
     AUTH_MODE_CREDENTIAL,
     CONF_ACCOUNT_ID,
@@ -14,12 +15,26 @@ from custom_components.pge_energy.const import (
     CONF_ENCRYPTED_PERSON_ID,
     CONF_PASSWORD,
     DOMAIN,
+    PGE_API_HOSTS,
 )
 from tests.conftest import (
     TEST_ACCOUNT_ID,
     TEST_ENCRYPTED_PERSON_ID,
     TEST_TOKEN,
 )
+
+
+@pytest.fixture(autouse=True)
+def _preferred_api_host_already_probed():
+    """Unit tests that mock one PGE response assume the preferred host is live.
+
+    Failover tests build their own ``ApiHostResolver`` and pass it in.
+    """
+    resolver = ApiHostResolver()
+    resolver.mark_verified_for_tests(PGE_API_HOSTS[0])
+    set_resolver(resolver)
+    yield
+    set_resolver(None)
 
 
 @pytest.fixture

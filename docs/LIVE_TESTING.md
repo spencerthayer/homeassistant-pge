@@ -42,7 +42,13 @@ The issue #5 capture uses PGE GraphQL only and is disabled by default:
 5. Review the file before sharing it. The page's visible `filter=pge` filter may not limit the downloaded file; prefer sharing only lines containing `PGE_ALPHA_GRID_CAPTURE` if unrelated logs are sensitive.
 6. Disable the alpha switch when capture is complete.
 
-Capture logs allowlist interval timestamps, kWh, amount, usage status, interval size, and temperature. They exclude request headers, tokens, account/person IDs, config-entry data, and unknown response fields, but the allowed usage values remain privacy-sensitive. Introspection is a one-shot best-effort request to `api.portlandgeneral.com/pge-graphql`; failure is non-fatal. Never commit a live capture body.
+Capture logs allowlist interval timestamps, kWh, amount, usage status, interval size, and temperature. They exclude request headers, tokens, account/person IDs, config-entry data, and unknown response fields, but the allowed usage values remain privacy-sensitive. Introspection is a one-shot best-effort request to `{resolved-origin}/pge-graphql`; failure is non-fatal. Never commit a live capture body.
+
+## When PGE moves their API
+
+Probe a host before sending an account token. POST `{origin}/pg-token-implicit-aws/token` with the public portal client id from `custom_components/pge_energy/const.py` and header `idp_access_token: probe`. HTTP 401 means the host is up. HTTP 502, 503, or 504, or a non-JSON body on another status, means it is down. Do not put a real access token in the probe.
+
+If the preferred host stays down, set `PGE_API_HOST` to an `https://` origin on `portlandgeneral.com`, or enter that origin under Configure, Sync settings, API host. `PGE_API_HOST_ALLOW_FOREIGN=1` accepts a host outside that domain and is unsupported.
 
 ## Automated suite
 

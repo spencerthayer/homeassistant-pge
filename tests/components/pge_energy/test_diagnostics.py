@@ -55,6 +55,9 @@ async def test_diagnostics_reports_safe_capture_status_and_current_version():
 
     diagnostics = result["diagnostics"]
     assert diagnostics["integration_version"] == VERSION
+    assert diagnostics["api_host"]
+    assert diagnostics["last_host_switch"] is None
+    assert "secret" not in str(diagnostics["api_host"])
     assert diagnostics["graphql_diagnostic_capture"] == {
         "enabled": True,
         "introspection_attempted": True,

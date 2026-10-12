@@ -18,6 +18,7 @@ from custom_components.pge_energy.const import (
     AUTH_MODE_CREDENTIAL,
     CONF_ACCOUNT_ID,
     CONF_ACCOUNT_KEY,
+    CONF_API_HOST,
     CONF_AUTH_MODE,
     CONF_AUTO_BACKFILL,
     CONF_BACKFILL_CONCURRENCY,
@@ -636,6 +637,67 @@ class TestPGEOptionsFlow:
         assert result["data"][CONF_INCLUDE_DIAGNOSTICS] is False
         assert result["data"][CONF_CAPTURE_GRAPHQL_DIAGNOSTICS] is True
         assert result["data"][CONF_INCLUDE_BILLING] is True
+        assert result["data"][CONF_API_HOST] is None
+
+    @pytest.mark.asyncio
+    async def test_options_settings_rejects_a_foreign_api_host(self):
+        flow = PGEOptionsFlow()
+        entry = MagicMock()
+        entry.entry_id = "entry1"
+        entry.options = {}
+        entry.data = {}
+        flow.hass = MagicMock()
+        flow.handler = "entry1"
+        flow.hass.config_entries.async_get_known_entry = MagicMock(return_value=entry)
+
+        result = await flow.async_step_settings(
+            {
+                CONF_POLLING_INTERVAL: 6,
+                CONF_POLLING_INTERVAL_UNIT: PollingIntervalUnit.HOURS.value,
+                CONF_SYNC_LOCAL_TIME: "03:30:00",
+                CONF_CORRECTION_WINDOW: 7,
+                CONF_HISTORY_MODE: HistoryMode.FULL.value,
+                CONF_HISTORY_START_DATE: "2019-01-01",
+                CONF_HOURLY_BACKFILL_DAYS: 90,
+                CONF_AUTO_BACKFILL: True,
+                CONF_INCLUDE_COST: True,
+                CONF_INCLUDE_DIAGNOSTICS: False,
+                CONF_BACKFILL_CONCURRENCY: 2,
+                CONF_API_HOST: "https://evil.example",
+            }
+        )
+        assert result["type"] == "form"
+        assert result["errors"]["base"] == "api_host_invalid"
+
+    @pytest.mark.asyncio
+    async def test_options_settings_stores_a_normalized_api_host(self):
+        flow = PGEOptionsFlow()
+        entry = MagicMock()
+        entry.entry_id = "entry1"
+        entry.options = {}
+        entry.data = {}
+        flow.hass = MagicMock()
+        flow.handler = "entry1"
+        flow.hass.config_entries.async_get_known_entry = MagicMock(return_value=entry)
+
+        result = await flow.async_step_settings(
+            {
+                CONF_POLLING_INTERVAL: 6,
+                CONF_POLLING_INTERVAL_UNIT: PollingIntervalUnit.HOURS.value,
+                CONF_SYNC_LOCAL_TIME: "03:30:00",
+                CONF_CORRECTION_WINDOW: 7,
+                CONF_HISTORY_MODE: HistoryMode.FULL.value,
+                CONF_HISTORY_START_DATE: "2019-01-01",
+                CONF_HOURLY_BACKFILL_DAYS: 90,
+                CONF_AUTO_BACKFILL: True,
+                CONF_INCLUDE_COST: True,
+                CONF_INCLUDE_DIAGNOSTICS: False,
+                CONF_BACKFILL_CONCURRENCY: 2,
+                CONF_API_HOST: "https://API.portlandgeneral.com/",
+            }
+        )
+        assert result["type"] == "create_entry"
+        assert result["data"][CONF_API_HOST] == "https://api.portlandgeneral.com"
 
     @pytest.mark.asyncio
     async def test_options_settings_requires_start_date(self):
