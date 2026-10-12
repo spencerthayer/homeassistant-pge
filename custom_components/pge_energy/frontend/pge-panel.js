@@ -49,7 +49,47 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.11.0";
+} from "./data.js?v=0.12.1";
+import {
+  baseloadFloor,
+  cycleCumulative,
+  dayFingerprints,
+  histogramBins,
+  hourWeekdayMatrix,
+  monthRidges,
+  monthlyByYear,
+  publishedWeekDays,
+  spreadBand,
+  typicalDayProfiles,
+  baseloadSteps,
+  billExplainer,
+  counterfactual,
+  daypartDays,
+  degreePrice,
+  shiftCostByStartHour,
+  weatherModel,
+  forwardRibbon,
+  moneyHourPareto,
+  periodBox,
+  periodMixByMonth,
+  sankeyFlows,
+  todMinusBasicByMonth,
+  billVsImported,
+  centsPerKwh,
+  degreeDayPoint,
+  statementGap,
+  statementWindows,
+  tempBins,
+  billAnatomyRows,
+  billFamilies,
+  duckHourProfiles,
+  duckMonthBars,
+  hasExport,
+  lineItemShares,
+  treemapSlices,
+  waterfallSteps,
+} from "./chart-series.js?v=0.12.1";
+import { renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney } from "./chart-gallery.js?v=0.12.1";
 import {
   createBarChart,
   createLineChart,
@@ -59,9 +99,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.11.0";
-import { sparklineSvg } from "./svg-helpers.js?v=0.11.0";
-import { applyPanelTheme } from "./theme.js?v=0.11.0";
+} from "./charts.js?v=0.12.1";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.1";
+import { applyPanelTheme } from "./theme.js?v=0.12.1";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -303,6 +343,9 @@ details.sync-gaps-panel {
 }
 .filters .range-custom { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .chart-host { width: 100%; min-height: 140px; }
+.chart-gallery { margin-top: 12px; }
+.chart-gallery figure { margin: 16px 0 0; }
+.chart-gallery h3 { margin: 0 0 4px; font-size: 1rem; }
 .chart-host.usage-combo { min-height: 380px; }
 .chart-host.scatter-wide { min-height: 300px; }
 .usage-stats { margin-top: 16px; }
@@ -491,7 +534,10 @@ details.sync-gaps-panel {
 details.sync-gaps-panel { margin-top: 0; }
 details.usage-accounting > summary,
 details.usage-rollup > summary,
-details.sync-gaps-panel > summary {
+details.sync-gaps-panel > summary,
+details.chart-gallery > summary,
+details.tariff-status-block > summary,
+details.diagnostics > summary {
   cursor: pointer;
   display: block;
   position: relative;
@@ -503,13 +549,22 @@ details.sync-gaps-panel > summary {
 }
 details.usage-accounting > summary::-webkit-details-marker,
 details.usage-rollup > summary::-webkit-details-marker,
-details.sync-gaps-panel > summary::-webkit-details-marker { display: none; }
+details.sync-gaps-panel > summary::-webkit-details-marker,
+details.chart-gallery > summary::-webkit-details-marker,
+details.tariff-status-block > summary::-webkit-details-marker,
+details.diagnostics > summary::-webkit-details-marker { display: none; }
 details.usage-accounting > summary::marker,
 details.usage-rollup > summary::marker,
-details.sync-gaps-panel > summary::marker { content: ""; }
+details.sync-gaps-panel > summary::marker,
+details.chart-gallery > summary::marker,
+details.tariff-status-block > summary::marker,
+details.diagnostics > summary::marker { content: ""; }
 details.usage-accounting > summary::before,
 details.usage-rollup > summary::before,
-details.sync-gaps-panel > summary::before {
+details.sync-gaps-panel > summary::before,
+details.chart-gallery > summary::before,
+details.tariff-status-block > summary::before,
+details.diagnostics > summary::before {
   content: "▸";
   position: absolute;
   left: 4px;
@@ -520,10 +575,16 @@ details.sync-gaps-panel > summary::before {
 }
 details.usage-accounting[open] > summary::before,
 details.usage-rollup[open] > summary::before,
-details.sync-gaps-panel[open] > summary::before { content: "▾"; }
+details.sync-gaps-panel[open] > summary::before,
+details.chart-gallery[open] > summary::before,
+details.tariff-status-block[open] > summary::before,
+details.diagnostics[open] > summary::before { content: "▾"; }
 details.usage-accounting > summary:hover,
 details.usage-rollup > summary:hover,
-details.sync-gaps-panel > summary:hover {
+details.sync-gaps-panel > summary:hover,
+details.chart-gallery > summary:hover,
+details.tariff-status-block > summary:hover,
+details.diagnostics > summary:hover {
   color: var(--primary-color);
   background: color-mix(
     in srgb,
@@ -533,14 +594,21 @@ details.sync-gaps-panel > summary:hover {
 }
 details.usage-accounting > summary:hover::before,
 details.usage-rollup > summary:hover::before,
-details.sync-gaps-panel > summary:hover::before { color: var(--primary-color); }
+details.sync-gaps-panel > summary:hover::before,
+details.chart-gallery > summary:hover::before,
+details.tariff-status-block > summary:hover::before,
+details.diagnostics > summary:hover::before { color: var(--primary-color); }
 .rollup-title {
   display: block;
   font-weight: 650;
   font-size: 1.05rem;
   line-height: 1.3;
 }
-details.usage-accounting > summary .rollup-title { font-size: 1.1rem; }
+details.usage-accounting > summary .rollup-title,
+details.chart-gallery > summary .rollup-title,
+details.tariff-status-block > summary .rollup-title,
+details.diagnostics > summary .rollup-title { font-size: 1.1rem; }
+details.tariff-status-block > summary .badge { margin-left: 8px; vertical-align: middle; }
 .rollup-caption {
   display: block;
   margin-top: 4px;
@@ -606,7 +674,6 @@ details.usage-accounting .usage-accounting-body { padding: 0 0 4px; }
     0 0 0 1px color-mix(in srgb, var(--pge-status-good) 28%, transparent);
 }
 .program:hover .name, .program:focus-within .name { color: var(--primary-color); }
-details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
 .pge-heatmap-title { font-size: 0.9rem; margin-bottom: 8px; color: var(--secondary-text-color); }
 .pge-heatmap-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(10px, 1fr)); gap: 2px;
@@ -689,7 +756,10 @@ details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 
   .program { padding: 10px; min-height: 64px; }
   details.usage-accounting > summary,
   details.usage-rollup > summary,
-  details.sync-gaps-panel > summary {
+  details.sync-gaps-panel > summary,
+  details.chart-gallery > summary,
+  details.tariff-status-block > summary,
+  details.diagnostics > summary {
     padding: 10px 12px 12px 26px;
     min-height: 44px;
   }
@@ -1009,30 +1079,18 @@ class PgeEnergyPanel extends HTMLElement {
     content.innerHTML = `
       ${tabs}
       <section class="card" id="kpis"></section>
-      <section class="card sync-gaps" id="sync-gaps">
-        <details class="sync-gaps-panel" data-persist="sync_status"${this._detailsOpenAttr(
-          "sync_status"
-        )}>
-          <summary>
-            <span class="rollup-title">Sync status</span>
-            <span class="rollup-caption">Import progress and upstream PGE publication gaps</span>
-          </summary>
-          <div class="sync-gaps-body">
-            <div class="sync-strip" id="sync"></div>
-            <div class="data-gaps" id="data-gaps"></div>
-          </div>
-        </details>
-      </section>
       <section class="card" id="hero">
         <h2>Usage</h2>
         <div class="filters" id="filters"></div>
         <div class="chart-host usage-combo" id="chart-usage"></div>
         <div class="usage-stats" id="usage-stats"></div>
+        ${this._loadShapeGalleryHtml()}
       </section>
       <section class="card" id="insights-weather">
         <h3>Weather vs usage</h3>
         <p class="muted" style="margin:0 0 8px">Daily kWh vs outdoor °F (days with both samples).</p>
         <div class="chart-host scatter-wide" id="scatter"></div>
+        ${this._weatherGalleryHtml()}
       </section>
       <section class="card" id="insights-cost">
         <h3>Cost intelligence</h3>
@@ -1050,8 +1108,22 @@ class PgeEnergyPanel extends HTMLElement {
       <section class="card" id="billing"></section>
       <section class="card" id="tod"></section>
       <section class="card" id="programs"></section>
+      <section class="card sync-gaps" id="sync-gaps">
+        <details class="sync-gaps-panel" data-persist="sync_status"${this._detailsOpenAttr(
+          "sync_status"
+        )}>
+          <summary>
+            <span class="rollup-title">Sync status</span>
+            <span class="rollup-caption">Import progress and upstream PGE publication gaps</span>
+          </summary>
+          <div class="sync-gaps-body">
+            <div class="sync-strip" id="sync"></div>
+            <div class="data-gaps" id="data-gaps"></div>
+          </div>
+        </details>
+      </section>
       <section class="card">
-        <details class="diagnostics" id="diagnostics"><summary>Diagnostics</summary><div id="diag-body"></div></details>
+        <details class="diagnostics" id="diagnostics"><summary><span class="rollup-title">Diagnostics</span></summary><div id="diag-body"></div></details>
       </section>
     `;
 
@@ -1063,6 +1135,7 @@ class PgeEnergyPanel extends HTMLElement {
       });
     });
     this._bindPersistentDetails(content.querySelector("#sync-gaps"));
+    this._bindPersistentDetails(content.querySelector("#hero"));
   }
 
   async _renderAll() {
@@ -1075,9 +1148,10 @@ class PgeEnergyPanel extends HTMLElement {
     await this._renderKpis();
     await this._renderDataGaps();
     await this._renderHero();
+    await this._renderLoadShapeGallery();
     await this._renderInsights();
     await this._renderTod();
-    this._renderBillingPrograms();
+    this._renderBillingPrograms(true);
     this._renderDiagnostics();
   }
 
@@ -1904,8 +1978,11 @@ class PgeEnergyPanel extends HTMLElement {
       this.shadowRoot.getElementById("ledger-kwh")
     );
     await this._renderHero();
+    await this._renderLoadShapeGallery();
     await this._renderInsights();
     await this._renderLedgerCharts();
+    await this._renderTodGallery();
+    await this._renderWeatherMoney();
   }
 
   async _renderHero() {
@@ -1942,6 +2019,180 @@ class PgeEnergyPanel extends HTMLElement {
       if (chart) this._charts.push(chart);
     }
     void this._renderUsageStats();
+  }
+
+  _loadShapeGalleryHtml() {
+    const figure = (id, title, caption) =>
+      `<figure data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
+        caption
+      )}</p><div class="chart-host" id="${id}"></div></figure>`;
+    return `
+      <details class="chart-gallery" data-persist="chart_gallery_load"${this._detailsOpenAttr("chart_gallery_load")}>
+        <summary><span class="rollup-title">Load shape</span></summary>
+        ${figure("chart-typical-day", "Typical day", "Horizontal: Pacific hour. Vertical: mean kWh. Source: imported hourly consumption.")}
+        ${figure("chart-hour-weekday", "Hour by weekday", "Horizontal: Pacific hour. Vertical: weekday. Color: mean kWh. Source: imported hourly consumption.")}
+        ${figure("chart-ridgelines", "Monthly ridgelines", "Horizontal: Pacific hour. Vertical: mean kWh, offset by month. Source: imported hourly consumption.")}
+        ${figure("chart-polar", "24-hour clock", "Angle: Pacific hour. Radius: weekday mean kWh. Source: imported hourly consumption.")}
+        ${figure("chart-histogram", "Daily kWh histogram", "Horizontal: daily kWh bin. Vertical: number of days. Source: imported daily consumption.")}
+        ${figure("chart-yoy", "Year over year", "Horizontal: month. Vertical: kWh. Source: imported daily consumption.")}
+        ${figure("chart-cycle-race", "Billing-cycle race", "Horizontal: day of statement. Vertical: cumulative kWh. Source: imported hourly consumption.")}
+        ${figure("chart-baseload", "Baseload band", "Horizontal: Pacific hour. Vertical: weekday mean kWh. Line: minimum of hours 0 through 5. Source: imported hourly consumption.")}
+        ${figure("chart-spread", "Daily spread", "Horizontal: date. Vertical: daily kWh. Lines: mean and mean plus or minus two standard deviations. Source: imported daily consumption.")}
+        ${figure("chart-published-week", "Published week", "Horizontal: Pacific hour. Vertical: kWh. Source: imported hourly consumption for the latest closed Pacific week.")}
+        ${figure("chart-fingerprint", "Day fingerprint", "Axes: kWh, peak hour, mean °F, on-peak share, portal cents per kWh. Source: imported hourly consumption, cost, and temperature.")}
+        ${figure("chart-duck", "Duck curve", "Horizontal: Pacific hour. Vertical: kWh. Import and export. Shown only when the account has returned energy.")}
+        ${figure("chart-duck-months", "Duck curve by month", "Horizontal: month. Vertical: kWh and dollars. Import, export, PGE usage estimate, and export compensation.")}
+        ${figure("chart-baseload-history", "Always-on load history", "Horizontal: date. Vertical: minimum kWh in Pacific hours 0 through 5. Markers are steps. Yearly cost uses the trailing 365-day PGE usage estimate.")}
+        ${figure("chart-daypart-stream", "Daypart stream", "Horizontal: date. Bands: overnight, morning, afternoon, evening. Source: imported hourly consumption.")}
+      </details>`;
+  }
+
+  async _renderLoadShapeGallery() {
+    await renderLoadShape(this, {
+      baseloadFloor,
+      cycleCumulative,
+      dayFingerprints,
+      histogramBins,
+      hourWeekdayMatrix,
+      monthRidges,
+      monthlyByYear,
+      publishedWeekDays,
+      spreadBand,
+      typicalDayProfiles,
+    });
+  }
+
+  _todGalleryHtml() {
+    const figure = (id, title, caption) =>
+      `<figure data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
+        caption
+      )}</p><div class="chart-host" id="${id}"></div></figure>`;
+    return `
+      <details class="chart-gallery" data-persist="chart_gallery_tod"${this._detailsOpenAttr("chart_gallery_tod")}>
+        <summary><span class="rollup-title">Charts</span></summary>
+        <figure data-chart="chart-shift-sim">
+          <h3>Load-shift simulator</h3>
+          <p class="muted">What a weekday load costs per month at each start hour. Local TOD imported-energy estimate versus a flat Local Basic estimate. Weekends are all off-peak.</p>
+          <label>Load <select id="chart-shift-preset">
+            <option value="ev">EV 7.2 kW for 4 h</option>
+            <option value="dryer">Dryer 3 kW for 1 h</option>
+            <option value="dishwasher">Dishwasher 1.2 kW for 2 h</option>
+            <option value="custom">Custom</option>
+          </select></label>
+          <label>kW <input id="chart-shift-kw" type="number" min="0" step="0.1" value="7.2"></label>
+          <label>Hours <input id="chart-shift-hours" type="number" min="0" step="0.5" value="4"></label>
+          <label>Runs per month <input id="chart-shift-runs" type="number" min="0" step="1" value="20"></label>
+          <div class="chart-host" id="chart-shift-sim"></div>
+        </figure>
+        ${figure("chart-tod-stacked", "Stacked area", "Horizontal: time. Vertical: kWh. Source: imported hourly consumption classified with the Pacific Time of Day schedule.")}
+        ${figure("chart-period-mix", "Monthly period mix", "Horizontal: month. Vertical: share of kWh. Source: imported hourly consumption.")}
+        ${figure("chart-money-pareto", "Money-hours Pareto", "Horizontal: dollars. Vertical: Pacific hour. Source: hourly kWh times the local catalog rate. Local TOD imported-energy estimate.")}
+        ${figure("chart-period-box", "kWh by period", "Horizontal: period. Vertical: hourly kWh. Source: imported hourly consumption.")}
+        ${figure("chart-tod-delta", "Local TOD minus local Basic", "Horizontal: month. Vertical: dollars, positive means the local TOD estimate is lower. Source: local catalog prices on hourly kWh.")}
+        ${figure("chart-forward-ribbon", "Forward 48-hour ribbon", "Horizontal: next Pacific hour. Vertical: historical mean kWh. Bars follow the offline schedule. No recorder data past the published end.")}
+        ${figure("chart-sankey", "Sankey", "Period kWh into local estimate dollars. Source: hourly consumption and the local catalog. Not portal hourly amount.")}
+      </details>`;
+  }
+
+  async _renderTodGallery() {
+    await renderTodCharts(this, {
+      forwardRibbon,
+      hourWeekdayMatrix,
+      moneyHourPareto,
+      periodBox,
+      periodMixByMonth,
+      sankeyFlows,
+      todMinusBasicByMonth,
+    });
+    if (this.shadowRoot?.getElementById("chart-bill-explainer")) {
+      await this._renderInsightCharts();
+    }
+  }
+
+  _weatherGalleryHtml() {
+    const figure = (id, title, caption) =>
+      `<figure data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
+        caption
+      )}</p><div class="chart-host" id="${id}"></div></figure>`;
+    return `
+      ${figure("chart-degree-days", "Degree days vs kWh", "Horizontal: date. Vertical: kWh and degree days at a 65 °F base. Source: daily imported consumption and mean outdoor temperature.")}
+      ${figure("chart-temp-bins", "Temperature bins", "Horizontal: outdoor temperature band. Vertical: mean daily kWh. Source: daily imported consumption and mean outdoor temperature.")}
+      ${figure("chart-weather-counterfactual", "Weather-normalized counterfactual", "Actual daily kWh against the weather model fit on an earlier baseline. The cumulative gap is on the right. r2 is the fit quality.")}
+      <div id="kpi-degree-price"></div>`;
+  }
+
+  _billingGalleryHtml() {
+    const figure = (id, title, caption) =>
+      `<figure data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
+        caption
+      )}</p><div class="chart-host" id="${id}"></div></figure>`;
+    return `
+      <details class="chart-gallery" data-persist="chart_gallery_billing"${this._detailsOpenAttr("chart_gallery_billing")}>
+        <summary><span class="rollup-title">Charts</span></summary>
+        ${figure("chart-bill-explainer", "Why this bill changed", "Approximate statement windows. Bars sum to the change in amount due.")}
+        ${figure("chart-statement-portal", "Statement vs portal estimate", "Approximate statement window. Billed amount against summed PGE usage estimate.")}
+        ${figure("chart-bill-imported", "Bill kWh vs imported kWh", "Approximate statement window. Billed kWh against summed imported kWh.")}
+        ${figure("chart-program-savings", "Program savings", "Horizontal: time. Vertical: dollars. Source: YTD program savings mean. Not a cumulative sum.")}
+        ${figure("chart-balance-due", "Balance and amount due", "Horizontal: time. Vertical: dollars. Source: account balance and amount due means. Not a cumulative sum.")}
+      </details>
+      <div id="chart-pdf-slot"></div>`;
+  }
+
+  async _renderWeatherMoney() {
+    await renderWeatherMoney(this, {
+      billVsImported,
+      degreeDayPoint,
+      statementGap,
+      statementWindows,
+      tempBins,
+    });
+    await this._renderPdfSolar();
+    await this._renderInsightCharts();
+  }
+
+  async _renderInsightCharts() {
+    await renderInsights(this, {
+      baseloadSteps,
+      billExplainer,
+      centsPerKwh,
+      counterfactual,
+      daypartDays,
+      degreePrice,
+      shiftCostByStartHour,
+      statementWindows,
+      weatherModel,
+    });
+  }
+
+  async _renderPdfSolar() {
+    await renderPdfSolar(this, {
+      billAnatomyRows,
+      billFamilies,
+      duckHourProfiles,
+      duckMonthBars,
+      hasExport,
+      lineItemShares,
+      treemapSlices,
+      waterfallSteps,
+    });
+    const pdf = this.shadowRoot?.querySelector("#chart-pdf-slot details");
+    if (pdf) this._bindPersistentDetails(pdf.parentElement);
+  }
+
+  _pdfGalleryHtml() {
+    const figure = (id, title, caption) =>
+      `<figure data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
+        caption
+      )}</p><div class="chart-host" id="${id}"></div></figure>`;
+    return `
+      <details class="chart-gallery" data-persist="chart_gallery_pdf"${this._detailsOpenAttr("chart_gallery_pdf")}>
+        <summary><span class="rollup-title">Bill PDF</span></summary>
+        ${figure("chart-bill-anatomy", "Stacked bill anatomy", "Horizontal: statement. Vertical: dollars. Basic, energy use, delivery, taxes, and other. Other is the residual so the column totals new charges. Delivery subtotal is not stacked again.")}
+        ${figure("chart-treemap", "Latest statement treemap", "Area: dollars in the latest PDF statement. Same five families.")}
+        ${figure("chart-waterfall", "Statement waterfall", "Previous amount due, payment, new charges, amount due.")}
+        ${figure("chart-fixed-variable", "Fixed vs variable", "Horizontal: statement. Vertical: dollars. Same five families.")}
+        ${figure("chart-line-mix", "Line-item mix", "Horizontal: statement. Vertical: share of new charges. Same five families.")}
+      </details>`;
   }
 
   _fmtWhen(unixSec) {
@@ -3132,6 +3383,7 @@ class PgeEnergyPanel extends HTMLElement {
   async _renderTod() {
     const el = this.shadowRoot.getElementById("tod");
     if (!el) return;
+    this._disposeHostCharts(el);
     const gen = ++this._todRenderGen;
     try {
       await this._renderTodBody(el, gen);
@@ -3377,10 +3629,12 @@ class PgeEnergyPanel extends HTMLElement {
         ${savingsHtml}
       </div>
       ${this._tariffStatusHtml(tariffStatus, todCatalog, basicCatalog)}
+      ${this._todGalleryHtml()}
     `;
     if (gen !== this._todRenderGen) return;
     this._bindPersistentDetails(el);
     this._bindTodRange(el);
+    await this._renderTodGallery();
   }
 
   _tariffStatusHtml(status, todCatalog, basicCatalog) {
@@ -3395,8 +3649,8 @@ class PgeEnergyPanel extends HTMLElement {
     const effectiveFrom = effectiveRow?.effective_from || null;
     const periodLabel = effectiveFrom ? ` effective ${this._escape(effectiveFrom)}` : "";
     return `
-      <details class="tariff-status-block"${this._detailsOpenAttr("tariff_status")}>
-        <summary>Tariff sources ${statusBadge}</summary>
+      <details class="tariff-status-block" data-persist="tariff_status"${this._detailsOpenAttr("tariff_status")}>
+        <summary><span class="rollup-title">Tariff sources ${statusBadge}</span></summary>
         <div class="tod-table-wrap">
           <table class="tod-table">
             <thead><tr><th>Source</th><th>Last check</th><th>Last success</th><th>TOD rows</th><th>Basic rows</th><th>Note</th></tr></thead>
@@ -3707,7 +3961,7 @@ class PgeEnergyPanel extends HTMLElement {
     `;
   }
 
-  _renderBillingPrograms() {
+  _renderBillingPrograms(mountGallery = false) {
     const billing = this.shadowRoot.getElementById("billing");
     const programs = this.shadowRoot.getElementById("programs");
     if (!billing || !programs || !this._account) return;
@@ -3715,6 +3969,7 @@ class PgeEnergyPanel extends HTMLElement {
     const includeBilling = this._account.options?.include_billing !== false;
 
     if (!includeBilling) {
+      this._disposeHostCharts(billing);
       billing.innerHTML = `<h2>Billing</h2><p class="muted">Billing import is disabled in Configure → Sync settings.</p>`;
       programs.innerHTML = `<h2>Programs</h2><p class="muted">Enable billing & programs to see enrollment.</p>`;
       return;
@@ -3785,27 +4040,49 @@ class PgeEnergyPanel extends HTMLElement {
       }
     }
     const summaryHtml = this._renderSummaryPairs(metrics);
-    this._disposeHostCharts(
-      this.shadowRoot.getElementById("ledger-bill"),
-      this.shadowRoot.getElementById("ledger-kwh")
-    );
+    if (!mountGallery && this._patchBillingText(summaryHtml)) {
+      this._renderProgramsCard(programs, e);
+      return;
+    }
+    this._disposeHostCharts(billing);
     billing.innerHTML = `
       <h2>Billing</h2>
       <p class="muted" style="margin:0 0 12px">Account balance, statement, and lifetime totals from PGE billing sync.</p>
-      ${this._renderBillPdfHeader()}
+      <div id="billing-pdf-header">${this._renderBillPdfHeader()}</div>
       <div class="usage-accounting-body">
+        <div id="billing-summary">
         ${
           summaryHtml ||
           `<p class="muted stats-meta">No billing values yet — wait for a sync or check Configure → Sync settings.</p>`
         }
-        ${this._renderBillPdfStatementDetails()}
+        </div>
+        <div id="billing-pdf-details">${this._renderBillPdfStatementDetails()}</div>
         <p class="muted stats-meta" style="margin-top:12px">Ledger charts use external statistic ids (including bill_kwh, which has no mirrored entity).</p>
         <div class="chart-host" id="ledger-bill"></div>
         <div class="chart-host" id="ledger-kwh" style="margin-top:8px"></div>
+        ${this._billingGalleryHtml()}
       </div>
     `;
     void this._renderLedgerCharts();
+    this._bindPersistentDetails(billing);
+    void this._renderWeatherMoney();
+    this._renderProgramsCard(programs, e);
+  }
 
+  _patchBillingText(summaryHtml) {
+    const summary = this.shadowRoot.getElementById("billing-summary");
+    const pdfHeader = this.shadowRoot.getElementById("billing-pdf-header");
+    const pdfDetails = this.shadowRoot.getElementById("billing-pdf-details");
+    if (!summary || !pdfHeader || !pdfDetails) return false;
+    summary.innerHTML =
+      summaryHtml ||
+      `<p class="muted stats-meta">No billing values yet — wait for a sync or check Configure → Sync settings.</p>`;
+    pdfHeader.innerHTML = this._renderBillPdfHeader();
+    pdfDetails.innerHTML = this._renderBillPdfStatementDetails();
+    return true;
+  }
+
+  _renderProgramsCard(programs, e) {
     const prog = [
       ["Auto Pay", e.autopay],
       ["Paperless bill", e.paperless_bill],
@@ -3850,7 +4127,46 @@ class PgeEnergyPanel extends HTMLElement {
           .join("")}
       </div>
       ${ptrFootnote}
+      ${this._ptrEventHtml(e)}
     `;
+  }
+
+  _ptrEventHtml(e) {
+    const active = stateDisplay(this._hass, e.ptr_event_active, null);
+    const detected = stateDisplay(this._hass, e.ptr_event_detected, null);
+    const start = stateDisplay(this._hass, e.ptr_event_start, null);
+    const end = stateDisplay(this._hass, e.ptr_event_end, null);
+    const sections = [];
+    if (active === "on") {
+      sections.push(`<div class="program on">
+        <div class="name">Peak Time Event Active</div>
+        <div class="state">${this._escape(start)} – ${this._escape(end)}</div>
+      </div>`);
+    } else if (start != null) {
+      sections.push(`<div class="program">
+        <div class="name">Scheduled PTR Event</div>
+        <div class="state">${this._escape(start)} – ${this._escape(end)}</div>
+      </div>`);
+    }
+    if (detected === "on") {
+      const detDate = stateAttr(this._hass, e.ptr_event_detected, "event_date");
+      sections.push(`<div class="program on">
+        <div class="name">PTR Event Detected</div>
+        <div class="state">${this._escape(detDate || "Unknown date")}</div>
+      </div>`);
+    }
+    const lastPtr = stateAttr(this._hass, e.program_peak_time_rebates, "peak_time_events");
+    if (lastPtr && Array.isArray(lastPtr) && lastPtr.length > 0) {
+      const newest = lastPtr[lastPtr.length - 1];
+      sections.push(`<div class="program">
+        <div class="name">Last Recorded PTR Event</div>
+        <div class="state">${this._escape(newest.event_date || "")}${newest.event_earned_credit != null ? ` · $${this._escape(String(newest.event_earned_credit))}` : ""}</div>
+      </div>`);
+    }
+    if (sections.length === 0) {
+      return `<p class="muted stats-meta" style="margin-top:8px">No PTR events — schedule one when PGE sends the day-before notice.</p>`;
+    }
+    return `<div class="programs ptr-events">${sections.join("")}</div>`;
   }
 
   async _renderLedgerCharts() {

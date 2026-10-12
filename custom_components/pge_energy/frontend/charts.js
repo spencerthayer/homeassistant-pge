@@ -9,13 +9,13 @@ import {
   formatSignedUsd,
   projectDirectionalUsage,
   symmetricExtent,
-} from "./data.js?v=0.11.0";
+} from "./data.js?v=0.12.1";
 import {
   chromeColors,
   seriesColors,
   tooltipTheme,
   withAlpha,
-} from "./theme.js?v=0.11.0";
+} from "./theme.js?v=0.12.1";
 
 export { seriesColors };
 
@@ -1113,6 +1113,448 @@ export async function renderHeatmap(host, { xs, ys, diverging = false, title = "
     ],
   };
   return mount(host, option, { height: 210 });
+}
+
+function countFinite(values) {
+  let count = 0;
+  for (const value of values || []) {
+    if (value != null && Number.isFinite(Number(value))) count += 1;
+  }
+  return count;
+}
+
+function galleryBase(host) {
+  const root = resolveRoot(host);
+  return {
+    root,
+    theme: themeColors(root),
+    tip: tooltipTheme(root),
+    colors: seriesColors(root),
+  };
+}
+
+/** 24-hour polar bar. `values` is mean kWh for hours 0 through 23. */
+export async function createPolarBar(host, { values, color } = {}) {
+  if (countFinite(values) < 2) return showChartEmpty(host, "Not enough hourly history.");
+  const { theme, tip, colors } = galleryBase(host);
+  const data = (values || []).map((value) => (value == null || !Number.isFinite(Number(value)) ? 0 : Number(value)));
+  return mount(
+    host,
+    {
+      ...chartMotion(),
+      backgroundColor: theme.bg,
+      tooltip: { ...tip, trigger: "item" },
+      polar: { radius: ["12%", "72%"] },
+      angleAxis: {
+        type: "category",
+        data: Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0")),
+        startAngle: 90,
+        axisLabel: { color: theme.muted },
+      },
+      radiusAxis: {
+        axisLabel: { color: theme.muted },
+        splitLine: { lineStyle: { color: theme.grid } },
+      },
+      series: [
+        {
+          type: "bar",
+          coordinateSystem: "polar",
+          data,
+          itemStyle: { color: color || colors.kwh },
+        },
+      ],
+    },
+    { height: 280 },
+  );
+}
+
+/** Polar scatter for the year spiral. Points are `{ angle, radius, value }`. */
+export async function createPolarScatter(host, { points } = {}) {
+  const data = (points || [])
+    .filter((point) => Number.isFinite(point?.angle) && Number.isFinite(point?.radius) && Number.isFinite(Number(point?.value)))
+    .map((point) => [point.angle, point.radius, Number(point.value)]);
+  if (data.length < 2) return showChartEmpty(host, "Not enough hourly history.");
+  const { theme, tip, colors } = galleryBase(host);
+  const values = data.map((point) => point[2]);
+  return mount(
+    host,
+    {
+      animation: false,
+      backgroundColor: theme.bg,
+      tooltip: { ...tip, trigger: "item" },
+      polar: {},
+      angleAxis: { type: "value", min: 0, max: 23, axisLabel: { color: theme.muted } },
+      radiusAxis: { axisLabel: { color: theme.muted }, splitLine: { lineStyle: { color: theme.grid } } },
+      visualMap: {
+        min: Math.min(...values),
+        max: Math.max(...values),
+        dimension: 2,
+        calculable: false,
+        right: 0,
+        bottom: 0,
+        textStyle: { color: theme.muted },
+        inRange: { color: [colors.tempCold, colors.kwh, colors.tempHot] },
+      },
+      series: [
+        {
+          type: "scatter",
+          coordinateSystem: "polar",
+          large: true,
+          symbolSize: 3,
+          data,
+        },
+      ],
+    },
+    { height: 320 },
+  );
+}
+
+/** One box per category. Each box is `[min, q1, median, q3, max]`. */
+export async function createBoxPlot(host, { categories, boxes } = {}) {
+  const ready = (boxes || []).filter((box) => Array.isArray(box) && box.filter((value) => Number.isFinite(Number(value))).length >= 2);
+  if (ready.length < 1 || countFinite(ready.flat()) < 2) return showChartEmpty(host, "Not enough hourly history.");
+  const { theme, tip, colors } = galleryBase(host);
+  return mount(
+    host,
+    {
+      ...chartMotion(),
+      backgroundColor: theme.bg,
+      tooltip: { ...tip, trigger: "item" },
+      xAxis: { type: "category", data: categories || [], axisLabel: { color: theme.muted } },
+      yAxis: { type: "value", name: "kWh", axisLabel: { color: theme.muted }, splitLine: { lineStyle: { color: theme.grid } } },
+      series: [
+        {
+          type: "boxplot",
+          data: boxes,
+          itemStyle: { color: colors.kwh, borderColor: theme.text },
+        },
+      ],
+    },
+    { height: 240 },
+  );
+}
+
+export async function createSankey(host, { nodes, links } = {}) {
+  const ready = (links || []).filter((link) => Number.isFinite(Number(link?.value)) && Number(link.value) > 0);
+  if (ready.length < 1) return showChartEmpty(host, "Not enough priced hours.");
+  const { theme, tip } = galleryBase(host);
+  return mount(
+    host,
+    {
+      ...chartMotion(),
+      backgroundColor: theme.bg,
+      tooltip: { ...tip, trigger: "item" },
+      series: [
+        {
+          type: "sankey",
+          data: nodes || [],
+          links: ready,
+          label: { color: theme.text },
+          lineStyle: { color: "gradient", opacity: 0.4 },
+        },
+      ],
+    },
+    { height: 280 },
+  );
+}
+
+export async function createTreemap(host, { data } = {}) {
+  const ready = (data || []).filter((row) => Number.isFinite(Number(row?.value)) && Number(row.value) !== 0);
+  if (ready.length < 2) return showChartEmpty(host, "Not enough bill detail.");
+  const { theme, tip, colors } = galleryBase(host);
+  return mount(
+    host,
+    {
+      ...chartMotion(),
+      backgroundColor: theme.bg,
+      tooltip: { ...tip, trigger: "item" },
+      series: [
+        {
+          type: "treemap",
+          data: ready,
+          breadcrumb: { show: false },
+          label: { color: theme.text },
+          itemStyle: { borderColor: theme.bg },
+          color: [colors.kwh, colors.cost, colors.payment, colors.export, colors.warn],
+        },
+      ],
+    },
+    { height: 260 },
+  );
+}
+
+export async function createParallel(host, { dimensions, rows } = {}) {
+  const ready = (rows || []).filter((row) => countFinite(row) >= 2);
+  if (ready.length < 2) return showChartEmpty(host, "Not enough closed days.");
+  const { theme, tip, colors } = galleryBase(host);
+  return mount(
+    host,
+    {
+      ...chartMotion(),
+      backgroundColor: theme.bg,
+      tooltip: { ...tip, trigger: "item" },
+      parallelAxis: (dimensions || []).map((name, dim) => ({
+        dim,
+        name,
+        nameTextStyle: { color: theme.muted },
+        axisLabel: { color: theme.muted },
+      })),
+      parallel: { left: 48, right: 48, bottom: 24, top: 36 },
+      series: [
+        {
+          type: "parallel",
+          lineStyle: { width: 1, color: colors.kwh, opacity: 0.35 },
+          data: ready,
+        },
+      ],
+    },
+    { height: 280 },
+  );
+}
+
+/** One line per month, lifted by `ridgeGap` so the profiles do not sit on each other. */
+export async function createRidgeline(host, { series, ridgeGap = 1 } = {}) {
+  const ready = (series || []).filter((row) => countFinite(row?.values) >= 2);
+  if (ready.length < 1) return showChartEmpty(host, "Not enough hourly history.");
+  const { theme, tip, colors } = galleryBase(host);
+  const hours = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0"));
+  return mount(
+    host,
+    {
+      ...chartMotion(),
+      backgroundColor: theme.bg,
+      tooltip: { ...tip, trigger: "axis" },
+      legend: { type: "scroll", textStyle: { color: theme.text } },
+      xAxis: { type: "category", data: hours, axisLabel: { color: theme.muted } },
+      yAxis: { type: "value", axisLabel: { show: false }, splitLine: { show: false } },
+      series: ready.map((row, monthIndex) => {
+        const baseline = monthIndex * ridgeGap;
+        return {
+          type: "line",
+          name: row.name,
+          showSymbol: false,
+          data: (row.values || []).map((value) =>
+            value == null || !Number.isFinite(Number(value)) ? null : Number(value) + baseline,
+          ),
+          areaStyle: { origin: baseline, color: colors.kwh, opacity: 0.28 },
+          lineStyle: { color: colors.kwh, width: 1.5 },
+        };
+      }),
+    },
+    { height: 320 },
+  );
+}
+
+/**
+ * Transparent helper stack plus a visible delta.
+ * A step with `total: true` is an absolute end bar, not another delta.
+ */
+export async function createWaterfall(host, { steps, unit = "" } = {}) {
+  const ready = (steps || []).filter((step) => Number.isFinite(Number(step?.value)));
+  if (ready.length < 2) return showChartEmpty(host, "Not enough statement history.");
+  const { theme, tip, colors } = galleryBase(host);
+  let running = 0;
+  const helpers = [];
+  const deltas = [];
+  for (const step of ready) {
+    const value = Number(step.value);
+    if (step.total) {
+      helpers.push(0);
+      deltas.push({
+        value,
+        itemStyle: { color: colors.cost },
+      });
+      running = value;
+      continue;
+    }
+    if (value >= 0) {
+      helpers.push(running);
+      deltas.push({ value, itemStyle: { color: colors.kwh } });
+      running += value;
+    } else {
+      running += value;
+      helpers.push(running);
+      deltas.push({ value: -value, itemStyle: { color: colors.critical } });
+    }
+  }
+  return mount(
+    host,
+    {
+      ...chartMotion(),
+      backgroundColor: theme.bg,
+      tooltip: {
+        ...tip,
+        trigger: "axis",
+        formatter: (items) => {
+          const item = items?.[1] || items?.[0];
+          const step = ready[item?.dataIndex];
+          if (!step) return "";
+          return `${step.label}: ${Number(step.value).toFixed(2)}${unit}`;
+        },
+      },
+      xAxis: {
+        type: "category",
+        data: ready.map((step) => step.label),
+        axisLabel: { color: theme.muted, interval: 0, rotate: ready.length > 6 ? 30 : 0 },
+      },
+      yAxis: {
+        type: "value",
+        axisLabel: { color: theme.muted },
+        splitLine: { lineStyle: { color: theme.grid } },
+      },
+      series: [
+        { type: "bar", stack: "waterfall", data: helpers, itemStyle: { color: "transparent" }, emphasis: { disabled: true } },
+        { type: "bar", stack: "waterfall", data: deltas },
+      ],
+    },
+    { height: 240 },
+  );
+}
+
+/** `data` rows are `[time, value, name]` for a themeRiver singleAxis. */
+export async function createThemeRiver(host, { data } = {}) {
+  const ready = (data || []).filter((row) => row && Number.isFinite(Number(row[1])));
+  if (ready.length < 2) return showChartEmpty(host, "Not enough hourly history.");
+  const { theme, tip, colors } = galleryBase(host);
+  return mount(
+    host,
+    {
+      animation: false,
+      backgroundColor: theme.bg,
+      tooltip: { ...tip, trigger: "axis" },
+      singleAxis: { type: "time", top: 40, bottom: 24, axisLabel: { color: theme.muted } },
+      series: [
+        {
+          type: "themeRiver",
+          data: ready,
+          label: { show: false },
+          color: [colors.kwh, colors.cost, colors.export, colors.payment],
+        },
+      ],
+    },
+    { height: 240 },
+  );
+}
+
+/** Weekday by hour. This is not the calendar heatmap. */
+export async function createHourWeekdayHeatmap(host, { labels, values } = {}) {
+  const cells = [];
+  (values || []).forEach((row, weekday) => {
+    (row || []).forEach((value, hour) => {
+      if (value == null || !Number.isFinite(Number(value))) return;
+      cells.push([hour, weekday, Number(value)]);
+    });
+  });
+  if (cells.length < 2) return showChartEmpty(host, "Not enough hourly history.");
+  const { theme, tip, colors } = galleryBase(host);
+  const flat = cells.map((cell) => cell[2]);
+  return mount(
+    host,
+    {
+      ...chartMotion(),
+      backgroundColor: theme.bg,
+      tooltip: { ...tip, trigger: "item" },
+      grid: { left: 48, right: 16, top: 16, bottom: 28 },
+      xAxis: {
+        type: "category",
+        data: Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0")),
+        axisLabel: { color: theme.muted },
+      },
+      yAxis: {
+        type: "category",
+        data: labels || ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+        axisLabel: { color: theme.muted },
+      },
+      visualMap: {
+        min: Math.min(...flat),
+        max: Math.max(...flat),
+        show: false,
+        inRange: { color: [withAlpha(colors.kwh, 0.2), colors.kwh] },
+      },
+      series: [{ type: "heatmap", data: cells, emphasis: heatmapCellEmphasis(theme) }],
+    },
+    { height: 220 },
+  );
+}
+
+/**
+ * Category or time chart for gallery hosts that are not a special ECharts type.
+ * `series` entries: `{ name, values, color, type, area, stack }`.
+ */
+export async function createGalleryChart(host, {
+  categories = [],
+  series = [],
+  yName = "",
+  xName = "",
+  horizontal = false,
+  markLines = [],
+} = {}) {
+  const finite = series.reduce((count, row) => count + countFinite(row?.values), 0);
+  if (finite < 2) return showChartEmpty(host, "Not enough history.");
+  const { theme, tip, colors } = galleryBase(host);
+  const palette = [colors.kwh, colors.cost, colors.export, colors.payment, colors.tempHot, colors.savings, colors.warn];
+  const timeAxis = categories.length > 0 && typeof categories[0] === "number" && categories[0] > 1e9;
+  const built = series.map((row, index) => {
+    const color = row.color || palette[index % palette.length];
+    const data = timeAxis
+      ? (row.values || []).map((value, i) => {
+          if (value == null || !Number.isFinite(Number(value))) return null;
+          const ts = categories[i];
+          return [typeof ts === "number" && ts < 1e12 ? ts * 1000 : ts, Number(value)];
+        })
+      : (row.values || []).map((value) => (value == null || !Number.isFinite(Number(value)) ? null : Number(value)));
+    return {
+      name: row.name,
+      type: row.type || "line",
+      data,
+      stack: row.stack,
+      showSymbol: false,
+      areaStyle: row.area ? { opacity: 0.35 } : undefined,
+      itemStyle: { color },
+      lineStyle: { color, type: row.dashed ? "dashed" : "solid" },
+      markLine:
+        index === 0 && markLines.length
+          ? {
+              symbol: "none",
+              data: markLines.map((line) => ({ yAxis: line.y, name: line.name })),
+              label: { color: theme.muted, formatter: "{b}" },
+              lineStyle: { color: theme.muted, type: "dashed" },
+            }
+          : undefined,
+    };
+  });
+  const categoryAxis = {
+    type: "category",
+    data: categories,
+    name: horizontal ? yName : xName,
+    axisLabel: { color: theme.muted },
+  };
+  const valueAxis = {
+    type: "value",
+    name: horizontal ? xName : yName,
+    nameTextStyle: { color: theme.muted },
+    axisLabel: { color: theme.muted },
+    splitLine: { lineStyle: { color: theme.grid } },
+  };
+  const timeAxisOption = {
+    type: "time",
+    name: xName,
+    axisLabel: { color: theme.muted },
+  };
+  return mount(
+    host,
+    {
+      ...chartMotion(),
+      backgroundColor: theme.bg,
+      tooltip: { ...tip, trigger: "axis" },
+      legend: series.length > 1 ? { type: "scroll", textStyle: { color: theme.text } } : { show: false },
+      grid: { left: horizontal ? 88 : 48, right: 16, top: series.length > 1 ? 36 : 16, bottom: 28 },
+      xAxis: horizontal ? valueAxis : timeAxis ? timeAxisOption : categoryAxis,
+      yAxis: horizontal ? categoryAxis : valueAxis,
+      series: built,
+    },
+    { height: 240 },
+  );
 }
 
 export function destroyCharts(list) {

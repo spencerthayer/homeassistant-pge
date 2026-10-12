@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import aiohttp_client
@@ -138,6 +138,7 @@ async def async_run_billing_sync(
             )
             coordinator.programs_snapshot = programs
             await async_import_programs_metrics(hass, account_key, account_id, programs, datetime.now(UTC))
+            await _async_check_ptr_detection(coordinator, programs)
         else:
             _LOGGER.debug("Skipping programs — encrypted premise/SA id missing")
 
@@ -194,6 +195,17 @@ async def async_run_billing_sync(
             await async_save_import_state(hass, entry.entry_id, store)
         except Exception:  # pragma: no cover - store failure is non-fatal
             _LOGGER.debug("Failed to persist billing_last_error", exc_info=True)
+
+
+async def _async_check_ptr_detection(coordinator: PGECoordinator, programs: Any) -> None:
+    """Check for new PTR event dates from GraphQL and update detection state."""
+    detail = programs.attributes.get("peak_time_rebate")
+    if not isinstance(detail, dict):
+        return
+    events = detail.get("peak_time_events")
+    if not events:
+        return
+    await coordinator.ptr.async_check_detection(events)
 
 
 def _persist_warm_snapshots(coordinator: PGECoordinator, store: ImportStoreData) -> None:

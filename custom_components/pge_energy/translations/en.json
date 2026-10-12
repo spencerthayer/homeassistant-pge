@@ -209,6 +209,8 @@
       "tod_price": { "name": "Time of Day rate" },
       "tod_vs_basic_savings": { "name": "TOD vs Basic savings" },
       "next_ptr_event_date": { "name": "Next PTR event date" },
+      "ptr_event_start": { "name": "PTR event start" },
+      "ptr_event_end": { "name": "PTR event end" },
       "net_metering": { "name": "Net metering" }
     },
     "binary_sensor": {
@@ -220,7 +222,9 @@
       "program_smart_thermostat": { "name": "Smart thermostat" },
       "program_habitat_support": { "name": "Habitat Support" },
       "program_smart_charging": { "name": "EV Smart Charging" },
-      "program_smart_battery": { "name": "Smart Battery Pilot" }
+      "program_smart_battery": { "name": "Smart Battery Pilot" },
+      "ptr_event_active": { "name": "PTR event active" },
+      "ptr_event_detected": { "name": "PTR event detected" }
     }
   }
 }

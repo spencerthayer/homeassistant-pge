@@ -5,8 +5,8 @@
 
 const _cache = new Map();
 
-function _cacheKey(statisticId, period, start, end) {
-  return `${statisticId}|${period}|${start}|${end}`;
+function _cacheKey(statisticId, period, start, end, maxPoints) {
+  return `${statisticId}|${period}|${start}|${end}|${maxPoints}`;
 }
 
 /** Largest-Triangle-Three-Buckets downsample for [x, y] pairs. */
@@ -97,7 +97,7 @@ export async function sumStatisticChange(hass, statisticId, { start, end, period
 export async function fetchStatisticSeries(hass, statisticId, { start, end, period = "hour", maxPoints = 1200 } = {}) {
   const startIso = start instanceof Date ? start.toISOString() : start;
   const endIso = end instanceof Date ? end.toISOString() : end;
-  const key = _cacheKey(statisticId, period, startIso, endIso);
+  const key = _cacheKey(statisticId, period, startIso, endIso, maxPoints);
   if (_cache.has(key)) {
     return _cache.get(key);
   }

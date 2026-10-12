@@ -32,6 +32,11 @@ from .const import (
     DAILY_LUMP_MIN_KWH,
     DEFAULT_HISTORY_FLOOR,
     DOMAIN,
+    ENTITY_NAME_LIFETIME_COMPENSATION,
+    ENTITY_NAME_LIFETIME_COST,
+    ENTITY_NAME_LIFETIME_EXPORT,
+    ENTITY_NAME_LIFETIME_IMPORT,
+    ENTITY_NAME_OUTDOOR_TEMPERATURE,
     ENTITY_UNIQUE_COMPENSATION,
     ENTITY_UNIQUE_COST,
     ENTITY_UNIQUE_ENERGY,
@@ -143,14 +148,37 @@ def _statistic_display_name(
 ) -> str:
     base = pge_display_name(account_id) if account_id else pge_display_name(account_key[:8])
     if cost:
-        return f"{base} cost"
+        return f"{base} energy cost"
     if compensation:
-        return f"{base} compensation"
+        return f"{base} export compensation"
     if return_energy:
-        return f"{base} return"
+        return f"{base} return to grid"
     if temperature:
         return f"{base} temperature"
-    return f"{base} consumption"
+    return f"{base} grid consumption"
+
+
+def _entity_statistic_name(
+    *,
+    cost: bool = False,
+    temperature: bool = False,
+    return_energy: bool = False,
+    compensation: bool = False,
+) -> str:
+    """Label for the mirrored sensor statistic.
+
+    Must not match ``_statistic_display_name``. Home Assistant Energy lists both
+    series, and a shared title is how issue #37 picked the sensor by mistake.
+    """
+    if cost:
+        return ENTITY_NAME_LIFETIME_COST
+    if compensation:
+        return ENTITY_NAME_LIFETIME_COMPENSATION
+    if return_energy:
+        return ENTITY_NAME_LIFETIME_EXPORT
+    if temperature:
+        return ENTITY_NAME_OUTDOOR_TEMPERATURE
+    return ENTITY_NAME_LIFETIME_IMPORT
 
 
 def _as_utc_datetime(value: Any) -> datetime | None:
@@ -823,7 +851,7 @@ async def async_repair_suffix_sums(
             unique_suffix=ENTITY_UNIQUE_ENERGY,
             entity_metadata=_build_entity_consumption_metadata(
                 "sensor._",
-                _statistic_display_name(account_id, account_key),
+                _entity_statistic_name(),
             ),
             stats=stats,
         )
@@ -854,7 +882,7 @@ async def async_repair_suffix_sums(
             unique_suffix=ENTITY_UNIQUE_COST,
             entity_metadata=_build_entity_cost_metadata(
                 "sensor._",
-                _statistic_display_name(account_id, account_key, cost=True),
+                _entity_statistic_name(cost=True),
             ),
             stats=cost_stats,
         )
@@ -887,7 +915,7 @@ async def async_repair_suffix_sums(
                 unique_suffix=ENTITY_UNIQUE_TEMPERATURE,
                 entity_metadata=_build_entity_temperature_metadata(
                     "sensor._",
-                    _statistic_display_name(account_id, account_key, temperature=True),
+                    _entity_statistic_name(temperature=True),
                 ),
                 stats=temp_stats,
             )
@@ -1128,7 +1156,7 @@ async def async_repair_coarse_fine_collisions(
                 unique_suffix=ENTITY_UNIQUE_ENERGY,
                 entity_metadata=_build_entity_consumption_metadata(
                     "sensor._",
-                    _statistic_display_name(account_id, account_key),
+                    _entity_statistic_name(),
                 ),
                 stats=stats,
             )
@@ -1162,7 +1190,7 @@ async def async_repair_coarse_fine_collisions(
                 unique_suffix=ENTITY_UNIQUE_COST,
                 entity_metadata=_build_entity_cost_metadata(
                     "sensor._",
-                    _statistic_display_name(account_id, account_key, cost=True),
+                    _entity_statistic_name(cost=True),
                 ),
                 stats=cost_stats,
             )
@@ -1320,7 +1348,7 @@ async def async_import_with_baseline(
                 overlay=overlay_kwh,
                 metadata_builder=_build_consumption_metadata,
                 entity_metadata_builder=_build_entity_consumption_metadata,
-                display_name=_statistic_display_name(account_id, account_key),
+                display_name=_entity_statistic_name(),
                 lump_min=MONTHLY_LUMP_MIN_KWH,
                 daily_lump_min=DAILY_LUMP_MIN_KWH,
                 hard_ack=True,
@@ -1336,7 +1364,7 @@ async def async_import_with_baseline(
                 overlay=overlay_return,
                 metadata_builder=_build_return_metadata,
                 entity_metadata_builder=_build_entity_return_metadata,
-                display_name=_statistic_display_name(account_id, account_key, return_energy=True),
+                display_name=_entity_statistic_name(return_energy=True),
                 lump_min=None,
                 daily_lump_min=None,
                 hard_ack=False,
@@ -1358,7 +1386,7 @@ async def async_import_with_baseline(
                 overlay=overlay_cost,
                 metadata_builder=_build_cost_metadata,
                 entity_metadata_builder=_build_entity_cost_metadata,
-                display_name=_statistic_display_name(account_id, account_key, cost=True),
+                display_name=_entity_statistic_name(cost=True),
                 lump_min=MONTHLY_LUMP_MIN_COST,
                 daily_lump_min=DAILY_LUMP_MIN_COST,
                 hard_ack=False,
@@ -1380,7 +1408,7 @@ async def async_import_with_baseline(
                 overlay=overlay_comp,
                 metadata_builder=_build_compensation_metadata,
                 entity_metadata_builder=_build_entity_compensation_metadata,
-                display_name=_statistic_display_name(account_id, account_key, compensation=True),
+                display_name=_entity_statistic_name(compensation=True),
                 lump_min=None,
                 daily_lump_min=None,
                 hard_ack=False,
@@ -1451,7 +1479,7 @@ async def _async_import_temperature_overlay(
         unique_suffix=ENTITY_UNIQUE_TEMPERATURE,
         entity_metadata=_build_entity_temperature_metadata(
             "sensor._",
-            _statistic_display_name(account_id, account_key, temperature=True),
+            _entity_statistic_name(temperature=True),
         ),
         stats=stats,
     )
@@ -1560,7 +1588,7 @@ async def async_migrate_signed_usage_split(
                 overlay=cons_overlay,
                 metadata_builder=_build_consumption_metadata,
                 entity_metadata_builder=_build_entity_consumption_metadata,
-                display_name=_statistic_display_name(account_id, account_key),
+                display_name=_entity_statistic_name(),
                 lump_min=None,
                 daily_lump_min=None,
                 hard_ack=True,
@@ -1575,7 +1603,7 @@ async def async_migrate_signed_usage_split(
                 overlay=return_overlay,
                 metadata_builder=_build_return_metadata,
                 entity_metadata_builder=_build_entity_return_metadata,
-                display_name=_statistic_display_name(account_id, account_key, return_energy=True),
+                display_name=_entity_statistic_name(return_energy=True),
                 lump_min=None,
                 daily_lump_min=None,
                 hard_ack=False,
@@ -1593,7 +1621,7 @@ async def async_migrate_signed_usage_split(
                 overlay=cost_overlay,
                 metadata_builder=_build_cost_metadata,
                 entity_metadata_builder=_build_entity_cost_metadata,
-                display_name=_statistic_display_name(account_id, account_key, cost=True),
+                display_name=_entity_statistic_name(cost=True),
                 lump_min=None,
                 daily_lump_min=None,
                 hard_ack=False,
@@ -1611,7 +1639,7 @@ async def async_migrate_signed_usage_split(
                 overlay=comp_overlay,
                 metadata_builder=_build_compensation_metadata,
                 entity_metadata_builder=_build_entity_compensation_metadata,
-                display_name=_statistic_display_name(account_id, account_key, compensation=True),
+                display_name=_entity_statistic_name(compensation=True),
                 lump_min=None,
                 daily_lump_min=None,
                 hard_ack=False,

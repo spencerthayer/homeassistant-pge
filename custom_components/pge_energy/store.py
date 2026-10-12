@@ -148,6 +148,10 @@ class ImportStoreData:
     newest_interval: str | None = None
     # Sticky API host and cooldown clocks. No tokens. Missing on older stores.
     api_host: dict[str, Any] | None = None
+    # Peak Time Rebate manual schedule + detection state (additive, no schema bump).
+    ptr_scheduled_event: dict[str, Any] | None = None
+    ptr_seen_event_dates: list[str] = field(default_factory=list)
+    ptr_detected_event: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -204,6 +208,9 @@ class ImportStoreData:
             last_successful_update=data.get("last_successful_update"),
             newest_interval=data.get("newest_interval"),
             api_host=_load_dict_snapshot(data, "api_host"),
+            ptr_scheduled_event=_load_dict_snapshot(data, "ptr_scheduled_event"),
+            ptr_seen_event_dates=list(data.get("ptr_seen_event_dates") or []),
+            ptr_detected_event=_load_dict_snapshot(data, "ptr_detected_event"),
         )
 
 

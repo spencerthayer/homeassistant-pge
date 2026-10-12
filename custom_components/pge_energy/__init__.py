@@ -62,6 +62,7 @@ from .options import (
     resolve_history_bounds,
 )
 from .panel import async_setup_panel, async_teardown_panel
+from .ptr_events import validate_ptr_event_window
 from .statistics import (
     async_clear_entry_statistics,
     async_import_with_baseline,
@@ -108,6 +109,15 @@ REPARSE_BILL_PDFS_SCHEMA = vol.Schema(
     {
         vol.Required("entry_id"): cv.string,
         vol.Optional("bill_date"): cv.string,
+    }
+)
+
+SET_PTR_EVENT_SCHEMA = vol.Schema(
+    {
+        vol.Required("entry_id"): cv.string,
+        vol.Required("start_date"): cv.string,
+        vol.Required("end_date"): cv.string,
+        vol.Optional("label", default=""): cv.string,
     }
 )
 
@@ -212,6 +222,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
     async def _async_post_setup() -> None:
         try:
             await coordinator.async_start_tod()
+            await coordinator.async_start_ptr()
             await coordinator.async_config_entry_first_refresh()
         except ConfigEntryAuthFailed:
             _LOGGER.error("PGE authentication failed during initial refresh — update credentials")
@@ -529,12 +540,60 @@ def _async_setup_services(hass: HomeAssistant) -> None:
         except Exception as exc:
             raise HomeAssistantError(f"Bill PDF reparse failed: {exc.__class__.__name__}") from exc
 
+    async def async_set_ptr_event(call: ServiceCall) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        entry_id = call.data["entry_id"]
+        coordinator = _coordinator_for_entry(hass, entry_id)
+        if coordinator is None:
+            raise HomeAssistantError("Config entry not found")
+        start_raw = str(call.data["start_date"])
+        end_raw = str(call.data["end_date"])
+        label = str(call.data.get("label", ""))
+        start, end = validate_ptr_event_window(start_raw, end_raw)
+        if start is None or end is None:
+            raise HomeAssistantError(
+                "Invalid PTR event window: end must be after start, duration 1-8 hours, "
+                "and start not more than 7 days in the past."
+            )
+        store = coordinator.import_store
+        store.ptr_scheduled_event = {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "label": label,
+        }
+        await coordinator.async_persist_sensor_snapshots()
+        await coordinator.ptr.async_refresh()
+
+    async def async_clear_ptr_event(call: ServiceCall) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        entry_id = call.data["entry_id"]
+        coordinator = _coordinator_for_entry(hass, entry_id)
+        if coordinator is None:
+            raise HomeAssistantError("Config entry not found")
+        coordinator.import_store.ptr_scheduled_event = None
+        await coordinator.async_persist_sensor_snapshots()
+        await coordinator.ptr.async_refresh()
+
+    async def async_acknowledge_ptr_event(call: ServiceCall) -> None:
+        from homeassistant.exceptions import HomeAssistantError
+
+        entry_id = call.data["entry_id"]
+        coordinator = _coordinator_for_entry(hass, entry_id)
+        if coordinator is None:
+            raise HomeAssistantError("Config entry not found")
+        await coordinator.ptr.async_acknowledge_detection()
+
     hass.services.async_register(DOMAIN, "refresh", async_refresh)
     hass.services.async_register(DOMAIN, "backfill", async_backfill, BACKFILL_SCHEMA)
     hass.services.async_register(DOMAIN, "retry_failed_ranges", async_retry_failed, ENTRY_SCHEMA)
     hass.services.async_register(DOMAIN, "reset_import_checkpoint", async_reset_checkpoint, ENTRY_SCHEMA)
     hass.services.async_register(DOMAIN, "download_bill_pdf", async_download_bill_pdf, DOWNLOAD_BILL_PDF_SCHEMA)
     hass.services.async_register(DOMAIN, "reparse_bill_pdfs", async_reparse_bill_pdfs, REPARSE_BILL_PDFS_SCHEMA)
+    hass.services.async_register(DOMAIN, "set_ptr_event", async_set_ptr_event, SET_PTR_EVENT_SCHEMA)
+    hass.services.async_register(DOMAIN, "clear_ptr_event", async_clear_ptr_event, ENTRY_SCHEMA)
+    hass.services.async_register(DOMAIN, "acknowledge_ptr_event", async_acknowledge_ptr_event, ENTRY_SCHEMA)
 
 
 async def _async_resume_backfill(
@@ -769,6 +828,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool
     coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if coordinator is not None:
         await coordinator.async_stop_tod()
+        await coordinator.async_stop_ptr()
         await coordinator.async_cancel_backfill()
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

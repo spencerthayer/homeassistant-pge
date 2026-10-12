@@ -1,0 +1,122 @@
+/**
+ * Load-shape aggregations. Timestamps are epoch seconds.
+ */
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { pacificMidnightUtc } from "../../custom_components/pge_energy/frontend/data.js";
+import {
+  baseloadFloor,
+  cycleCumulative,
+  dayFingerprints,
+  hourWeekdayMatrix,
+  loadDuration,
+  monthRidges,
+  monthlyByYear,
+  publishedWeekDays,
+  spreadBand,
+  typicalDayProfiles,
+} from "../../custom_components/pge_energy/frontend/chart-series.js";
+
+function atHour(ymd, hour) {
+  return Math.floor(pacificMidnightUtc(ymd).getTime() / 1000) + hour * 3600;
+}
+
+describe("load-shape series", () => {
+  it("typicalDayProfiles splits Monday 18:00 from Saturday 18:00", () => {
+    const profiles = typicalDayProfiles([
+      { ts: atHour("2026-01-05", 18), kwh: 4 },
+      { ts: atHour("2026-01-10", 18), kwh: 9 },
+    ]);
+    assert.equal(profiles.weekday[18], 4);
+    assert.equal(profiles.weekend[18], 9);
+    assert.equal(profiles.weekday[17], null);
+    assert.equal(profiles.weekend[17], null);
+  });
+
+  it("loadDuration returns kWh descending", () => {
+    assert.deepEqual(loadDuration([{ kwh: 1 }, { kwh: 5 }, { kwh: 3 }, { kwh: null }]), [5, 3, 1]);
+  });
+
+  it("hourWeekdayMatrix writes a Monday sample only into the Monday row", () => {
+    const matrix = hourWeekdayMatrix([{ ts: atHour("2026-01-05", 18), kwh: 4 }]);
+    assert.equal(matrix.labels[1], "Mon");
+    assert.equal(matrix.values[1][18], 4);
+    for (let row = 0; row < 7; row++) {
+      for (let hour = 0; hour < 24; hour++) {
+        if (row === 1 && hour === 18) continue;
+        assert.equal(matrix.values[row][hour], null);
+      }
+    }
+  });
+
+  it("monthRidges keeps January and July hour profiles separate", () => {
+    const ridges = monthRidges([
+      { ts: atHour("2026-01-05", 18), kwh: 2 },
+      { ts: atHour("2026-07-15", 18), kwh: 8 },
+    ]);
+    const jan = ridges.find((row) => row.key === "2026-01");
+    const jul = ridges.find((row) => row.key === "2026-07");
+    assert.equal(jan.hours[18], 2);
+    assert.equal(jul.hours[18], 8);
+    assert.equal(jan.hours[18] === jul.hours[18], false);
+  });
+
+  it("monthlyByYear sums two January days in the same year into one January bucket", () => {
+    const out = monthlyByYear([
+      { ts: atHour("2026-01-05", 12), kwh: 3 },
+      { ts: atHour("2026-01-06", 12), kwh: 4 },
+      { ts: atHour("2025-01-06", 12), kwh: 1 },
+    ]);
+    const year2026 = out.series[out.years.indexOf("2026")];
+    assert.equal(year2026[0], 7);
+    assert.equal(year2026[1], 0);
+  });
+
+  it("cycleCumulative sums hourly kWh by day index from a statement start", () => {
+    const start = atHour("2026-01-05", 0);
+    const out = cycleCumulative(
+      [
+        { ts: start, kwh: 1 },
+        { ts: start + 3600, kwh: 1 },
+        { ts: atHour("2026-01-06", 0), kwh: 3 },
+      ],
+      start,
+    );
+    assert.deepEqual(out.dayIndex, [0, 1]);
+    assert.deepEqual(out.cumulative, [2, 5]);
+  });
+
+  it("spreadBand on [2, 4] returns mean 3 and sample standard deviation sqrt(2)", () => {
+    const band = spreadBand([2, 4]);
+    assert.equal(band.mean, 3);
+    assert.ok(Math.abs(band.sd - Math.sqrt(2)) < 1e-12);
+  });
+
+  it("publishedWeekDays returns seven day keys", () => {
+    const keys = publishedWeekDays(new Date("2026-01-14T18:00:00.000Z"));
+    assert.equal(keys.length, 7);
+    assert.deepEqual(keys, [
+      "2026-01-04",
+      "2026-01-05",
+      "2026-01-06",
+      "2026-01-07",
+      "2026-01-08",
+      "2026-01-09",
+      "2026-01-10",
+    ]);
+  });
+
+  it("dayFingerprints skips a day that has kWh and no temperature", () => {
+    const rows = dayFingerprints([
+      { ts: atHour("2026-01-05", 18), kwh: 4, tempF: null, cost: 1 },
+      { ts: atHour("2026-01-06", 18), kwh: 2, tempF: 40, cost: 0.5 },
+    ]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].ymd, "2026-01-06");
+    assert.equal(rows[0].tempF, 40);
+  });
+
+  it("baseloadFloor returns the minimum of hours 0 through 5", () => {
+    assert.equal(baseloadFloor([3, 1.5, 2, 4, 0.4, 5, 9]), 0.4);
+  });
+});
