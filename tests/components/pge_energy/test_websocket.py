@@ -100,6 +100,10 @@ def test_websocket_accounts_payload_has_no_credentials():
     assert account["entity_ids"]["autopay"] == "binary_sensor.abcdabcdabcdabcd_autopay"
     assert account["entity_ids"]["est_current_charges"] == ("sensor.abcdabcdabcdabcd_est_current_charges")
     assert account["entity_ids"]["billing_cycle_day"] == "sensor.abcdabcdabcdabcd_billing_cycle_day"
+    assert account["entity_ids"]["ptr_event_start"] == "sensor.abcdabcdabcdabcd_ptr_event_start"
+    assert account["entity_ids"]["ptr_event_end"] == "sensor.abcdabcdabcdabcd_ptr_event_end"
+    assert account["entity_ids"]["ptr_event_active"] == "binary_sensor.abcdabcdabcdabcd_ptr_event_active"
+    assert account["entity_ids"]["ptr_event_detected"] == "binary_sensor.abcdabcdabcdabcd_ptr_event_detected"
     blob = str(payload)
     for secret in ("password", "bearer_token", "encrypted_person_id", "refresh_credential"):
         assert secret not in blob

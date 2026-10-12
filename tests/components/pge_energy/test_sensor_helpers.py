@@ -9,14 +9,21 @@ from unittest.mock import MagicMock
 from homeassistant.components.sensor import SensorStateClass
 
 from custom_components.pge_energy.const import (
+    ENTITY_NAME_LIFETIME_COMPENSATION,
+    ENTITY_NAME_LIFETIME_COST,
+    ENTITY_NAME_LIFETIME_EXPORT,
+    ENTITY_NAME_LIFETIME_IMPORT,
     ENTITY_UNIQUE_ENERGY,
     STATISTIC_ID_SUFFIX_CONSUMPTION,
 )
 from custom_components.pge_energy.models import UsageInterval, UsageResolution
 from custom_components.pge_energy.sensor import (
+    PGECompensationSensor,
+    PGECostSensor,
     PGEEnergySensor,
     PGEHourlyCostSensor,
     PGEHourlyEnergySensor,
+    PGEReturnSensor,
     _intervals_in_range,
     _sum_compensation,
     _sum_cost,
@@ -103,9 +110,21 @@ class TestStatisticLinkedAttributes:
         assert attrs["entity_statistic_id"] == "sensor.pge_1122334455_energy"
         assert attrs["account_id"] == "1122334455"
         assert sensor.unique_id.endswith(ENTITY_UNIQUE_ENERGY)
-        assert sensor.name == "Consumption"
+        assert sensor.name == ENTITY_NAME_LIFETIME_IMPORT
         assert sensor.suggested_object_id == "energy"
         assert sensor.native_value == 1234.5
+
+    def test_lifetime_sensor_names_do_not_match_energy_picker_words(self):
+        coordinator = MagicMock()
+        coordinator.account_key = "65f4efbe98987963"
+        coordinator.account_id = "1122334455"
+        assert PGEEnergySensor(coordinator, "k").name == ENTITY_NAME_LIFETIME_IMPORT
+        assert PGEReturnSensor(coordinator, "k").name == ENTITY_NAME_LIFETIME_EXPORT
+        assert PGECostSensor(coordinator, "k").name == ENTITY_NAME_LIFETIME_COST
+        assert PGECompensationSensor(coordinator, "k").name == ENTITY_NAME_LIFETIME_COMPENSATION
+        assert PGEReturnSensor(coordinator, "k").suggested_object_id == "return"
+        assert PGECostSensor(coordinator, "k").suggested_object_id == "cost"
+        assert PGECompensationSensor(coordinator, "k").suggested_object_id == "compensation"
 
     def test_hourly_energy_is_measurement(self):
         coordinator = MagicMock()

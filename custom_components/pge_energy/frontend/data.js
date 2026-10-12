@@ -5,8 +5,8 @@
 
 const _cache = new Map();
 
-function _cacheKey(statisticId, period, start, end) {
-  return `${statisticId}|${period}|${start}|${end}`;
+function _cacheKey(statisticId, period, start, end, maxPoints) {
+  return `${statisticId}|${period}|${start}|${end}|${maxPoints}`;
 }
 
 /** Largest-Triangle-Three-Buckets downsample for [x, y] pairs. */
@@ -97,7 +97,7 @@ export async function sumStatisticChange(hass, statisticId, { start, end, period
 export async function fetchStatisticSeries(hass, statisticId, { start, end, period = "hour", maxPoints = 1200 } = {}) {
   const startIso = start instanceof Date ? start.toISOString() : start;
   const endIso = end instanceof Date ? end.toISOString() : end;
-  const key = _cacheKey(statisticId, period, startIso, endIso);
+  const key = _cacheKey(statisticId, period, startIso, endIso, maxPoints);
   if (_cache.has(key)) {
     return _cache.get(key);
   }
@@ -343,6 +343,19 @@ export function formatSignedUsd(value, digits = 2) {
   return `$${abs}`;
 }
 
+/** One tooltip line a homeowner can read. */
+export function formatTooltipRow({ name, value, unit, estimate } = {}) {
+  if (value == null || value === "" || !Number.isFinite(Number(value))) return `${name}: no data`;
+  const n = Number(value);
+  if (unit === "$") {
+    const money = `$${Math.abs(n).toFixed(2)}`;
+    const signed = n < 0 ? `−${money}` : money;
+    return estimate ? `${name}: about ${signed} (PGE estimate)` : `${name}: ${signed}`;
+  }
+  const suffix = unit ? ` ${unit}` : "";
+  return `${name}: ${n.toFixed(2)}${suffix}`;
+}
+
 /** Human kWh label; negative flow shown as positive export magnitude when signed. */
 export function formatSignedKwh(value, { signed = false } = {}) {
   if (value == null || value === "" || value === "-") return "—";
@@ -356,6 +369,32 @@ export function formatSignedKwh(value, { signed = false } = {}) {
  * Clipboard payload for an At a glance KPI tile (label / value / optional delta).
  * Omits empty parts and collapses whitespace so sparklines never pollute the copy.
  */
+export function rollupColumns(rows) {
+  const showBuckets = (rows || []).some((row) => Number(row?.buckets) > 1);
+  return { showBuckets };
+}
+
+/** Percent change from a baseline. Zero or missing baselines stay null. */
+export function countUpFrames(from, to, frames) {
+  const start = Number(from) || 0;
+  const end = Number(to);
+  const count = Math.max(1, Number(frames) || 1);
+  const values = [];
+  for (let i = 1; i <= count; i++) {
+    const t = i / count;
+    const eased = 1 - (1 - t) ** 3;
+    values.push(start + (end - start) * eased);
+  }
+  values[values.length - 1] = end;
+  return values;
+}
+
+export function pctDelta(value, baseline) {
+  return value == null || !baseline || !Number.isFinite(value) || !Number.isFinite(baseline)
+    ? null
+    : ((value - baseline) / baseline) * 100;
+}
+
 export function formatKpiClipboardText({ label, value, delta } = {}) {
   const parts = [label, value, delta]
     .map((part) => (part == null ? "" : String(part).replace(/\s+/g, " ").trim()))
@@ -411,6 +450,7 @@ export function rangePresets(now = new Date()) {
     "24h": { start: new Date(end.getTime() - DAY_MS), end, period: "hour", label: "24h" },
     // Legacy alias kept for older panel state.
     yesterday: { start: new Date(end.getTime() - DAY_MS), end, period: "hour", label: "24h" },
+    "3d": { start: new Date(end.getTime() - 3 * DAY_MS), end, period: "hour", label: "3d" },
     "7d": { start: new Date(end.getTime() - 7 * DAY_MS), end, period: "hour", label: "7d" },
     "30d": { start: new Date(end.getTime() - 30 * DAY_MS), end, period: "day", label: "30d" },
     cycle: { start: new Date(end.getTime() - 30 * DAY_MS), end, period: "day", label: "cycle" },
@@ -432,8 +472,11 @@ export function rangePresets(now = new Date()) {
   };
 }
 
-/** Primary fast-select buttons (always shown; disabled when no data). */
-export const RANGE_PRESET_PRIMARY = ["24h", "cycle", "last_cycle", "7d", "30d"];
+/** Usage chart fast-select, in display order. Disabled when that window has no data. */
+export const RANGE_PRESET_PRIMARY = ["24h", "3d", "7d", "30d", "cycle", "last_cycle"];
+
+/** Time of Day uses the same primary chips as Usage. The selected window is independent. */
+export const RANGE_PRESET_TOD = [...RANGE_PRESET_PRIMARY];
 
 /** Additional presets offered in the More… dropdown. */
 export const RANGE_PRESET_MORE = ["6h", "12h", "3mo", "6mo", "12mo", "ytd"];
@@ -441,11 +484,48 @@ export const RANGE_PRESET_MORE = ["6h", "12h", "3mo", "6mo", "12mo", "ytd"];
 /** All preset keys (primary first, then More…). */
 export const RANGE_PRESET_ORDER = [...RANGE_PRESET_PRIMARY, ...RANGE_PRESET_MORE];
 
+function sameStringList(left, right) {
+  const a = left || [];
+  const b = right || [];
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether a Home Assistant state push should replace the range-filter DOM.
+ * Replacing a focused select closes the menu and jumps it back to the first item.
+ *
+ * @param {{
+ *   previousPresets?: string[]|null,
+ *   nextPresets?: string[]|null,
+ *   previousKey?: string,
+ *   nextKey?: string,
+ *   filterFocused?: boolean,
+ * }} [args]
+ * @returns {"skip"|"defer"|"rebuild"}
+ */
+export function presetProbeEffect({
+  previousPresets,
+  nextPresets,
+  previousKey,
+  nextKey,
+  filterFocused,
+} = {}) {
+  const changed = !sameStringList(previousPresets, nextPresets) || previousKey !== nextKey;
+  if (!changed) return "skip";
+  if (filterFocused) return "defer";
+  return "rebuild";
+}
+
 /** Display labels for Usage range controls. */
 export const RANGE_PRESET_LABELS = {
   "6h": "6 hours",
   "12h": "12 hours",
   "24h": "24h",
+  "3d": "3 days",
   "7d": "7 days",
   "30d": "Month",
   cycle: "This cycle",
@@ -1022,6 +1102,7 @@ export function minPointsForPreset(key) {
     case "24h":
     case "yesterday":
       return 12;
+    case "3d":
     case "7d":
       return 12;
     case "30d":
@@ -1768,4 +1849,121 @@ export function detectFlatPortalRates({ hourlyKwh, hourlyCost, todCatalog } = {}
     status: "varied",
     diagnostics: { observedSpread, expectedSpread, medians, bands },
   };
+}
+
+export const PANEL_TABS = ["glance", "usage", "analytics", "billing", "tod", "programs"];
+export const PANEL_TAB_LABELS = {
+  glance: "Overview",
+  usage: "Usage",
+  analytics: "Analytics",
+  billing: "Billing",
+  tod: "Time of Day",
+  programs: "Programs",
+};
+export const PANEL_TAB_ICONS = {
+  glance: "mdi:view-dashboard-outline",
+  usage: "mdi:lightning-bolt-outline",
+  analytics: "mdi:chart-scatter-plot",
+  billing: "mdi:receipt-text-outline",
+  tod: "mdi:clock-time-four-outline",
+  programs: "mdi:leaf",
+};
+
+const SYNC_ISSUE_REPO = "https://github.com/spencerthayer/homeassistant-pge";
+
+/** Strip emails and long digit runs before they land in a public issue. */
+export function redactSyncText(value) {
+  return String(value ?? "")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]")
+    .replace(/\b\d{6,}\b/g, "[redacted]")
+    .slice(0, 1200);
+}
+
+export function syncHasReportableError(status = {}) {
+  const failed = Number(status.failed_days || status.failedDays || 0);
+  const state = String(status.status || "");
+  return Boolean(
+    failed > 0 || status.error || status.last_api_error || state === "error" || state === "failed",
+  );
+}
+
+/**
+ * GitHub new-issue URL filled with the bug-report template and the current sync error.
+ * Account numbers, emails, and tokens are not included.
+ */
+export function syncIssueUrl({ version, haVersion, sync } = {}) {
+  const status = sync || {};
+  const error = redactSyncText(status.error || status.last_api_error || "");
+  const message = redactSyncText(status.message || "");
+  const title = `[Bug] Sync ${String(status.status || "error").slice(0, 80)}`;
+  const detail = [
+    `Status: ${status.status || "unknown"}`,
+    status.phase ? `Phase: ${redactSyncText(status.phase)}` : "",
+    message ? `Message: ${message}` : "",
+    error ? `Error: ${error}` : "",
+    status.last_successful_update ? `Last successful update: ${status.last_successful_update}` : "",
+    status.newest_interval ? `Newest interval: ${status.newest_interval}` : "",
+    Number(status.failed_days || status.failedDays || 0) > 0
+      ? `Failed days: ${Number(status.failed_days || status.failedDays)}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const body = [
+    "**Home Assistant version**",
+    haVersion || "",
+    "",
+    "**Integration version**",
+    version || "",
+    "",
+    "**Auth mode** (credential)",
+    "credential",
+    "",
+    "**Describe the bug**",
+    detail,
+    "",
+    "**Steps to reproduce**",
+    "1. Open the PGE panel",
+    "2. Wait for a sync",
+    "",
+    "**Expected behavior**",
+    "Sync completes and the last usage stays available.",
+    "",
+    "**Logs** (redact tokens, emails, passwords, person IDs, account numbers)",
+    error || "(no error text on the sync status)",
+  ].join("\n");
+  const params = new URLSearchParams({
+    template: "bug_report.md",
+    title,
+    body,
+    labels: "bug",
+  });
+  return `${SYNC_ISSUE_REPO}/issues/new?${params.toString()}`;
+}
+
+export function syncPillState(status = {}) {
+  const failed = Number(status.failed_days || status.failedDays || 0);
+  const state = String(status.status || "idle");
+  if (failed > 0 || status.error || state === "error" || state === "failed") {
+    return { tone: "critical", text: "Sync issue" };
+  }
+  if (state === "backfilling") {
+    const pct = Math.round(Number(status.percent) || 0);
+    return { tone: "warn", text: `Backfilling ${pct}%` };
+  }
+  if (state === "complete") return { tone: "good", text: "Synced" };
+  return { tone: "warn", text: state === "idle" ? "Sync status" : state };
+}
+
+export function panelTabHash(tab) {
+  return tab === "glance" ? "#overview" : `#${tab}`;
+}
+
+export function resolvePanelTab(hash, defaultSection) {
+  const key = String(hash || "").replace(/^#/, "");
+  if (key === "overview" || key === "kpis") return "glance";
+  if (key === "hero") return "usage";
+  if (key === "insights-weather") return "analytics";
+  if (PANEL_TABS.includes(key)) return key;
+  return PANEL_TABS.includes(defaultSection) ? defaultSection : "glance";
 }

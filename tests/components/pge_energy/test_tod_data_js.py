@@ -45,9 +45,19 @@ def test_data_js_schedule_boundaries_match_python():
     assert "function _asDate" in source
 
 
+def test_tod_copy_has_no_billed_or_raw_enum():
+    source = PANEL_JS.read_text(encoding="utf-8")
+    assert "Avg billed" not in source
+    assert "Avg portal ¢/kWh" in source
+    assert "PGE has no official comparison for this account" in source
+    assert "Live rate:" in source
+    assert "Catalog:" in source
+
+
 def test_panel_ships_tod_section_and_render():
     source = PANEL_JS.read_text(encoding="utf-8")
-    assert '<section class="card" id="tod"></section>' in source
+    assert 'id="tod"' in source
+    assert 'id="panel-tod"' in source
     assert "await this._renderTod();" in source
     assert "async _renderTod()" in source
     assert "async _renderTodBody(" in source
@@ -82,7 +92,7 @@ def test_panel_ships_tod_section_and_render():
     assert "_resolveTodRange(" in source
     assert '_todRangeKey = "last_cycle"' in source
     assert "!this._todRangeTouched" in source
-    assert "independent of Usage" in source
+    assert "Independent of Usage" in source
     assert 'aria-pressed="' in source
     assert "._todWeekGrid()" in source
     assert 'class="tod-cell' in source

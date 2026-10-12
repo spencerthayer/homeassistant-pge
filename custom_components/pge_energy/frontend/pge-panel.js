@@ -10,6 +10,7 @@ import {
   RANGE_PRESET_MORE,
   RANGE_PRESET_ORDER,
   RANGE_PRESET_PRIMARY,
+  RANGE_PRESET_TOD,
   RATE_EPSILON_KWH,
   TOD_PERIOD_LABELS,
   TOD_PERIODS,
@@ -27,6 +28,8 @@ import {
   countSeriesPoints,
   fetchStatisticSeries,
   formatKpiClipboardText,
+  pctDelta,
+  rollupColumns,
   formatRangeLabel,
   formatSignedUsd,
   invalidateStatsCache,
@@ -35,7 +38,16 @@ import {
   pacificParts,
   pacificWeekStartUtc,
   pacificYmd,
+  presetProbeEffect,
+  PANEL_TAB_ICONS,
+  PANEL_TAB_LABELS,
+  PANEL_TABS,
+  panelTabHash,
   priorPacificYmd,
+  syncHasReportableError,
+  syncIssueUrl,
+  syncPillState,
+  resolvePanelTab,
   projectDirectionalUsage,
   projectUsageSeries,
   publishedDataEnd,
@@ -49,7 +61,50 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.11.0";
+} from "./data.js?v=0.12.1";
+import {
+  baseloadFloor,
+  cycleCumulative,
+  dayFingerprints,
+  histogramBins,
+  hourWeekdayMatrix,
+  monthRidges,
+  monthlyByYear,
+  publishedWeekDays,
+  spreadBand,
+  storySummary,
+  typicalDayProfiles,
+  gapDailyRows,
+  overnightFloorDays,
+  baseloadSteps,
+  billExplainer,
+  counterfactual,
+  daypartDays,
+  degreePrice,
+  shiftCostByStartHour,
+  weatherModel,
+  forwardRibbon,
+  moneyHourPareto,
+  periodBox,
+  periodMixByMonth,
+  sankeyFlows,
+  todMinusBasicByMonth,
+  billVsImported,
+  centsPerKwh,
+  degreeDayPoint,
+  statementGap,
+  statementWindows,
+  tempBins,
+  billAnatomyRows,
+  billFamilies,
+  duckHourProfiles,
+  duckMonthBars,
+  hasExport,
+  lineItemShares,
+  treemapSlices,
+  waterfallSteps,
+} from "./chart-series.js?v=0.12.1";
+import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.1";
 import {
   createBarChart,
   createLineChart,
@@ -59,9 +114,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.11.0";
-import { sparklineSvg } from "./svg-helpers.js?v=0.11.0";
-import { applyPanelTheme } from "./theme.js?v=0.11.0";
+} from "./charts.js?v=0.12.1";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.1";
+import { applyPanelTheme, todColors } from "./theme.js?v=0.12.1";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -105,29 +160,200 @@ const STYLE = `
   --pge-tod-off: var(--success-color, #1baf7a);
   --pge-tod-mid: var(--warning-color, #eb6834);
   --pge-tod-on: var(--error-color, #e34948);
+  --pge-bill-basic: var(--blue-grey-color, #607d8b);
+  --pge-bill-energy: var(--pge-series-kwh);
+  --pge-bill-delivery: var(--purple-color, #7b61ff);
+  --pge-bill-taxes: var(--amber-color, #ffc107);
+  --pge-bill-other: var(--brown-color, #795548);
+  --pge-space-1: 4px;
+  --pge-space-2: 8px;
+  --pge-space-3: 12px;
+  --pge-space-4: 16px;
+  --pge-space-6: 24px;
+  --pge-space-8: 32px;
+  --pge-radius: var(--ha-card-border-radius, 12px);
+  --pge-surface: var(--card-background-color, var(--ha-card-background, #fff));
+  --pge-surface-2: color-mix(in srgb, var(--primary-text-color) 4%, var(--pge-surface));
+  --pge-border: var(--divider-color, rgba(0, 0, 0, 0.12));
+  --pge-shadow-1: 0 1px 2px rgb(0 0 0 / 0.06), 0 2px 8px rgb(0 0 0 / 0.06);
+  --pge-shadow-2: 0 4px 16px rgb(0 0 0 / 0.10);
+  --pge-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --pge-dur-fast: 120ms;
+  --pge-dur: 220ms;
+  --pge-dur-slow: 420ms;
+  --pge-text-eyebrow: 600 0.72rem/1.2 var(--ha-font-family-body, Roboto, system-ui);
+  --pge-text-headline: 600 1.15rem/1.3 var(--ha-font-family-body, Roboto, system-ui);
+  --pge-text-display: 600 2rem/1.1 var(--ha-font-family-body, Roboto, system-ui);
   color-scheme: light;
+}
+@supports not (color: color-mix(in srgb, red, blue)) {
+  :host { --pge-surface-2: var(--secondary-background-color); }
 }
 :host *, :host *::before, :host *::after { box-sizing: border-box; }
 :host([data-dark]) {
   color-scheme: dark;
 }
+.chart-skeleton { min-height: 160px; }
 @media (prefers-reduced-motion: reduce) {
   :host * { transition: none !important; animation: none !important; }
+  .chart-skeleton { animation: none; }
 }
 .toolbar {
   display: flex; align-items: center; gap: 12px;
   padding: 8px 16px; min-height: 56px;
   background: var(--app-header-background-color, var(--primary-color));
   color: var(--app-header-text-color, var(--text-primary-color, #fff));
-  position: sticky; top: 0; z-index: 2;
 }
+.panel-chrome {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: color-mix(in srgb, var(--primary-background-color) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(8px);
+}
+.pge-header {
+  position: static;
+  padding: var(--pge-space-2) var(--pge-space-4) 0;
+}
+.hdr-row { display: flex; align-items: center; gap: var(--pge-space-3); }
+.section-tabs { display: flex; align-items: center; gap: var(--pge-space-2); overflow: hidden; }
+.section-tab-scroll {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--pge-space-1);
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+  scrollbar-width: none;
+}
+.section-tab-scroll::-webkit-scrollbar { display: none; }
+.section-tabs [role="tab"] {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 0; background: transparent; color: var(--primary-text-color);
+  padding: 8px 10px; cursor: pointer; border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+.section-tabs [role="tab"] span { white-space: nowrap; }
+.section-tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--primary-color); }
+.sync-pill-wrap { position: relative; margin-left: auto; flex: 0 0 auto; }
+.toolbar .sync-pill {
+  background: color-mix(in srgb, var(--app-header-text-color, #fff) 16%, transparent);
+  color: var(--app-header-text-color, #fff);
+  border-color: color-mix(in srgb, var(--app-header-text-color, #fff) 40%, transparent);
+}
+.sync-pill {
+  border: 1px solid var(--pge-border); border-radius: 999px;
+  background: var(--pge-surface); color: var(--primary-text-color); padding: 6px 12px; cursor: pointer;
+}
+.sync-pill-text { display: inline; }
+.sync-pill.good { color: var(--pge-status-good); }
+.sync-pill.warn { color: var(--pge-status-warn); }
+.sync-pill.critical { color: var(--pge-status-critical); }
+.sync-pop {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 6;
+  width: min(320px, calc(100vw - 32px));
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--pge-border);
+  background: var(--pge-surface);
+  color: var(--primary-text-color);
+  box-shadow: var(--pge-shadow-2);
+  font-size: 0.82rem;
+}
+.sync-pop dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 0; }
+.sync-pop dt { color: var(--secondary-text-color); }
+.sync-pop dd { margin: 0; overflow-wrap: anywhere; }
+.sync-pop .error { margin: 8px 0 0; }
+.sync-pop-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
+.sync-pop-actions a, .sync-pop-actions button {
+  background: none; border: 0; padding: 0; color: var(--primary-color); cursor: pointer;
+  font: inherit; text-decoration: underline;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sync-pill-wrap:hover .sync-pop,
+  .sync-pill-wrap:focus-within .sync-pop { display: block; }
+}
+.sync-pill-wrap.open .sync-pop { display: block; }
+input[type="number"], input[type="text"], input[type="datetime-local"], select {
+  border: 1px solid var(--pge-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: var(--pge-surface);
+  color: var(--primary-text-color);
+  font: inherit;
+  transition: border-color var(--pge-dur-fast) var(--pge-ease);
+}
+input:focus-visible, select:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 1px; }
+.chip, .metric-toggle button {
+  border-radius: 999px;
+  border: 1px solid var(--pge-border);
+  background: var(--pge-surface);
+  color: var(--primary-text-color);
+  padding: 6px 12px;
+}
+.chip[aria-pressed="true"], .metric-toggle button[aria-pressed="true"] {
+  background: var(--primary-color);
+  color: var(--text-primary-color, #fff);
+}
+dialog.chart-dialog {
+  width: min(1200px, 96vw);
+  max-height: 92vh;
+  overflow: auto;
+  border: 0;
+  background: var(--pge-surface);
+  color: var(--primary-text-color);
+}
+dialog.drawer {
+  margin: 0 0 0 auto; height: 100%; max-height: none; width: min(480px, 100vw);
+  border: 0; padding: var(--pge-space-4); background: var(--pge-surface);
+  color: var(--primary-text-color); box-shadow: var(--pge-shadow-2);
+}
+.drawer-head { padding-right: 36px; }
+.drawer-head h2 { margin: 4px 0 12px; }
+.drawer-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--primary-text-color);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+.drawer-close:hover { background: var(--pge-surface-2); }
+dialog.drawer::backdrop { background: rgb(0 0 0 / 0.35); backdrop-filter: blur(2px); }
+dialog.drawer[open] { animation: pge-slide-in var(--pge-dur) var(--pge-ease); }
+@keyframes pge-slide-in { from { transform: translateX(24px); opacity: 0; } }
+@keyframes pge-fade-up { from { opacity: 0; transform: translateY(6px); } }
+.tab-panel:not([hidden]) { animation: pge-fade-up var(--pge-dur) var(--pge-ease); }
+details { interpolate-size: allow-keywords; }
+.sync-pill.warn::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--pge-status-warn); }
 .toolbar button.menu {
   background: none; border: 0; color: inherit; cursor: pointer;
   font-size: 22px; width: 40px; height: 40px;
 }
 .toolbar .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; }
 .toolbar img { height: 28px; width: auto; }
-.content { padding: 16px; max-width: 1200px; margin: 0 auto; }
+.content {
+  padding: 16px;
+  max-width: 2400px;
+  margin: 0 auto;
+  container-type: inline-size;
+  container-name: pge;
+}
 .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .tabs button {
   border: 1px solid var(--divider-color); background: var(--card-background-color);
@@ -135,23 +361,133 @@ const STYLE = `
 }
 .tabs button.active { border-color: var(--primary-color); color: var(--primary-color); font-weight: 600; }
 .card {
-  background: var(--card-background-color, var(--ha-card-background, var(--primary-background-color)));
+  background: var(--pge-surface);
   color: var(--primary-text-color);
-  border-radius: var(--ha-card-border-radius, 12px);
-  border: var(--ha-card-border-width, 1px) solid var(--ha-card-border-color, var(--divider-color));
-  box-shadow: var(--ha-card-box-shadow, none);
-  padding: 16px; margin-bottom: 16px;
+  border-radius: var(--pge-radius);
+  border: 1px solid var(--pge-border);
+  box-shadow: var(--pge-shadow-1);
+  padding: var(--pge-space-6);
+  margin-bottom: var(--pge-space-6);
+}
+.eyebrow {
+  font: var(--pge-text-eyebrow);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--secondary-text-color);
 }
 .card h2, .card h3 { margin: 0 0 12px; font-size: 1.1rem; font-weight: 600; color: var(--primary-text-color); }
-.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.card.story-band {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  /* Beats the phone .card padding so the estimate line stays off the tabs. */
+  padding: 24px 16px 12px;
+}
+.story-line { margin: 0 0 8px; font: var(--pge-text-headline); border-left: 3px solid var(--primary-color); padding-left: 12px; }
+#kpis .kpi {
+  display: grid;
+  grid-template-rows: auto auto auto 1fr;
+  min-height: 96px;
+}
+#kpis .kpi svg { align-self: end; }
+.usage-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.usage-head h2 { margin: 0; }
+@container pge (max-width: 640px) {
+  .view-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-mask-image: linear-gradient(to right, #000 85%, transparent);
+    mask-image: linear-gradient(to right, #000 85%, transparent);
+  }
+}
+@container pge (max-width: 640px) {
+  #tod .kpi-row { grid-template-columns: 1fr 1fr; }
+  #tod .kpi-row .kpi:first-child { grid-column: span 2; }
+}
+#kpis { container-type: inline-size; }
+.kpi-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-flow: row;
+  gap: var(--pge-space-3);
+}
+@media (min-width: 871px) {
+  @container (min-width: 600px) {
+    .kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .kpi-grid > .kpi:nth-child(13),
+    .kpi-grid > .kpi:nth-child(14) { grid-column: span 2; }
+  }
+  @container (min-width: 1300px) {
+    .kpi-grid {
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      grid-template-rows: auto auto;
+      grid-auto-flow: column;
+    }
+    .kpi-grid > .kpi:nth-child(13),
+    .kpi-grid > .kpi:nth-child(14) { grid-column: auto; }
+  }
+}
+.kpi .label { text-transform: none; letter-spacing: 0; }
+.kpi .group {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--secondary-text-color);
+}
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px; }
+#kpis .kpi { padding: 10px 12px; }
+#kpis .kpi .value { font-size: 1.15rem; margin: 2px 0; }
+.hint { position: relative; display: inline-flex; flex: 0 0 auto; vertical-align: middle; margin-left: 6px; }
+.hint-btn {
+  width: 18px; height: 18px; border-radius: 999px; padding: 0;
+  border: 1px solid var(--pge-border);
+  background: var(--pge-surface-2);
+  color: var(--secondary-text-color);
+  font: 700 0.72rem/1 var(--ha-font-family-body, Roboto, system-ui);
+  cursor: pointer;
+}
+.hint-pop {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  z-index: 6;
+  width: min(340px, 72vw);
+  max-height: min(60vh, 28rem);
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--pge-border);
+  background: var(--pge-surface);
+  color: var(--primary-text-color);
+  box-shadow: var(--pge-shadow-2);
+  font: 400 0.8rem/1.45 var(--ha-font-family-body, Roboto, system-ui);
+  text-align: left;
+  white-space: normal;
+}
+.hint-pop dl { margin: 0; }
+.hint-pop dt {
+  margin: 8px 0 0;
+  font-weight: 650;
+  font-size: 0.72rem;
+  color: var(--secondary-text-color);
+}
+.hint-pop dt:first-child { margin-top: 0; }
+.hint-pop dd { margin: 2px 0 0; }
+@media (hover: hover) and (pointer: fine) {
+  .hint:hover .hint-pop,
+  .hint:focus-within .hint-pop { display: block; }
+}
+.hint.open .hint-pop { display: block; }
+.kpi .value.display { font: var(--pge-text-display); }
+.delta-chip { display: inline-block; margin-top: 4px; font-size: 0.75rem; }
+.delta-chip.warn { color: var(--pge-status-warn); }
+.delta-chip.good { color: var(--pge-status-good); }
+.est-range { display: flex; align-items: center; gap: 8px; }
+.est-range progress { flex: 1; }
 .kpi {
-  border: 1px solid var(--divider-color); border-radius: 10px; padding: 12px;
-  /* Tint from text+card so nested tiles never stick to a light/dark-specific hex. */
-  background: color-mix(
-    in srgb,
-    var(--primary-text-color) 6%,
-    var(--card-background-color, var(--primary-background-color, transparent))
-  );
+  border: 1px solid var(--pge-border); border-radius: var(--pge-radius); padding: var(--pge-space-3);
+  background: var(--pge-surface);
   color: var(--primary-text-color);
   border-left-width: 3px;
   border-left-style: solid;
@@ -171,13 +507,24 @@ const STYLE = `
   outline: 2px solid var(--primary-color, Highlight);
   outline-offset: 2px;
 }
-.kpi .label { font-size: 0.75rem; color: var(--secondary-text-color); }
+.kpi .label { font: var(--pge-text-eyebrow); letter-spacing: 0; text-transform: none; color: var(--secondary-text-color); }
+.kpi .value, .num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
 .kpi .value {
   font-size: 1.35rem; font-weight: 650; margin: 4px 0; color: var(--primary-text-color);
   transform: translateZ(0);
   transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-.kpi .delta { font-size: 0.75rem; color: var(--secondary-text-color); }
+.kpi .delta {
+  font-size: 0.75rem;
+  color: var(--secondary-text-color);
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+}
+.kpi .delta .date { white-space: nowrap; }
 .kpi svg {
   display: block;
   margin-top: 2px;
@@ -188,11 +535,7 @@ const STYLE = `
 .kpi:focus,
 .kpi:focus-within {
   transform: translateY(-3px);
-  background: color-mix(
-    in srgb,
-    var(--primary-color, #2a78d6) 10%,
-    var(--card-background-color, var(--primary-background-color, transparent))
-  );
+  background: var(--pge-surface-2);
   border-color: color-mix(in srgb, var(--primary-color, #2a78d6) 35%, var(--divider-color));
   box-shadow:
     0 6px 16px color-mix(in srgb, var(--primary-text-color) 10%, transparent),
@@ -278,31 +621,185 @@ details.sync-gaps-panel {
 }
 .btn.secondary { background: var(--secondary-background-color); color: var(--primary-text-color);
   border: 1px solid var(--divider-color); }
-.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
-.filters button, .filters select, .filters input[type="datetime-local"] {
-  border: 1px solid var(--divider-color);
-  background: var(--card-background-color, var(--secondary-background-color));
+.filters[hidden] { display: none !important; }
+/* Sits in the usage chart card. The tab row stays sticky; this bar does not. */
+.hdr-range.filters { margin: 0 0 12px; position: static; min-width: 0; max-width: 100%; }
+.usage-range { min-width: 0; max-width: 100%; }
+#kpis, #hero, #insights-weather, #tod, #billing, #programs {
+  scroll-margin-top: calc(var(--pge-header-h, 72px) + 8px);
+}
+.filters {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.range-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+.range-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--pge-border);
+  background: var(--pge-surface-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.seg::-webkit-scrollbar { display: none; }
+.filters .seg button,
+.filters .seg select,
+.filters .stepper button,
+.filters .ghost,
+.filters .range-custom button,
+.filters .range-custom input[type="datetime-local"] {
+  border: 0;
+  background: transparent;
   color: var(--primary-text-color);
-  border-radius: 8px; padding: 6px 10px; cursor: pointer;
+  border-radius: 999px;
+  min-height: 30px;
+  padding: 4px 12px;
+  font-size: 0.82rem;
+  font-weight: 550;
+  white-space: nowrap;
+  cursor: pointer;
   color-scheme: inherit;
+  transition: background var(--pge-dur-fast) var(--pge-ease), color var(--pge-dur-fast) var(--pge-ease);
 }
-.filters button.active { border-color: var(--primary-color); color: var(--primary-color); font-weight: 600; }
-.filters button:disabled { opacity: 0.45; cursor: not-allowed; }
-.filters select.range-more {
-  min-width: 8.5rem;
-  font-weight: 500;
+.filters .seg button:hover:not(:disabled):not(.active),
+.filters .stepper button:hover:not(:disabled),
+.filters .ghost:hover {
+  background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
 }
+.filters .seg button.active,
 .filters select.range-more.active {
+  background: var(--primary-color);
+  color: var(--text-primary-color, #fff);
+  font-weight: 650;
+}
+.filters .seg button:disabled { opacity: 0.38; cursor: not-allowed; }
+.filters select.range-more {
+  min-width: 6.5rem;
+  min-height: 34px;
+  padding-right: 8px;
+  border: 1px solid var(--pge-border);
+  background: var(--pge-surface);
+  border-radius: 999px;
+}
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  max-width: 100%;
+  border: 1px solid var(--pge-border);
+  border-radius: 999px;
+  background: var(--pge-surface);
+}
+.filters .stepper button {
+  width: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.95rem;
+}
+.filters .stepper button:disabled { opacity: 0.35; cursor: not-allowed; }
+.filters .range-label {
+  flex: 1 1 auto;
+  min-width: 9rem;
+  font-size: 0.8rem;
+  color: var(--secondary-text-color);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: min(28rem, 46vw);
+  padding: 0 2px;
+}
+.filters .ghost {
+  border: 1px solid var(--pge-border);
+  background: var(--pge-surface);
+  min-height: 34px;
+}
+.filters .ghost[aria-pressed="true"] {
   border-color: var(--primary-color);
   color: var(--primary-color);
-  font-weight: 600;
+  font-weight: 650;
 }
-.filters .range-nav { display: inline-flex; gap: 4px; align-items: center; }
-.filters .range-label {
-  font-size: 0.8rem; color: var(--secondary-text-color); min-width: 12rem;
+.filters .range-custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--pge-border);
+  background: var(--pge-surface-2);
 }
-.filters .range-custom { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.filters .range-custom[hidden] { display: none !important; }
+.range-custom-label {
+  font: var(--pge-text-eyebrow);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--secondary-text-color);
+}
+.filters .range-custom input[type="datetime-local"] {
+  width: 13.5rem;
+  max-width: 100%;
+  border-radius: 8px;
+  background: var(--pge-surface);
+  border: 1px solid var(--pge-border);
+  cursor: text;
+}
+.filters .range-custom button {
+  background: var(--primary-color);
+  color: var(--text-primary-color, #fff);
+  font-weight: 650;
+}
 .chart-host { width: 100%; min-height: 140px; }
+#chart-fingerprint { min-height: 280px; }
+#chart-ridgelines { min-height: 320px; }
+.heatmap-scroll { overflow-x: auto; max-width: 100%; }
+.heatmap-pair { min-width: 0; }
+.chart-gallery {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 1fr));
+  gap: var(--pge-space-4, 16px);
+}
+.chart-gallery figure { margin: 0; }
+.fig-wide { grid-column: 1 / -1; }
+.fig-head { display: flex; align-items: flex-start; gap: var(--pge-space-2, 8px); }
+.fig-titles { flex: 1; min-width: 0; }
+.fig-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 2px 0 0;
+  font: var(--pge-text-headline);
+}
+.fig-title-text { flex: 1; min-width: 0; }
+@container pge (max-width: 640px) { .fig-expand { display: none; } }
+.fig-head > .hint { margin-left: auto; }
+.fig-head > .hint .hint-pop { left: auto; right: 0; }
+.fig-expand { border: 0; background: transparent; color: var(--primary-text-color); cursor: pointer; }
+.chart-card { margin: 0; }
+
+.chart-gallery h3 { margin: 0 0 4px; font-size: 1rem; }
 .chart-host.usage-combo { min-height: 380px; }
 .chart-host.scatter-wide { min-height: 300px; }
 .usage-stats { margin-top: 16px; }
@@ -310,6 +807,7 @@ details.sync-gaps-panel {
 .usage-stats .stats-meta { margin: 0 0 10px; }
 .usage-summary-wrap {
   width: 100%;
+  max-width: 1100px;
   margin-bottom: 14px;
   border: 1px solid var(--divider-color);
   border-radius: 12px;
@@ -335,7 +833,7 @@ details.sync-gaps-panel {
 }
 .usage-summary-items {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
 }
 .usage-summary-item {
   display: grid;
@@ -491,39 +989,69 @@ details.sync-gaps-panel {
 details.sync-gaps-panel { margin-top: 0; }
 details.usage-accounting > summary,
 details.usage-rollup > summary,
-details.sync-gaps-panel > summary {
+details.sync-gaps-panel > summary,
+details.chart-gallery > summary,
+details.tariff-status-block > summary,
+details.diagnostics > summary,
+details.tod-holidays > summary,
+details.tod-compare-math > summary {
   cursor: pointer;
-  display: block;
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  column-gap: 6px;
+  align-items: start;
   position: relative;
   list-style: none;
-  padding: 8px 12px 10px 22px;
+  padding: 10px 12px;
   margin: 0 0 8px;
   color: var(--primary-text-color);
   border-radius: 8px;
 }
 details.usage-accounting > summary::-webkit-details-marker,
 details.usage-rollup > summary::-webkit-details-marker,
-details.sync-gaps-panel > summary::-webkit-details-marker { display: none; }
+details.sync-gaps-panel > summary::-webkit-details-marker,
+details.chart-gallery > summary::-webkit-details-marker,
+details.tariff-status-block > summary::-webkit-details-marker,
+details.diagnostics > summary::-webkit-details-marker,
+details.tod-holidays > summary::-webkit-details-marker,
+details.tod-compare-math > summary::-webkit-details-marker { display: none; }
 details.usage-accounting > summary::marker,
 details.usage-rollup > summary::marker,
-details.sync-gaps-panel > summary::marker { content: ""; }
+details.sync-gaps-panel > summary::marker,
+details.chart-gallery > summary::marker,
+details.tariff-status-block > summary::marker,
+details.diagnostics > summary::marker,
+details.tod-holidays > summary::marker,
+details.tod-compare-math > summary::marker { content: ""; }
 details.usage-accounting > summary::before,
 details.usage-rollup > summary::before,
-details.sync-gaps-panel > summary::before {
-  content: "▸";
-  position: absolute;
-  left: 4px;
-  top: 0.55em;
-  font-size: 0.85em;
+details.sync-gaps-panel > summary::before,
+details.chart-gallery > summary::before,
+details.tariff-status-block > summary::before,
+details.diagnostics > summary::before,
+details.tod-holidays > summary::before,
+details.tod-compare-math > summary::before {
+  content: "›";
+  position: static;
+  font-size: 1.2rem;
   line-height: 1;
   color: var(--secondary-text-color);
+  transition: transform var(--pge-dur-fast);
 }
 details.usage-accounting[open] > summary::before,
 details.usage-rollup[open] > summary::before,
-details.sync-gaps-panel[open] > summary::before { content: "▾"; }
+details.sync-gaps-panel[open] > summary::before,
+details.chart-gallery[open] > summary::before,
+details.tariff-status-block[open] > summary::before,
+details.diagnostics[open] > summary::before,
+details.tod-holidays[open] > summary::before,
+details.tod-compare-math[open] > summary::before { content: "›"; transform: rotate(90deg); }
 details.usage-accounting > summary:hover,
 details.usage-rollup > summary:hover,
-details.sync-gaps-panel > summary:hover {
+details.sync-gaps-panel > summary:hover,
+details.chart-gallery > summary:hover,
+details.tariff-status-block > summary:hover,
+details.diagnostics > summary:hover {
   color: var(--primary-color);
   background: color-mix(
     in srgb,
@@ -533,16 +1061,24 @@ details.sync-gaps-panel > summary:hover {
 }
 details.usage-accounting > summary:hover::before,
 details.usage-rollup > summary:hover::before,
-details.sync-gaps-panel > summary:hover::before { color: var(--primary-color); }
+details.sync-gaps-panel > summary:hover::before,
+details.chart-gallery > summary:hover::before,
+details.tariff-status-block > summary:hover::before,
+details.diagnostics > summary:hover::before { color: var(--primary-color); }
 .rollup-title {
   display: block;
   font-weight: 650;
   font-size: 1.05rem;
   line-height: 1.3;
 }
-details.usage-accounting > summary .rollup-title { font-size: 1.1rem; }
+details.usage-accounting > summary .rollup-title,
+details.chart-gallery > summary .rollup-title,
+details.tariff-status-block > summary .rollup-title,
+details.diagnostics > summary .rollup-title { font-size: 1.1rem; }
+details.tariff-status-block > summary .badge { margin-left: 8px; vertical-align: middle; }
 .rollup-caption {
   display: block;
+  grid-column: 2;
   margin-top: 4px;
   font-weight: 400;
   font-size: 0.82rem;
@@ -550,8 +1086,8 @@ details.usage-accounting > summary .rollup-title { font-size: 1.1rem; }
   color: var(--secondary-text-color);
 }
 details.usage-accounting .usage-accounting-body { padding: 0 0 4px; }
-.insights-cost-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
-.insights-cost-grid .chart-host { min-height: 200px; height: 200px; }
+.insights-cost-grid { display: block; }
+#ledger-bill, #ledger-kwh { min-height: 240px; }
 .chart-empty { margin: 12px 0; font-size: 0.85rem; }
 .data-gaps ul { margin: 0; padding-left: 1.2rem; display: grid; gap: 6px; }
 .data-gaps li { font-size: 0.9rem; color: var(--primary-text-color); }
@@ -559,10 +1095,15 @@ details.usage-accounting .usage-accounting-body { padding: 0 0 4px; }
 .data-gaps .gap-warn { color: var(--pge-status-warn); }
 .data-gaps .muted { margin: 0 0 8px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+#insights-heat { display: grid; gap: 16px; }
+@container pge (min-width: 1101px) {
+  #insights-heat { grid-template-columns: 1fr 1fr; }
+  #insights-heat > .heatmap-chips { grid-column: 1 / -1; }
+}
 .entities { display: grid; gap: 6px; }
 .entity-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0;
   border-bottom: 1px solid var(--divider-color); font-size: 0.95rem; }
-.programs { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.programs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 10px; }
 .program {
   border: 1px solid var(--divider-color); border-radius: 10px; padding: 12px;
   background: color-mix(
@@ -606,7 +1147,6 @@ details.usage-accounting .usage-accounting-body { padding: 0 0 4px; }
     0 0 0 1px color-mix(in srgb, var(--pge-status-good) 28%, transparent);
 }
 .program:hover .name, .program:focus-within .name { color: var(--primary-color); }
-details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
 .pge-heatmap-title { font-size: 0.9rem; margin-bottom: 8px; color: var(--secondary-text-color); }
 .pge-heatmap-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(10px, 1fr)); gap: 2px;
@@ -617,49 +1157,143 @@ details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 
 .entity-row span { color: var(--secondary-text-color); }
 .entity-row strong { color: var(--primary-text-color); }
 
-/* Tablet */
-@media (max-width: 900px) {
-  .content { padding: 12px; }
-  .card { padding: 14px; margin-bottom: 12px; }
+/* Layout follows the panel width, not the browser window. The sidebar
+   changes how wide .content is. */
+@container pge (max-width: 1100px) {
+  .range-tools { width: 100%; justify-content: flex-start; }
+  .stepper { flex: 1 1 16rem; min-width: 0; }
+  .filters .range-label { max-width: 100%; }
   .insights-cost-grid,
   .grid-2 { grid-template-columns: 1fr; }
-  .usage-summary-item .note { display: none; }
-  .filters .range-label { min-width: 0; flex: 1 1 100%; }
-  .chart-host.usage-combo { min-height: 300px; }
-  .chart-host.scatter-wide { min-height: 260px; }
 }
-
-/* Phone */
-@media (max-width: 640px) {
-  .toolbar { padding: 6px 10px; gap: 8px; }
-  .content { padding: 10px; }
-  .card { padding: 12px; border-radius: 10px; }
-  .card h2, .card h3 { font-size: 1.05rem; }
-  .kpi-row { grid-template-columns: 1fr 1fr; gap: 8px; }
-  .kpi { padding: 10px; }
-  .kpi .value { font-size: 1.15rem; }
-  .sync-row { gap: 8px; }
-  .sync-row progress { min-width: 0; width: 100%; flex: 1 1 100%; }
-  .sync-row .btn { flex: 1 1 calc(50% - 4px); min-height: 44px; }
-  .btn { min-height: 40px; padding: 10px 14px; }
-  .filters { gap: 6px; }
-  .filters button, .filters select, .filters input[type="datetime-local"] {
-    min-height: 40px; padding: 8px 10px; font-size: 0.9rem;
+@container pge (max-width: 720px) {
+  .section-tabs [role="tab"] span { display: none; }
+}
+@container pge (max-width: 560px) {
+  .sync-pill-wrap {
+    flex: 0 0 28px;
+    width: 28px;
+    height: 28px;
+    margin-left: 4px;
   }
-  .filters .range-nav { width: 100%; justify-content: space-between; }
-  .filters .range-nav button { flex: 0 0 44px; }
-  .filters .range-custom {
+  .sync-pill {
+    display: block;
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    padding: 0;
+    overflow: hidden;
+    border-radius: 50%;
+  }
+  .sync-pill.good {
+    background: var(--pge-status-good);
+    border-color: var(--pge-status-good);
+  }
+  .sync-pill.warn {
+    background: var(--pge-status-warn);
+    border-color: var(--pge-status-warn);
+  }
+  .sync-pill.critical {
+    background: var(--pge-status-critical);
+    border-color: var(--pge-status-critical);
+  }
+  .sync-pill::before { display: none; }
+  .sync-pill-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+}
+@container pge (max-width: 640px) {
+  .fig-head { align-items: flex-start; }
+  .tod-compare-verdict { font-size: 1.15rem; }
+  .tod-grid {
+    grid-template-columns: 36px repeat(24, minmax(0, 1fr));
+    gap: 1px;
+  }
+  .tod-cell { min-width: 0; }
+  .tod-day-full { display: none; }
+  .tod-day-short { display: inline; }
+  .tod-hour:not(:nth-child(3n + 2)) { visibility: hidden; }
+  .tariff-status-block .tod-table th:last-child,
+  .tariff-status-block .tod-table td:last-child { display: none; }
+  .tod-usage .tod-table th:nth-child(5),
+  .tod-usage .tod-table td:nth-child(5) { display: none; }
+  details.tod-compare-math .tod-table thead { display: none; }
+  details.tod-compare-math .tod-table,
+  details.tod-compare-math .tod-table tbody,
+  details.tod-compare-math .tod-table tr,
+  details.tod-compare-math .tod-table td {
+    display: block;
+    width: auto;
+  }
+  details.tod-compare-math .tod-table tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--divider-color);
+  }
+  details.tod-compare-math .tod-table td.num {
+    display: inline;
+    text-align: left;
+  }
+  details.tod-compare-math .tod-table td.num + td.num::before { content: " · "; }
+  .seg.range-presets {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     width: 100%;
+    overflow: visible;
+    border-radius: 16px;
+    gap: 2px;
+  }
+  .seg.range-presets button {
+    width: 100%;
+    min-width: 0;
+    padding: 4px 6px;
+    justify-self: stretch;
+  }
+  .range-row { width: 100%; min-width: 0; max-width: 100%; }
+  .range-tools {
+    width: 100%;
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+  .range-tools .stepper {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .filters .seg.interval { width: auto; flex: 0 0 auto; }
+  .filters .seg.interval button { padding: 4px 8px; }
+  .filters .range-custom-toggle {
+    flex: 0 0 34px;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+  }
+  .filters select.range-more {
+    min-width: 5.5rem;
+    max-width: 100%;
+  }
+  .filters .range-label { flex: 1 1 auto; min-width: 0; text-align: center; max-width: none; }
+  .filters .range-custom {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 6px;
+    border-radius: 16px;
   }
-  .filters .range-custom input[type="datetime-local"] { width: 100%; min-width: 0; }
-  .filters .range-custom .btn { width: 100%; }
+  .filters .range-custom input[type="datetime-local"],
+  .filters .range-custom button { width: 100%; }
   .usage-summary-items { grid-template-columns: 1fr; }
   .usage-summary-item { border-right: 0; }
   .usage-summary-item:nth-child(2n) { border-right: 0; }
-  .usage-summary-items > .usage-summary-item:nth-last-child(-n+2) { border-bottom: 1px solid var(--divider-color); }
+  .usage-summary-items > .usage-summary-item:nth-last-child(-n+2) {
+    border-bottom: 1px solid var(--divider-color);
+  }
   .usage-summary-items > .usage-summary-item:last-child { border-bottom: 0; }
   .usage-summary-item:nth-child(4n+1),
   .usage-summary-item:nth-child(4n+2) { background: transparent; }
@@ -672,25 +1306,59 @@ details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 
   }
   .tod-compare-pair { grid-template-columns: 1fr; }
   .tod-compare-vs { padding-top: 0; text-align: center; }
+  .usage-summary-item .note { display: none; }
+}
+
+/* Tablet window: tighter page padding. Column counts use the container rules above. */
+@media (max-width: 900px) {
+  .content { padding: 12px; }
+  .card { padding: var(--pge-space-6); margin-bottom: var(--pge-space-6); }
+}
+
+/* Phone: larger touch targets. Column counts follow the container rules. */
+@media (max-width: 640px) {
+  .kpi-grid { gap: var(--pge-space-3); }
+  .section-tab-scroll { overflow-x: auto; scrollbar-width: none; }
+  .hdr-row { gap: 8px; }
+  .toolbar { padding: 6px 10px; gap: 8px; }
+  .content { padding: 12px; }
+  .card { padding: 16px; border-radius: 10px; }
+  .card h2, .card h3 { font-size: 1.05rem; }
+  .kpi { padding: 10px; }
+  .kpi .value { font-size: 1.15rem; }
+  .sync-row { gap: 8px; }
+  .sync-row progress { min-width: 0; width: 100%; flex: 1 1 100%; }
+  .sync-row .btn { flex: 1 1 calc(50% - 4px); min-height: 44px; }
+  .btn { min-height: 40px; padding: 10px 14px; }
+  .filters { gap: 6px; }
+  .filters .stepper button { flex: 0 0 34px; width: 34px; }
   .usage-table-wrap {
     max-height: min(60vh, 420px);
     -webkit-overflow-scrolling: touch;
   }
   .usage-day-table {
     font-size: 0.8rem;
-    min-width: 520px;
-    table-layout: auto;
+    table-layout: fixed;
   }
+  .usage-day-table th:nth-child(4),
+  .usage-day-table td:nth-child(4),
+  .usage-day-table th:nth-child(5),
+  .usage-day-table td:nth-child(5) { display: none; }
+  .usage-day-table th:nth-child(1),
+  .usage-day-table td:nth-child(1) { width: 40%; }
+  .usage-day-table th:nth-child(2),
+  .usage-day-table td:nth-child(2),
+  .usage-day-table th:nth-child(3),
+  .usage-day-table td:nth-child(3) { width: 30%; }
   .usage-day-table th, .usage-day-table td { padding: 8px 8px; }
-  .chart-host.usage-combo { min-height: 260px; }
-  .chart-host.scatter-wide { min-height: 220px; }
-  .insights-cost-grid .chart-host { min-height: 180px; height: 180px; }
-  .programs { grid-template-columns: 1fr 1fr; gap: 8px; }
   .program { padding: 10px; min-height: 64px; }
   details.usage-accounting > summary,
   details.usage-rollup > summary,
-  details.sync-gaps-panel > summary {
-    padding: 10px 12px 12px 26px;
+  details.sync-gaps-panel > summary,
+  details.chart-gallery > summary,
+  details.tariff-status-block > summary,
+  details.diagnostics > summary {
+    padding: 10px 12px;
     min-height: 44px;
   }
   .rollup-caption { font-size: 0.78rem; }
@@ -755,6 +1423,17 @@ details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 
   .tod-cell.off_peak { background: var(--pge-tod-off); }
   .tod-cell.mid_peak { background: var(--pge-tod-mid); }
   .tod-cell.on_peak { background: var(--pge-tod-on); }
+.tod-day-short { display: none; }
+@container pge (max-width: 640px) {
+  .tod-grid {
+    grid-template-columns: 36px repeat(24, minmax(0, 1fr));
+    gap: 1px;
+  }
+  .tod-cell { min-width: 0; }
+  .tod-day-full { display: none; }
+  .tod-day-short { display: inline; }
+  .tod-hour:not(:nth-child(3n + 2)) { visibility: hidden; }
+}
   .tod-cell.now {
     outline: 2px solid var(--primary-text-color);
     outline-offset: -2px;
@@ -763,10 +1442,52 @@ details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 
   details.tod-holidays { margin-top: 8px; }
   details.tod-holidays > summary { cursor: pointer; font-size: 0.85rem; color: var(--secondary-text-color); }
   .tod-holidays-body { margin-top: 6px; padding-left: 4px; font-size: 0.82rem; }
-  .tod-usage { margin-top: 16px; }
+  .view-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chapter:not(.card) {
+  margin-top: var(--pge-space-8);
+  padding-top: var(--pge-space-6);
+  border-top: 1px solid var(--pge-border);
+}
+.chapter-head { margin-bottom: var(--pge-space-4); }
+.chapter-head .eyebrow { display: inline-flex; align-items: center; gap: 6px; }
+.chapter-headline { font: var(--pge-text-headline); margin: 4px 0 0; }
+.chapter-headline, .fig-title { overflow-wrap: break-word; }
+.chapter .chart-card + .chart-card,
+.chapter-views > * + * { margin-top: var(--pge-space-6); }
+section.chapter.explore-more {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr));
+  gap: var(--pge-space-6);
+}
+section.chapter.explore-more > header.chapter-head,
+section.chapter.explore-more > .fig-wide { grid-column: 1 / -1; }
+.tod-schedule, .tod-usage { max-width: 100%; min-width: 0; }
+.tod-usage { overflow-x: auto; margin-top: 16px; }
+.chapter-lead .fig-title { display: none; }
+.shift-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+.shift-form label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--secondary-text-color);
+}
+.shift-form input,
+.shift-form select { width: 100%; min-width: 0; }
+@container pge (min-width: 720px) {
+  .shift-form { grid-template-columns: 1.4fr repeat(3, minmax(0, 1fr)); align-items: end; }
+}
+.tod-compare-math,
+.tod-table-wrap { max-width: 100%; overflow-x: auto; }
+.tod-table { width: 100%; min-width: 0; }
+.tod-compare-verdict { overflow-wrap: anywhere; }
   .tod-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 10px; }
   .tod-table th, .tod-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--divider-color); }
-  .tod-table .num { text-align: right; }
+  .tod-table .num { text-align: right; white-space: nowrap; }
   .tod-table thead th { color: var(--secondary-text-color); font-weight: 600; }
   .tod-table tfoot td { font-weight: 600; }
   .tod-share-bar {
@@ -819,9 +1540,38 @@ details.diagnostics summary { cursor: pointer; font-weight: 600; margin-bottom: 
   }
   .tod-range { margin: 0 0 12px; }
   .tod-range-caption { margin: 0; flex: 1 1 100%; font-size: 0.85rem; }
-  .tod-range .range-label { font-size: 0.82rem; color: var(--secondary-text-color); }
+  .tod-range .range-row {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+  .tod-range .seg.range-presets {
+    display: inline-flex;
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    overflow-x: auto;
+    grid-template-columns: none;
+    border-radius: 999px;
+  }
+  .tod-range .seg.range-presets button {
+    width: auto;
+    flex: 0 0 auto;
+  }
+  .tod-range .range-tools {
+    width: auto;
+    max-width: none;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+  .tod-range .range-label { display: none; }
   details.tariff-status-block { margin-top: 20px; }
 `;
+
+/** Daily calendars read every retained day, not the Usage chip. */
+const HEATMAP_HISTORY_START = new Date(Date.UTC(2000, 0, 1));
+/** Above any realistic daily backfill so LTTB cannot drop calendar days. */
+const HEATMAP_MAX_DAYS = 20000;
 
 class PgeEnergyPanel extends HTMLElement {
   constructor() {
@@ -830,17 +1580,45 @@ class PgeEnergyPanel extends HTMLElement {
     this._hass = null;
     this._accounts = [];
     this._activeEntryId = null;
+    this._activeTab = "glance";
+    this._rangeRenderGen = 0;
     this._syncByEntry = {};
+    this._syncObserved = {};
+    this._bootRendering = false;
+    this._galleryRefreshAfterBoot = false;
+    this._chartFactories = new Map();
+    this._pendingMounts = new Map();
+    this._lazyObserver = typeof IntersectionObserver === "function"
+      ? new IntersectionObserver((entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            const record = this._pendingMounts.get(entry.target);
+            this._lazyObserver.unobserve(entry.target);
+            this._pendingMounts.delete(entry.target);
+            if (record) void this._mountDeferred(record);
+          }
+        }, { rootMargin: "200px 0px" })
+      : null;
     this._unsubSync = null;
     this._charts = [];
     this._rangeKey = "24h";
+    this._usageMetric = "kwh";
+    try {
+      const stored = localStorage.getItem("pge_usage_metric");
+      if (stored === "kwh" || stored === "cost") this._usageMetric = stored;
+    } catch (_err) {
+      /* storage can be unavailable */
+    }
     this._rangeShift = 0;
     this._customRange = null;
+    this._rangeCustomOpen = false;
     this._todRangeKey = "last_cycle";
+    this._todRangeCustomOpen = false;
     this._todCustomRange = null;
     this._todRangeTouched = false;
     this._todBillReady = false;
     this._todRenderGen = 0;
+    this._galleryRenderGen = 0;
     this._availablePresets = null;
     this._period = "hour";
     this._loading = true;
@@ -848,6 +1626,12 @@ class PgeEnergyPanel extends HTMLElement {
     this._narrow = false;
     this._defaultSection = "glance";
     this._landingApplied = false;
+    this._presetProbeGen = 0;
+    this._presetProbeTimer = null;
+    this._presetProbeSkipped = false;
+    this._filtersDirty = false;
+    this._todDirty = false;
+    this._kpiSig = "";
   }
 
   set hass(hass) {
@@ -858,21 +1642,23 @@ class PgeEnergyPanel extends HTMLElement {
       this._boot();
     } else if (!this._loading && this._account) {
       void this._renderKpis();
-      this._renderBillingPrograms();
+      const billingRebuilt = this._renderBillingPrograms();
       this._renderSync();
       this._renderDiagnostics();
-      // Bill-bound presets (cycle / last_cycle) may appear only after entity states hydrate.
-      void this._probeAvailablePresets().then(() => {
-        this._renderFilters();
-        const billReady = !!this._billBounds();
-        if (billReady !== this._todBillReady) {
-          this._todBillReady = billReady;
-          void this._renderTod();
-        }
-      });
+      // Bill bounds can arrive after the first paint. Replacing the range
+      // selects on every hass push closes an open menu and jumps it to the top.
+      const billReady = !!this._billBounds();
+      if (billReady !== this._todBillReady) {
+        this._todBillReady = billReady;
+        if (this._hostFocused("tod")) this._todDirty = true;
+        else void this._renderTod();
+      }
+      this._schedulePresetProbe();
       // Theme / dark-mode switches require chart option rebuild (canvas colors).
       if (themeChanged) {
         void this._rebuildThemeCharts();
+      } else if (billingRebuilt) {
+        void this._mountAccountGalleries();
       }
     }
   }
@@ -893,10 +1679,28 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   disconnectedCallback() {
+    if (this._presetProbeTimer) {
+      clearTimeout(this._presetProbeTimer);
+      this._presetProbeTimer = null;
+    }
+    if (this._onHintOutside) {
+      document.removeEventListener("click", this._onHintOutside);
+      this._onHintOutside = null;
+    }
+    if (this._onSyncPopOutside) {
+      document.removeEventListener("click", this._onSyncPopOutside);
+      this._onSyncPopOutside = null;
+    }
     if (this._unsubSync) {
       this._unsubSync();
       this._unsubSync = null;
     }
+    if (this._onPanelHashChange) {
+      window.removeEventListener("hashchange", this._onPanelHashChange);
+      this._onPanelHashChange = null;
+    }
+    this._headerObserver?.disconnect();
+    this._headerObserver = null;
     destroyCharts(this._charts);
     this._charts = [];
   }
@@ -911,25 +1715,112 @@ class PgeEnergyPanel extends HTMLElement {
       }
       this._unsubSync = await this._hass.connection.subscribeMessage(
         (msg) => {
+          let refreshGalleries = false;
           for (const entry of msg.entries || []) {
+            const prior = this._syncByEntry[entry.entry_id];
+            const seen = !!this._syncObserved[entry.entry_id];
             this._syncByEntry[entry.entry_id] = entry;
+            this._syncObserved[entry.entry_id] = true;
+            const finished =
+              entry.status === "complete" &&
+              (prior?.status !== "complete" ||
+                entry.last_successful_update !== prior?.last_successful_update);
+            if (seen && entry.entry_id === this._activeEntryId && finished) {
+              refreshGalleries = true;
+            }
           }
           invalidateStatsCache();
           this._renderSync();
           this._renderDiagnostics();
           void this._renderDataGaps();
+          if (!refreshGalleries) return;
+          if (this._bootRendering) {
+            this._galleryRefreshAfterBoot = true;
+            return;
+          }
+          void this._refreshGalleriesAfterSync();
         },
         { type: "pge_energy/sync/subscribe" }
       );
       this._loading = false;
       this._error = null;
       this._renderShell();
-      await this._renderAll();
+      this._bootRendering = true;
+      try {
+        await this._renderAll();
+      } finally {
+        this._bootRendering = false;
+      }
+      if (this._galleryRefreshAfterBoot) {
+        this._galleryRefreshAfterBoot = false;
+        await this._refreshGalleriesAfterSync();
+      }
       this._scheduleDefaultLandingScroll();
     } catch (err) {
       this._loading = false;
       this._error = err?.message || String(err);
       this._renderShell();
+    }
+  }
+
+  _bindPanelNavigation() {
+    const nav = this.shadowRoot.querySelector("[role=tablist]");
+    if (!nav || nav.dataset.bound === "1") return;
+    nav.dataset.bound = "1";
+    nav.addEventListener("click", (ev) => {
+      const button = ev.target.closest("[role=tab]");
+      if (button) this._selectPanelTab(button.dataset.tab, { writeHistory: true });
+    });
+    nav.addEventListener("keydown", (ev) => {
+      const button = ev.target.closest("[role=tab]");
+      if (!button) return;
+      const index = PANEL_TABS.indexOf(button.dataset.tab);
+      const keyIndex = {
+        ArrowLeft: (index + PANEL_TABS.length - 1) % PANEL_TABS.length,
+        ArrowRight: (index + 1) % PANEL_TABS.length,
+        Home: 0,
+        End: PANEL_TABS.length - 1,
+      }[ev.key];
+      if (keyIndex == null) return;
+      ev.preventDefault();
+      this._selectPanelTab(PANEL_TABS[keyIndex], { writeHistory: true, focus: true });
+    });
+    if (this._onPanelHashChange) window.removeEventListener("hashchange", this._onPanelHashChange);
+    this._onPanelHashChange = () => this._selectPanelTab(resolvePanelTab(location.hash, this._defaultSection));
+    window.addEventListener("hashchange", this._onPanelHashChange);
+  }
+
+  _selectPanelTab(tab, { writeHistory = false, focus = false } = {}) {
+    if (!PANEL_TABS.includes(tab)) return;
+    this._activeTab = tab;
+    for (const button of this.shadowRoot.querySelectorAll(".section-tabs [role=tab]")) {
+      const active = button.dataset.tab === tab;
+      button.setAttribute("aria-selected", String(active));
+      button.tabIndex = active ? 0 : -1;
+      if (active && focus) button.focus();
+    }
+    this._attachRangeBar(tab);
+    for (const panel of this.shadowRoot.querySelectorAll(".tab-panel")) {
+      panel.hidden = panel.dataset.tab !== tab;
+    }
+    if (writeHistory && location.hash !== panelTabHash(tab)) history.pushState(null, "", panelTabHash(tab));
+    const panel = this.shadowRoot.getElementById("panel-" + tab);
+    requestAnimationFrame(() => this._resizeChartsUnder(panel));
+  }
+
+  _attachRangeBar(tab) {
+    const range = this.shadowRoot.querySelector(".hdr-range");
+    if (!range) return;
+    const slot = this.shadowRoot.getElementById("hero")?.querySelector(":scope > .usage-range");
+    if (slot && range.parentElement !== slot) slot.appendChild(range);
+    // Usage owns this bar. Overview is a fixed last-complete-24h chart.
+    range.hidden = tab !== "usage";
+  }
+
+  _resizeChartsUnder(root) {
+    for (const wrapper of this._charts || []) {
+      const dom = wrapper.chart?.getDom?.();
+      if (dom && root?.contains(dom)) wrapper.chart.resize();
     }
   }
 
@@ -994,91 +1885,226 @@ class PgeEnergyPanel extends HTMLElement {
       return;
     }
 
-    const tabs =
+    const accountControl =
       this._accounts.length > 1
-        ? `<div class="tabs">${this._accounts
+        ? `<label>Account <select id="account-select">${this._accounts
             .map(
-              (a) =>
-                `<button type="button" data-entry="${a.entry_id}" class="${
-                  a.entry_id === this._activeEntryId ? "active" : ""
-                }">${this._escape(a.title || a.account_id)}</button>`
+              (account) =>
+                `<option value="${this._escape(account.entry_id)}" ${
+                  account.entry_id === this._activeEntryId ? "selected" : ""
+                }>${this._escape(account.title || account.account_id)}</option>`,
             )
-            .join("")}</div>`
+            .join("")}</select></label>`
         : "";
+    const tabButtons = PANEL_TABS.map(
+      (tab) => `<button type="button" role="tab" id="tab-${tab}" data-tab="${tab}" aria-controls="panel-${tab}"
+        aria-selected="${tab === this._activeTab}" tabindex="${tab === this._activeTab ? 0 : -1}"
+        aria-label="${PANEL_TAB_LABELS[tab]}"><ha-icon icon="${PANEL_TAB_ICONS[tab]}"></ha-icon>
+        <span>${PANEL_TAB_LABELS[tab]}</span></button>`,
+    ).join("");
 
     content.innerHTML = `
-      ${tabs}
-      <section class="card" id="kpis"></section>
-      <section class="card sync-gaps" id="sync-gaps">
-        <details class="sync-gaps-panel" data-persist="sync_status"${this._detailsOpenAttr(
-          "sync_status"
-        )}>
-          <summary>
-            <span class="rollup-title">Sync status</span>
-            <span class="rollup-caption">Import progress and upstream PGE publication gaps</span>
-          </summary>
-          <div class="sync-gaps-body">
-            <div class="sync-strip" id="sync"></div>
-            <div class="data-gaps" id="data-gaps"></div>
+      <div class="panel-chrome">
+      <header class="pge-header">
+        ${accountControl ? `<div class="hdr-row">${accountControl}</div>` : ""}
+        <div class="section-tabs">
+          <nav class="section-tab-scroll" role="tablist" aria-label="PGE sections">${tabButtons}</nav>
+          <div class="sync-pill-wrap">
+            <button type="button" class="sync-pill" id="sync-pill" aria-haspopup="dialog" aria-controls="sync-pop" aria-expanded="false" aria-label="Sync status"><span class="sync-pill-text">Sync status</span></button>
+            <div id="sync-pop" class="sync-pop" role="dialog" aria-label="Last sync"></div>
           </div>
-        </details>
-      </section>
-      <section class="card" id="hero">
-        <h2>Usage</h2>
-        <div class="filters" id="filters"></div>
+        </div>
+      </header>
+      </div>
+      <div class="tab-panel" id="panel-glance" data-tab="glance" role="tabpanel" aria-labelledby="tab-glance">
+        <section class="card story-band" id="story" data-story="overview"></section>
+        <section class="card" id="kpis"></section>
+        <section class="card panel-usage" id="overview-usage-card">
+          <h2>Last 24 hours</h2>
+          <div class="chart-host usage-combo" id="chart-overview-usage"></div>
+        </section>
+      </div>
+      <div class="tab-panel" id="panel-usage" data-tab="usage" role="tabpanel" aria-labelledby="tab-usage">
+      <section class="card panel-usage" id="hero">
+        <div class="usage-head">
+        <h2>Usage ${this._hint("A kilowatt-hour is the energy of using 1,000 watts for one hour.")}</h2>
+        <div class="metric-toggle" role="group" aria-label="Usage metric">
+          <button type="button" data-metric="kwh" aria-pressed="${this._usageMetric === "kwh"}">kWh</button>
+          <button type="button" data-metric="cost" aria-pressed="${this._usageMetric === "cost"}">Dollars</button>
+        </div>
+        </div>
+        <div class="usage-range"><div class="hdr-range filters" id="filters"></div></div>
         <div class="chart-host usage-combo" id="chart-usage"></div>
         <div class="usage-stats" id="usage-stats"></div>
       </section>
+        ${this._loadShapeGalleryHtml()}
+      </div>
+      <div class="tab-panel" id="panel-analytics" data-tab="analytics" role="tabpanel" aria-labelledby="tab-analytics">
       <section class="card" id="insights-weather">
-        <h3>Weather vs usage</h3>
-        <p class="muted" style="margin:0 0 8px">Daily kWh vs outdoor °F (days with both samples).</p>
+        <h3>Weather vs usage ${this._hint("Daily kWh vs outdoor °F, using days that have both samples.")}</h3>
         <div class="chart-host scatter-wide" id="scatter"></div>
+        ${this._weatherGalleryHtml()}
       </section>
       <section class="card" id="insights-cost">
-        <h3>Cost intelligence</h3>
-        <p class="muted" style="margin:0 0 8px">Monthly average rate and statement billed vs payments.</p>
+        <h3>Cost intelligence ${this._hint("Monthly average rate, and statement billed versus payments, for the last 12 months.")}</h3>
         <div class="insights-cost-grid">
           <div class="chart-host" id="cost-per-kwh"></div>
-          <div class="chart-host" id="billed-paid"></div>
         </div>
       </section>
-      <section class="card grid-2" id="insights-heat">
-        <div id="heatmap-kwh"></div>
-        <div id="heatmap-temp"></div>
-        <p class="muted" style="grid-column:1/-1;margin:0">Gray cells are days without an imported sample in recorder — not a full calendar year of PGE data.</p>
+      <section class="card" id="insights-heat">
+        <div class="heatmap-chips" id="heatmap-chips"></div>
+        <div class="heatmap-pair">
+          <h4>kWh calendar ${this._hint("Gray cells are days without an imported sample in recorder. They are not a full calendar year of PGE data.")}</h4>
+          <div class="heatmap-scroll"><div class="chart-host" id="heatmap-kwh"></div></div>
+        </div>
+        <div class="heatmap-pair">
+          <h4>Temperature calendar</h4>
+          <div class="heatmap-scroll"><div class="chart-host" id="heatmap-temp"></div></div>
+        </div>
       </section>
-      <section class="card" id="billing"></section>
-      <section class="card" id="tod"></section>
+      <section class="card chapter explore-more" data-chapter="explore" data-section="more-charts" data-persist="chart_gallery_more"${this._detailsOpenAttr("chart_gallery_more")}>
+        <header class="chapter-head"><span class="eyebrow">Explore more</span><h2 class="chapter-headline">More ways to look at your history</h2></header>
+        ${this._figure("chart-fingerprint", { eyebrow: "Day fingerprint", title: "Day fingerprint", what: "Each line is a day: energy, peak hour, temperature, on-peak share, and price.", how: "Lines that sit apart from the pack were unusual days.", why: "It shows which days were odd without opening each one.", source: "Imported hourly consumption, cost, and temperature." })}
+        ${this._figure("chart-ridgelines", { eyebrow: "Monthly ridgelines", title: "Monthly ridgelines", what: "Average hourly use for each month, stacked.", how: "Each ridge is one month. Higher means more use at that hour.", why: "You can see how the day shifts across the year.", source: "Imported hourly consumption." })}
+        ${this._figure("chart-daypart-stream", { eyebrow: "Daypart stream", title: "Daypart stream", what: "How your use splits across parts of the day over time.", how: "The bands are overnight, morning, afternoon, and evening.", why: "A band that grows is a part of the day that is taking more of your energy.", source: "Imported hourly consumption." })}
+        ${this._figure("chart-published-week", { eyebrow: "Published week", title: "Published week", what: "Each day of the last full week, hour by hour.", how: "Compare the days side by side.", why: "Last week is the freshest complete week PGE has published.", source: "Imported hourly consumption for the latest closed Pacific week." })}
+        ${this._figure("chart-program-savings", { eyebrow: "Program savings", title: "Program savings", what: "Year-to-date savings reported by PGE programs.", how: "The line is the reported year-to-date amount, not a sum of bills.", why: "It is the savings figure PGE publishes, separate from your usage estimate.", source: "YTD program savings mean." })}
+        ${this._figure("chart-baseload", { eyebrow: "Baseload band", title: "Baseload band", what: "Weekday average by hour with your overnight minimum as a line.", how: "The line is the lowest overnight hour in the weekday average.", why: "Anything above that line is use that turns on and off.", source: "Imported hourly consumption." })}
+        ${this._figure("chart-polar", { eyebrow: "24-hour polar clock", title: "24-hour polar clock", what: "Average weekday use around a 24-hour dial.", how: "Noon is at the top. Longer bars are hours you use more.", why: "A clock makes the daily rhythm easier to see than a list of hours.", source: "Imported hourly consumption." })}
+        ${this._figure("chart-treemap", { eyebrow: "Latest statement treemap", title: "Latest statement treemap", what: "Each block's size is that charge's share of the latest bill.", how: "Bigger blocks are a larger share of the latest statement.", why: "You can see what dominated the last bill without reading every line.", source: "Latest PDF statement families." })}
+      </section>
+      </div>
+      <div class="tab-panel" id="panel-billing" data-tab="billing" role="tabpanel" aria-labelledby="tab-billing">
+      <div id="billing"></div>
+      </div>
+      <div class="tab-panel" id="panel-tod" data-tab="tod" role="tabpanel" aria-labelledby="tab-tod">
+      <div id="tod"></div>
+      </div>
+      <div class="tab-panel" id="panel-programs" data-tab="programs" role="tabpanel" aria-labelledby="tab-programs">
       <section class="card" id="programs"></section>
-      <section class="card">
-        <details class="diagnostics" id="diagnostics"><summary>Diagnostics</summary><div id="diag-body"></div></details>
-      </section>
+      </div>
+      <dialog id="chart-dialog" class="chart-dialog" aria-labelledby="chart-dialog-title">
+        <header><h2 id="chart-dialog-title"></h2>
+          <button type="button" id="chart-dialog-close" aria-label="Close chart">×</button>
+        </header>
+        <figure>
+          <h3 class="fig-title" id="chart-dialog-figure-title"></h3>
+          <div id="chart-dialog-explainer"></div>
+          <div class="chart-host" id="chart-dialog-host" data-chart-height="560"></div>
+        </figure>
+      </dialog>
+      <dialog id="sync-drawer" class="drawer" aria-labelledby="sync-drawer-title">
+        <div class="drawer-head"><h2 id="sync-drawer-title">Sync and diagnostics</h2>
+          <button type="button" class="drawer-close" aria-label="Close">×</button></div>
+        <div class="sync-strip" id="sync"></div>
+        <div class="data-gaps" id="data-gaps"></div>
+        <h3>Diagnostics</h3>
+        <div id="diag-body"></div>
+      </dialog>
     `;
 
-    content.querySelectorAll(".tabs button").forEach((btn) => {
+    content.querySelector("#account-select")?.addEventListener("change", async (ev) => {
+      this._activeEntryId = ev.target.value;
+      this._renderShell();
+      await this._renderAll();
+    });
+    content.addEventListener("click", (ev) => {
+      const view = ev.target.closest?.("[data-view]");
+      if (view) {
+        this._selectChapterView(view.closest(".chapter"), view.dataset.view);
+        return;
+      }
+      const button = ev.target.closest?.("[data-expand], button.explore-card");
+      if (!button || button.disabled) return;
+      const id = button.dataset.expand || button.dataset.chart;
+      if (!id) return;
+      void openChartDialog(this, id, button);
+    });
+    content.querySelector("#chart-dialog")?.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      suspendChartDialog(this, { keepOpen: false });
+    });
+    content.querySelector("#chart-dialog-close")?.addEventListener("click", () => {
+      suspendChartDialog(this, { keepOpen: false });
+    });
+    this._bindPanelNavigation();
+    this._bindHints();
+    this._bindSyncPill();
+    this._observeHeaderHeight();
+    this._bindFilterInteractionGuard();
+    this._bindTodInteractionGuard();
+    this._selectPanelTab(resolvePanelTab(location.hash, this._defaultSection));
+    content.querySelector(".drawer-close")?.addEventListener("click", () => {
+      this.shadowRoot.getElementById("sync-drawer")?.close();
+    });
+    content.querySelectorAll("[data-metric]").forEach((btn) => {
       btn.addEventListener("click", async () => {
-        this._activeEntryId = btn.dataset.entry;
-        this._renderShell();
-        await this._renderAll();
+        const metric = btn.dataset.metric === "cost" ? "cost" : "kwh";
+        this._usageMetric = metric;
+        try {
+          localStorage.setItem("pge_usage_metric", metric);
+        } catch (_err) {
+          /* storage can be unavailable */
+        }
+        content.querySelectorAll("[data-metric]").forEach((peer) => {
+          peer.setAttribute("aria-pressed", String(peer === btn));
+        });
+        await this._renderRangeScope();
       });
     });
-    this._bindPersistentDetails(content.querySelector("#sync-gaps"));
+    this._bindPersistentDetails(content.querySelector("#hero"));
+    this._bindPersistentDetails(content.querySelector("#panel-analytics"));
+  }
+
+  async _softGallery(fn) {
+    try {
+      await fn();
+    } catch (err) {
+      console.warn("PGE gallery render failed", err);
+    }
   }
 
   async _renderAll() {
+    const gen = ++this._galleryRenderGen;
+    const entryId = this._activeEntryId;
+    const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
     destroyCharts(this._charts);
     this._charts = [];
-    await this._probeAvailablePresets();
+    this._galleryDays = null;
+    this._galleryBillAmount = null;
+    const presetsApplied = await this._probeAvailablePresets();
+    if (stale()) return;
     this._todBillReady = !!this._billBounds();
-    this._renderFilters();
+    if (presetsApplied || this._availablePresets) this._renderFilters();
     this._renderSync();
     await this._renderKpis();
+    if (stale()) return;
     await this._renderDataGaps();
+    if (stale()) return;
     await this._renderHero();
-    await this._renderInsights();
+    if (stale()) return;
+    await this._softGallery(() => this._renderLoadShapeGallery());
+    if (stale()) return;
+    await this._softGallery(() => this._renderInsights());
+    if (stale()) return;
     await this._renderTod();
-    this._renderBillingPrograms();
+    if (stale()) return;
+    this._renderBillingPrograms(true);
+    if (stale()) return;
+    await this._softGallery(() => this._renderLedgerCharts());
+    if (stale()) return;
+    await this._softGallery(() => this._renderWeatherMoney());
+    if (stale()) return;
     this._renderDiagnostics();
+  }
+
+  async _mountAccountGalleries() {
+    const gen = this._galleryRenderGen || 0;
+    const entryId = this._activeEntryId;
+    const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
+    await this._softGallery(() => this._renderLedgerCharts());
+    if (stale()) return;
+    await this._softGallery(() => this._renderWeatherMoney());
   }
 
   _normalizeRangeKey(key) {
@@ -1194,18 +2220,120 @@ class PgeEnergyPanel extends HTMLElement {
   _selectTodRangeKey(key) {
     this._todRangeKey = this._normalizeRangeKey(key);
     this._todCustomRange = null;
+    this._todRangeCustomOpen = false;
     this._todRangeTouched = true;
   }
 
-  async _probeAvailablePresets() {
-    if (!this._account || !this._hass) {
-      this._availablePresets = ["24h"];
+  _observeHeaderHeight() {
+    const chrome = this.shadowRoot?.querySelector(".panel-chrome");
+    const header = chrome?.querySelector(".pge-header");
+    if (!chrome || !header) return;
+    this._headerObserver?.disconnect();
+    chrome.dataset.heightWatch = "1";
+    const apply = () => {
+      const narrow = chrome.getBoundingClientRect().width <= 640;
+      const box = (narrow ? header : chrome).getBoundingClientRect();
+      this.style.setProperty("--pge-header-h", `${Math.ceil(box.height)}px`);
+    };
+    apply();
+    if (typeof ResizeObserver === "function") {
+      this._headerObserver = new ResizeObserver(apply);
+      this._headerObserver.observe(chrome);
+      this._headerObserver.observe(header);
+    }
+  }
+
+  _hostFocused(id) {
+    const active = this.shadowRoot?.activeElement;
+    const host = this.shadowRoot?.getElementById(id);
+    return !!(active && host && host.contains(active));
+  }
+
+  _filterControlFocused() {
+    return this._hostFocused("filters");
+  }
+
+  _bindTodInteractionGuard() {
+    const el = this.shadowRoot?.getElementById("tod");
+    if (!el || el.dataset.focusGuard === "1") return;
+    el.dataset.focusGuard = "1";
+    el.addEventListener("focusout", () => {
+      setTimeout(() => {
+        if (this._hostFocused("tod") || !this._todDirty) return;
+        this._todDirty = false;
+        void this._renderTod();
+      }, 0);
+    });
+  }
+
+  _bindFilterInteractionGuard() {
+    const el = this.shadowRoot?.getElementById("filters");
+    if (!el || el.dataset.focusGuard === "1") return;
+    el.dataset.focusGuard = "1";
+    el.addEventListener("focusout", () => {
+      // Let the click that moved focus finish before replacing the controls.
+      setTimeout(() => {
+        if (this._filterControlFocused()) return;
+        const dirty = this._filtersDirty;
+        const skipped = this._presetProbeSkipped;
+        this._filtersDirty = false;
+        this._presetProbeSkipped = false;
+        if (dirty) this._renderFilters();
+        if (skipped) this._schedulePresetProbe();
+      }, 0);
+    });
+  }
+
+  _schedulePresetProbe() {
+    if (this._filterControlFocused()) {
+      this._presetProbeSkipped = true;
       return;
+    }
+    if (this._presetProbeTimer) clearTimeout(this._presetProbeTimer);
+    this._presetProbeTimer = setTimeout(() => {
+      this._presetProbeTimer = null;
+      void this._refreshPresetFilters();
+    }, 300);
+  }
+
+  async _refreshPresetFilters() {
+    if (this._filterControlFocused()) {
+      this._presetProbeSkipped = true;
+      return;
+    }
+    const previousPresets = this._availablePresets ? [...this._availablePresets] : null;
+    const previousKey = this._normalizeRangeKey(this._rangeKey);
+    const applied = await this._probeAvailablePresets();
+    if (!applied) {
+      if (this._filterControlFocused()) this._filtersDirty = true;
+      return;
+    }
+    const effect = presetProbeEffect({
+      previousPresets,
+      nextPresets: this._availablePresets,
+      previousKey,
+      nextKey: this._normalizeRangeKey(this._rangeKey),
+      filterFocused: this._filterControlFocused(),
+    });
+    if (effect === "defer") {
+      this._filtersDirty = true;
+      return;
+    }
+    if (effect === "rebuild") this._renderFilters();
+  }
+
+  async _probeAvailablePresets() {
+    const gen = ++this._presetProbeGen;
+    if (!this._account || !this._hass) {
+      if (gen !== this._presetProbeGen) return false;
+      this._availablePresets = ["24h"];
+      return true;
     }
     const id = this._account.statistic_ids.consumption;
     const available = [];
     const bill = this._billBounds();
     for (const key of RANGE_PRESET_ORDER) {
+      if (gen !== this._presetProbeGen) return false;
       if (key === "cycle" || key === "last_cycle") {
         // Statement bounds alone make bill-bound presets meaningful.
         if (bill) available.push(key);
@@ -1226,6 +2354,7 @@ class PgeEnergyPanel extends HTMLElement {
         /* probe optional */
       }
     }
+    if (gen !== this._presetProbeGen) return false;
     this._availablePresets = available.length ? available : ["24h"];
     const current = this._normalizeRangeKey(this._rangeKey);
     if (current !== "custom" && !this._availablePresets.includes(current)) {
@@ -1237,12 +2366,14 @@ class PgeEnergyPanel extends HTMLElement {
       const preset = this._basePresetRange(this._rangeKey);
       if (preset?.period) this._period = preset.period;
     }
+    return true;
   }
 
   _selectRangeKey(key) {
     this._rangeKey = this._normalizeRangeKey(key);
     this._rangeShift = 0;
     this._customRange = null;
+    this._rangeCustomOpen = false;
     const preset = this._basePresetRange(this._rangeKey);
     if (preset?.period) this._period = preset.period;
   }
@@ -1259,6 +2390,8 @@ class PgeEnergyPanel extends HTMLElement {
   _renderFilters() {
     const el = this.shadowRoot.getElementById("filters");
     if (!el) return;
+    this._filtersDirty = false;
+    this._bindFilterInteractionGuard();
     this._rangeKey = this._normalizeRangeKey(this._rangeKey);
     const available = new Set(this._availablePresets || RANGE_PRESET_ORDER);
     const moreActive =
@@ -1269,6 +2402,16 @@ class PgeEnergyPanel extends HTMLElement {
       ? range.end.getTime() < published.getTime()
       : (this._rangeShift || 0) > 0;
     const label = formatRangeLabel(range.start, range.end);
+    const customOpen = !!this._rangeCustomOpen;
+    const intervalButtons = ["hour", "day", "month"]
+      .map((period) => {
+        const on = this._period === period;
+        const text = period.charAt(0).toUpperCase() + period.slice(1);
+        return `<button type="button" data-period="${period}" class="${on ? "active" : ""}" aria-pressed="${
+          on ? "true" : "false"
+        }">${text}</button>`;
+      })
+      .join("");
     const primaryButtons = RANGE_PRESET_PRIMARY.map((k) => {
       const enabled = available.has(k);
       const active = !this._customRange && this._rangeKey === k;
@@ -1285,38 +2428,44 @@ class PgeEnergyPanel extends HTMLElement {
       }>${this._escape(text)}</option>`;
     }).join("");
     el.innerHTML = `
-      ${primaryButtons}
-      <select id="range-more" class="range-more ${moreActive ? "active" : ""}" aria-label="More ranges">
-        <option value="" ${moreActive ? "" : "selected"}>More…</option>
-        ${moreOptions}
-      </select>
-      <div class="range-nav">
-        <button type="button" class="secondary" id="range-older" title="Older">◀</button>
-        <button type="button" class="secondary" id="range-newer" title="Newer" ${
-          canStepNewer ? "" : "disabled"
-        }>▶</button>
+      <div class="range-row">
+        <div class="seg range-presets" role="group" aria-label="Range presets">
+          ${primaryButtons}
+        </div>
+        <div class="range-tools">
+          <div class="stepper" role="group" aria-label="Move the window">
+            <button type="button" id="range-older" title="Older" aria-label="Older window">‹</button>
+            <span class="range-label">${this._escape(label)}</span>
+            <button type="button" id="range-newer" title="Newer" aria-label="Newer window" ${
+              canStepNewer ? "" : "disabled"
+            }>›</button>
+          </div>
+          <div class="seg interval" role="group" aria-label="Chart interval">${intervalButtons}</div>
+          <button type="button" class="ghost range-custom-toggle" id="range-custom-toggle" aria-expanded="${
+            customOpen ? "true" : "false"
+          }" aria-pressed="${customOpen || this._customRange ? "true" : "false"}" aria-controls="range-custom" aria-label="Custom range"><ha-icon icon="mdi:calendar-range"></ha-icon></button>
+          <select id="range-more" class="range-more ghost ${moreActive ? "active" : ""}" aria-label="More ranges">
+            <option value="" ${moreActive ? "" : "selected"}>More…</option>
+            ${moreOptions}
+          </select>
+        </div>
       </div>
-      <span class="range-label">${this._escape(label)}</span>
-      <div class="range-custom">
+      <div class="range-custom" id="range-custom" ${customOpen ? "" : "hidden"}>
+        <span class="range-custom-label">Custom range</span>
         <input type="datetime-local" id="range-start" aria-label="Range start" value="${this._escape(
           this._toLocalInputValue(range.start)
         )}" />
         <input type="datetime-local" id="range-end" aria-label="Range end" value="${this._escape(
           this._toLocalInputValue(new Date(Math.max(range.start.getTime(), range.end.getTime() - 1)))
         )}" />
-        <button type="button" class="secondary" id="range-apply">Apply</button>
+        <button type="button" id="range-apply">Apply</button>
       </div>
-      <select id="period">
-        <option value="hour" ${this._period === "hour" ? "selected" : ""}>Hour</option>
-        <option value="day" ${this._period === "day" ? "selected" : ""}>Day</option>
-        <option value="month" ${this._period === "month" ? "selected" : ""}>Month</option>
-      </select>
     `;
     el.querySelectorAll("[data-range]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         this._selectRangeKey(btn.dataset.range);
         this._renderFilters();
-        await this._renderHero();
+        await this._renderRangeScope();
       });
     });
     el.querySelector("#range-more").addEventListener("change", async (ev) => {
@@ -1324,7 +2473,7 @@ class PgeEnergyPanel extends HTMLElement {
       if (!key) return;
       this._selectRangeKey(key);
       this._renderFilters();
-      await this._renderHero();
+      await this._renderRangeScope();
     });
     el.querySelector("#range-older").addEventListener("click", async () => {
       if (this._customRange) {
@@ -1337,7 +2486,7 @@ class PgeEnergyPanel extends HTMLElement {
         this._rangeShift = (this._rangeShift || 0) + 1;
       }
       this._renderFilters();
-      await this._renderHero();
+      await this._renderRangeScope();
     });
     el.querySelector("#range-newer").addEventListener("click", async () => {
       if (this._customRange) {
@@ -1354,7 +2503,7 @@ class PgeEnergyPanel extends HTMLElement {
         this._rangeShift = Math.max(0, (this._rangeShift || 0) - 1);
       }
       this._renderFilters();
-      await this._renderHero();
+      await this._renderRangeScope();
     });
     el.querySelector("#range-apply").addEventListener("click", async () => {
       const startRaw = el.querySelector("#range-start").value;
@@ -1370,13 +2519,37 @@ class PgeEnergyPanel extends HTMLElement {
       if (end <= start) return;
       this._customRange = { start, end };
       this._rangeShift = 0;
+      this._rangeCustomOpen = true;
       this._renderFilters();
-      await this._renderHero();
+      await this._renderRangeScope();
     });
-    el.querySelector("#period").addEventListener("change", async (ev) => {
-      this._period = ev.target.value;
-      await this._renderHero();
+    el.querySelector("#range-custom-toggle").addEventListener("click", () => {
+      this._rangeCustomOpen = !this._rangeCustomOpen;
+      this._renderFilters();
     });
+    el.querySelectorAll("[data-period]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const period = btn.dataset.period;
+        if (!period || period === this._period) return;
+        this._period = period;
+        el.querySelectorAll("[data-period]").forEach((peer) => {
+          const on = peer === btn;
+          peer.classList.toggle("active", on);
+          peer.setAttribute("aria-pressed", String(on));
+        });
+        await this._renderRangeScope();
+      });
+    });
+  }
+
+  async _renderRangeScope() {
+    const rangeGen = ++this._rangeRenderGen;
+    const entryId = this._activeEntryId;
+    const gen = this._galleryRenderGen;
+    const stale = () =>
+      this._rangeRenderGen !== rangeGen || this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
+    await this._renderHero();
+    if (stale()) return;
   }
 
   async _renderDataGaps() {
@@ -1468,8 +2641,7 @@ class PgeEnergyPanel extends HTMLElement {
     }
 
     el.innerHTML = `
-      <h3>PGE publication gaps</h3>
-      <p class="muted">What Portland General Electric has not published (or not finished publishing) yet — these gaps are upstream of Home Assistant.</p>
+      <h3>PGE publication gaps ${this._hint("What Portland General Electric has not published, or has not finished publishing, yet. These gaps are upstream of Home Assistant.")}</h3>
       <ul>
         ${items
           .map(
@@ -1481,10 +2653,149 @@ class PgeEnergyPanel extends HTMLElement {
     `;
   }
 
+  _hint(text, options = {}) {
+    const asHtml = options.html === true;
+    const label = options.label || "More info";
+    const body = asHtml ? text : this._escape(text);
+    return `<span class="hint"><button type="button" class="hint-btn" aria-label="${this._escape(label)}" aria-expanded="false">?</button><span class="hint-pop" role="tooltip">${body}</span></span>`;
+  }
+
+  _bindHints() {
+    if (this._hintsBound) return;
+    this._hintsBound = true;
+    const fine = window.matchMedia("(hover: hover) and (pointer: fine)");
+    this.shadowRoot.addEventListener("click", (ev) => {
+      const btn = ev.target.closest?.(".hint-btn");
+      if (!btn || fine.matches) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const hint = btn.closest(".hint");
+      const willOpen = !hint.classList.contains("open");
+      this.shadowRoot.querySelectorAll(".hint.open").forEach((el) => {
+        el.classList.remove("open");
+        el.querySelector(".hint-btn")?.setAttribute("aria-expanded", "false");
+      });
+      hint.classList.toggle("open", willOpen);
+      btn.setAttribute("aria-expanded", String(willOpen));
+    });
+    this._onHintOutside = (ev) => {
+      const path = typeof ev.composedPath === "function" ? ev.composedPath() : [];
+      for (const open of this.shadowRoot?.querySelectorAll(".hint.open") || []) {
+        if (path.includes(open)) continue;
+        open.classList.remove("open");
+        open.querySelector(".hint-btn")?.setAttribute("aria-expanded", "false");
+      }
+    };
+    document.addEventListener("click", this._onHintOutside);
+  }
+
+  _integrationVersion() {
+    const match = String(import.meta.url).match(/[?&]v=([^&#]+)/);
+    return match ? decodeURIComponent(match[1]) : "";
+  }
+
+  _bindSyncPill() {
+    const wrap = this.shadowRoot.querySelector(".sync-pill-wrap");
+    const pill = wrap?.querySelector("#sync-pill");
+    if (!wrap || !pill || wrap.dataset.bound === "1") return;
+    wrap.dataset.bound = "1";
+    if (this._onSyncPopOutside) document.removeEventListener("click", this._onSyncPopOutside);
+    const fine = window.matchMedia("(hover: hover) and (pointer: fine)");
+    pill.addEventListener("click", (ev) => {
+      if (fine.matches) {
+        this.shadowRoot.getElementById("sync-drawer")?.showModal();
+        return;
+      }
+      ev.stopPropagation();
+      const open = wrap.classList.toggle("open");
+      pill.setAttribute("aria-expanded", String(open));
+    });
+    wrap.addEventListener("click", (ev) => {
+      if (!ev.target.closest("[data-open-sync]")) return;
+      ev.preventDefault();
+      wrap.classList.remove("open");
+      pill.setAttribute("aria-expanded", "false");
+      this.shadowRoot.getElementById("sync-drawer")?.showModal();
+    });
+    this._onSyncPopOutside = (ev) => {
+      if (!wrap.classList.contains("open")) return;
+      const path = typeof ev.composedPath === "function" ? ev.composedPath() : [];
+      if (path.includes(wrap)) return;
+      wrap.classList.remove("open");
+      pill.setAttribute("aria-expanded", "false");
+    };
+    document.addEventListener("click", this._onSyncPopOutside);
+  }
+
+  _syncPopHtml(sync) {
+    const row = (label, value) => {
+      const text = value == null || value === "" ? "" : String(value);
+      if (!text) return "";
+      return `<dt>${this._escape(label)}</dt><dd>${this._escape(text)}</dd>`;
+    };
+    const lastOk = this._fmtPacificDateTime(sync.last_successful_update);
+    const newest = this._fmtPacificDateTime(sync.newest_interval) ||
+      this._fmtPacificDateTime(stateDisplay(this._hass, this._account?.entity_ids?.latest_interval, ""));
+    const report = syncHasReportableError(sync)
+      ? `<a href="${this._escape(
+          syncIssueUrl({
+            version: this._integrationVersion(),
+            haVersion: this._hass?.config?.version || "",
+            sync,
+          }),
+        )}" target="_blank" rel="noopener noreferrer">Report this sync issue</a>`
+      : "";
+    return `
+      <dl>
+        ${row("Status", sync.status || "idle")}
+        ${row("Phase", sync.phase)}
+        ${row("Last success", lastOk || "Not yet")}
+        ${row("Latest interval", newest)}
+        ${row("Detail", sync.message)}
+      </dl>
+      ${sync.error ? `<p class="error">${this._escape(sync.error)}</p>` : ""}
+      ${
+        sync.last_api_error && sync.last_api_error !== sync.error
+          ? `<p class="error">${this._escape(sync.last_api_error)}</p>`
+          : ""
+      }
+      <div class="sync-pop-actions">
+        <button type="button" data-open-sync>Open diagnostics</button>
+        ${report}
+      </div>
+    `;
+  }
+
   _renderSync() {
     const el = this.shadowRoot.getElementById("sync");
-    if (!el || !this._account) return;
+    if (!this._account) return;
     const sync = this._syncByEntry[this._account.entry_id] || {};
+    const pill = syncPillState(sync);
+    const pillEl = this.shadowRoot.getElementById("sync-pill");
+    if (pillEl) {
+      pillEl.setAttribute("aria-label", pill.text);
+      let text = pillEl.querySelector(".sync-pill-text");
+      if (!text) {
+        text = document.createElement("span");
+        text.className = "sync-pill-text";
+        pillEl.replaceChildren(text);
+      }
+      if (text.textContent !== pill.text) text.textContent = pill.text;
+      if (!pillEl.classList.contains(pill.tone)) {
+        pillEl.classList.remove("good", "warn", "critical");
+        pillEl.classList.add(pill.tone);
+      }
+    }
+    const pop = this.shadowRoot.getElementById("sync-pop");
+    if (pop) {
+      const popHtml = this._syncPopHtml(sync);
+      const sig = `${pill.text}|${sync.status || ""}|${sync.phase || ""}|${sync.message || ""}|${sync.error || ""}|${sync.last_api_error || ""}|${sync.last_successful_update || ""}`;
+      if (pop.dataset.sig !== sig) {
+        pop.dataset.sig = sig;
+        pop.innerHTML = popHtml;
+      }
+    }
+    if (!el) return;
     const pct = sync.percent ?? 0;
     const status = sync.status || "idle";
     const eta =
@@ -1505,7 +2816,9 @@ class PgeEnergyPanel extends HTMLElement {
         <button class="btn" type="button" id="btn-refresh">Refresh</button>
         <button class="btn secondary" type="button" id="btn-backfill">Backfill</button>
         <span class="muted">Latest interval: ${this._escape(
-          sync.newest_interval || stateDisplay(this._hass, this._account.entity_ids.latest_interval)
+          this._fmtPacificDateTime(sync.newest_interval) ||
+            this._fmtPacificDateTime(stateDisplay(this._hass, this._account.entity_ids.latest_interval)) ||
+            stateDisplay(this._hass, this._account.entity_ids.latest_interval)
         )}</span>
       </div>
     `;
@@ -1526,6 +2839,8 @@ class PgeEnergyPanel extends HTMLElement {
   async _renderKpis() {
     const el = this.shadowRoot.getElementById("kpis");
     if (!el || !this._account) return;
+    const kpiEntry = this._activeEntryId;
+    const kpiGen = this._galleryRenderGen || 0;
     const e = this._account.entity_ids;
     // PGE publishes overnight (~24h lag) and the tip interval is often incomplete.
     // KPIs use closed days / billing-period totals only — never "today" or tip samples.
@@ -1574,6 +2889,8 @@ class PgeEnergyPanel extends HTMLElement {
 
     let sparkKwh = [];
     let sparkCost = [];
+    let usualDelta = null;
+    let usualComplete = false;
     let weekKwh = null;
     let weekCost = null;
     let weekRange = "Sun → yesterday";
@@ -1589,20 +2906,20 @@ class PgeEnergyPanel extends HTMLElement {
     try {
       const publishedEnd = publishedDataEnd();
       const weekStart = pacificWeekStartUtc();
-      const sparkStart = new Date(publishedEnd.getTime() - 14 * 24 * 60 * 60 * 1000);
+      const sparkStart = new Date(publishedEnd.getTime() - 31 * 24 * 60 * 60 * 1000);
       const yesterdayStart = pacificMidnightUtc(priorPacificYmd(pacificYmd(publishedEnd)));
       const [kwhSeries, costSeries, weekKwhSum, weekCostSum, compensationDaySum, compensationSparkSeries] = await Promise.all([
         fetchStatisticSeries(this._hass, this._account.statistic_ids.consumption, {
           start: sparkStart,
           end: publishedEnd,
           period: "day",
-          maxPoints: 32,
+          maxPoints: 40,
         }),
         fetchStatisticSeries(this._hass, this._account.statistic_ids.cost, {
           start: sparkStart,
           end: publishedEnd,
           period: "day",
-          maxPoints: 32,
+          maxPoints: 40,
         }),
         sumStatisticChange(this._hass, this._account.statistic_ids.consumption, {
           start: weekStart,
@@ -1626,11 +2943,40 @@ class PgeEnergyPanel extends HTMLElement {
           maxPoints: 32,
         }),
       ]);
-      sparkKwh = kwhSeries.values || [];
+      sparkKwh = (kwhSeries.values || []).slice(-30);
       sparkCost = costSeries.values || [];
       weekKwh = weekKwhSum.total;
       weekCost = weekCostSum.total;
       yesterdayCompensationStat = compensationDaySum.count > 0 ? compensationDaySum.total : null;
+      const weekStartDay = pacificYmd(weekStart);
+      const weekEndDay = pacificYmd(new Date(publishedEnd.getTime() - 1));
+      if (weekStartDay && weekEndDay) {
+        weekRange = `${weekStartDay} → ${weekEndDay}`;
+      }
+      const weekStartSec = Math.floor(weekStart.getTime() / 1000);
+      sparkWeekKwh = (kwhSeries.xs || [])
+        .map((t, i) => (t >= weekStartSec ? kwhSeries.values[i] : null))
+        .filter((v) => v != null);
+      sparkWeekCost = (costSeries.xs || [])
+        .map((t, i) => (t >= weekStartSec ? costSeries.values[i] : null))
+        .filter((v) => v != null);
+      const yesterdayYmd = pacificYmd(new Date(publishedEnd.getTime() - 1));
+      const byDay = new Map();
+      (kwhSeries.xs || []).forEach((ts, index) => {
+        const value = Number(kwhSeries.values?.[index]);
+        if (Number.isFinite(ts) && Number.isFinite(value)) byDay.set(pacificYmd(ts), value);
+      });
+      const prior = [];
+      let cursor = priorPacificYmd(yesterdayYmd);
+      for (let day = 0; day < 7; day++) {
+        prior.push(byDay.has(cursor) ? byDay.get(cursor) : null);
+        cursor = priorPacificYmd(cursor);
+      }
+      usualComplete = prior.every((value) => value != null) && byDay.has(yesterdayYmd);
+      if (usualComplete) {
+        const avg = prior.reduce((sum, value) => sum + value, 0) / prior.length;
+        usualDelta = pctDelta(byDay.get(yesterdayYmd), avg);
+      }
       {
         const compByX = new Map();
         const compXs = compensationSparkSeries.xs || [];
@@ -1652,18 +2998,6 @@ class PgeEnergyPanel extends HTMLElement {
           });
         }
       }
-      const weekStartDay = pacificYmd(weekStart);
-      const weekEndDay = pacificYmd(new Date(publishedEnd.getTime() - 1));
-      if (weekStartDay && weekEndDay) {
-        weekRange = `${weekStartDay} → ${weekEndDay}`;
-      }
-      const weekStartSec = Math.floor(weekStart.getTime() / 1000);
-      sparkWeekKwh = (kwhSeries.xs || [])
-        .map((t, i) => (t >= weekStartSec ? kwhSeries.values[i] : null))
-        .filter((v) => v != null);
-      sparkWeekCost = (costSeries.xs || [])
-        .map((t, i) => (t >= weekStartSec ? costSeries.values[i] : null))
-        .filter((v) => v != null);
       // Sum imported hourly intervals over the bill period [start, end).
       // Exclusive end matches PGE billingPeriodEndDate (midnight Pacific).
       if (cycleStart && cycleEnd) {
@@ -1749,7 +3083,15 @@ class PgeEnergyPanel extends HTMLElement {
         : "—";
 
 
+    if (this._activeEntryId !== kpiEntry || (this._galleryRenderGen || 0) !== kpiGen) return;
     const spark = (vals, color) => sparklineSvg(vals || [], { stroke: color });
+    const usualChip = !usualComplete || usualDelta == null
+      ? `<div class="delta">Not enough complete days to compare</div>`
+      : Math.abs(usualDelta) <= 5
+        ? `<div class="delta-chip">about usual</div>`
+        : usualDelta > 0
+          ? `<div class="delta-chip warn">▲ ${Math.round(usualDelta)}% vs your usual day</div>`
+          : `<div class="delta-chip good">▼ ${Math.round(Math.abs(usualDelta))}% vs your usual day</div>`;
     const hasYesterdayExport = yesterdayReturn != null && yesterdayReturn > 0;
     // yesterday_compensation is disabled by default; fall back to the imported
     // `_compensation` statistic so export days still show the net interval amount.
@@ -1776,36 +3118,79 @@ class PgeEnergyPanel extends HTMLElement {
     // Pair the money KPI with a matching trend: net interval amount uses the
     // compensation-adjusted series; import cost uses the raw import costs.
     const moneySpark = hasYesterdayCredit && sparkNetCost ? sparkNetCost : sparkCost;
+    const kpiSig = [
+      kpiEntry,
+      yesterdayKwh,
+      yesterdayReturn,
+      yesterdayMoneyValue,
+      yesterdayMoneyNote,
+      hasYesterdayExport,
+      weekKwh,
+      weekCost,
+      weekRange,
+      cycleCost,
+      cycleKwh,
+      cycleRange,
+      usageCycleCost,
+      usageCycleKwh,
+      kwhDelta,
+      costDelta,
+      sinceStatementCost,
+      sinceStatementKwh,
+      sinceStatementRange,
+      estCharges,
+      estRange,
+      cycleProgress,
+      dueStatus,
+      amountDue,
+      dueDate,
+      lastPayment,
+      lastPaymentDate,
+      usualChip,
+      estNextMin,
+      estNextMax,
+      (sparkKwh || []).join(","),
+      (moneySpark || []).join(","),
+      (sparkWeekKwh || []).join(","),
+      (sparkWeekCost || []).join(","),
+    ].join("|");
+    // Identical glance markup still replaces nodes. That reflow scrolls the page
+    // and resets an open header select back to the first item.
+    if (this._kpiSig === kpiSig && el.childElementCount) return;
+    this._kpiSig = kpiSig;
+    const exportNote = hasYesterdayExport
+      ? `<div class="delta">Export ${this._fmt(yesterdayReturn, " kWh")}</div>`
+      : "";
     el.innerHTML = `
-      <h2>At a glance</h2>
-      <p class="muted" style="margin:0 0 12px">Yesterday and week use imported intervals through yesterday (Pacific week starts Sunday; no complete today). Statement = PGE billDetails. Usage cycle = imported hourly sum over that period. Since statement = usage after the statement end through yesterday. PGE estimate = PGE's own open-cycle projection, which does not reconcile with the interval sums. Interval net amount is an estimate and does not model PGE monthly/TOD credit buckets or annual true-up.</p>
-      <div class="kpi-row">
-        <div class="kpi"><div class="label">Yesterday import</div><div class="value">${this._fmt(yesterdayKwh, " kWh")}</div>${spark(sparkKwh, "var(--pge-series-kwh)")}</div>
-        ${
-          hasYesterdayExport
-            ? `<div class="kpi"><div class="label">Yesterday export</div><div class="value">${this._fmt(yesterdayReturn, " kWh")}</div></div>`
-            : ""
-        }
-        <div class="kpi"><div class="label">${yesterdayMoneyLabel}</div><div class="value">${yesterdayMoneyValue}</div>${
-          yesterdayMoneyNote
-            ? `<div class="delta">${this._escape(yesterdayMoneyNote)}</div>`
-            : ""
-        }${spark(moneySpark, "var(--pge-series-cost)")}</div>
-        <div class="kpi"><div class="label">Week import</div><div class="value">${this._fmt(weekKwh, " kWh")}</div><div class="delta">${this._escape(weekRange)}</div>${spark(sparkWeekKwh, "var(--pge-series-kwh)")}</div>
-        <div class="kpi"><div class="label">Week import cost</div><div class="value">${this._fmt(weekCost, "", true)}</div><div class="delta">${this._escape(weekRange)}</div>${spark(sparkWeekCost, "var(--pge-series-cost)")}</div>
-        <div class="kpi kpi-statement"><div class="label">Statement cycle cost</div><div class="value">${this._fmt(cycleCost, "", true)}</div><div class="delta">${this._escape(cycleRange)}</div></div>
-        <div class="kpi kpi-statement"><div class="label">Statement cycle kWh</div><div class="value">${this._fmt(cycleKwh, " kWh")}</div><div class="delta">${this._escape(cycleRange)}</div></div>
-        <div class="kpi kpi-usage"><div class="label">Usage cycle import cost</div><div class="value">${this._fmt(usageCycleCost, "", true)}</div><div class="delta">${this._escape(fmtDelta(costDelta, true))}</div></div>
-        <div class="kpi kpi-usage"><div class="label">Usage cycle import kWh</div><div class="value">${this._fmt(usageCycleKwh, " kWh")}</div><div class="delta">${this._escape(fmtDelta(kwhDelta, false))}</div></div>
-        <div class="kpi kpi-usage"><div class="label">Since statement import cost</div><div class="value">${this._fmt(sinceStatementCost, "", true)}</div><div class="delta">${this._escape(sinceStatementRange)}</div></div>
-        <div class="kpi kpi-usage"><div class="label">Since statement import kWh</div><div class="value">${this._fmt(sinceStatementKwh, " kWh")}</div><div class="delta">${this._escape(sinceStatementRange)}</div></div>
-        <div class="kpi kpi-estimate"><div class="label">PGE est. charges so far</div><div class="value">${this._fmt(estCharges, "", true)}</div><div class="delta">${this._escape(cycleProgress)}</div></div>
-        <div class="kpi kpi-estimate kpi-dual"><div class="label">PGE est. next bill</div><div class="value">${this._escape(estRange)}</div><div class="delta">${this._escape(cycleProgress)}</div></div>
-        <div class="kpi status-${dueStatus}"><div class="label">Amount due</div><div class="value">${this._fmt(amountDue, "", true)}</div><div class="delta">Due ${this._escape(this._fmtDate(dueDate) || "—")}</div></div>
-        <div class="kpi"><div class="label">Last payment</div><div class="value">${this._fmt(lastPayment, "", true)}</div><div class="delta">${this._escape(this._fmtDate(lastPaymentDate) || "—")}</div></div>
+      <h2>At a glance ${this._hint("Yesterday and week use imported intervals through yesterday (Pacific week starts Sunday; no complete today). Statement = PGE billDetails. Usage cycle = imported hourly sum over that period. Since statement = usage after the statement end through yesterday. PGE estimate = PGE's own open-cycle projection, which does not reconcile with the interval sums. Interval net amount is an estimate and does not model PGE monthly/TOD credit buckets or annual true-up.")}</h2>
+      <div class="kpi-grid">
+        <div class="kpi kpi-usage"><div class="label"><span class="group">Yesterday</span>Import</div><div class="value">${this._fmt(yesterdayKwh, " kWh")}</div>${usualChip}${exportNote}${spark(sparkKwh, "var(--pge-series-kwh)")}</div>
+        <div class="kpi kpi-statement"><div class="label"><span class="group">Yesterday</span>Cost</div><div class="value">${yesterdayMoneyValue}</div>${yesterdayMoneyNote ? `<div class="delta">${this._escape(yesterdayMoneyNote)}</div>` : ""}${spark(moneySpark, "var(--pge-series-cost)")}</div>
+        <div class="kpi kpi-usage"><div class="label"><span class="group">This week</span>Import</div><div class="value">${this._fmt(weekKwh, " kWh")}</div><div class="delta">${this._fmtRangeDelta(weekRange)}</div>${spark(sparkWeekKwh, "var(--pge-series-kwh)")}</div>
+        <div class="kpi kpi-statement"><div class="label"><span class="group">This week</span>Cost</div><div class="value">${this._fmt(weekCost, "", true)}</div><div class="delta">${this._fmtRangeDelta(weekRange)}</div>${spark(sparkWeekCost, "var(--pge-series-cost)")}</div>
+        <div class="kpi kpi-usage"><div class="label"><span class="group">Statement</span>kWh</div><div class="value">${this._fmt(cycleKwh, " kWh")}</div><div class="delta">${this._fmtRangeDelta(cycleRange)}</div></div>
+        <div class="kpi kpi-statement"><div class="label"><span class="group">Statement</span>Cost</div><div class="value">${this._fmt(cycleCost, "", true)}</div><div class="delta">${this._fmtRangeDelta(cycleRange)}</div></div>
+        <div class="kpi kpi-usage"><div class="label"><span class="group">Statement</span>Import</div><div class="value">${this._fmt(usageCycleKwh, " kWh")}</div><div class="delta">${this._escape(fmtDelta(kwhDelta, false))}</div></div>
+        <div class="kpi kpi-statement"><div class="label"><span class="group">Statement</span>Import cost</div><div class="value">${this._fmt(usageCycleCost, "", true)}</div><div class="delta">${this._escape(fmtDelta(costDelta, true))}</div></div>
+        <div class="kpi kpi-usage"><div class="label"><span class="group">Since statement</span>Import</div><div class="value">${this._fmt(sinceStatementKwh, " kWh")}</div><div class="delta">${this._fmtRangeDelta(sinceStatementRange)}</div></div>
+        <div class="kpi kpi-statement"><div class="label"><span class="group">Since statement</span>Cost</div><div class="value">${this._fmt(sinceStatementCost, "", true)}</div><div class="delta">${this._fmtRangeDelta(sinceStatementRange)}</div></div>
+        <div class="kpi kpi-estimate"><div class="label"><span class="group">Account</span>Charges so far</div><div class="value">${this._fmt(estCharges, "", true)}</div><div class="delta">${this._escape(cycleProgress)}</div></div>
+        <div class="kpi kpi-estimate"><div class="label"><span class="group">Account</span>Next bill</div><div class="value">${this._escape(estRange)}</div><div class="delta">${this._escape(cycleProgress)}</div></div>
+        <div class="kpi status-${dueStatus}"><div class="label"><span class="group">Account</span>Amount due</div><div class="value">${this._fmt(amountDue, "", true)}</div><div class="delta">Due ${this._escape(this._fmtDate(dueDate) || "—")}</div></div>
+        <div class="kpi status-${dueStatus}"><div class="label"><span class="group">Account</span>Last payment</div><div class="value">${this._fmt(lastPayment, "", true)}</div><div class="delta">${this._escape(this._fmtDate(lastPaymentDate) || "—")}</div></div>
       </div>
     `;
     this._bindGlanceKpiClipboard(el);
+    const story = this.shadowRoot.getElementById("story");
+    if (story) {
+      const rows = storySummary({
+        estimate: { low: estNextMin, high: estNextMax },
+      });
+      story.hidden = rows.length === 0;
+      story.innerHTML = rows
+        .map((row) => `<p class="story-line tone-${row.tone}">${this._escape(row.text)}</p>`)
+        .join("");
+    }
   }
 
   /** Wire At a glance KPI tiles to copy label/value/delta on click or Enter/Space. */
@@ -1893,55 +3278,501 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   async _rebuildThemeCharts() {
+    const gen = ++this._galleryRenderGen;
+    const entryId = this._activeEntryId;
+    const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
     this._disposeHostCharts(
+      this.shadowRoot.getElementById("chart-overview-usage"),
       this.shadowRoot.getElementById("chart-usage"),
       this.shadowRoot.getElementById("scatter"),
       this.shadowRoot.getElementById("cost-per-kwh"),
-      this.shadowRoot.getElementById("billed-paid"),
       this.shadowRoot.getElementById("heatmap-kwh"),
       this.shadowRoot.getElementById("heatmap-temp"),
       this.shadowRoot.getElementById("ledger-bill"),
       this.shadowRoot.getElementById("ledger-kwh")
     );
     await this._renderHero();
-    await this._renderInsights();
-    await this._renderLedgerCharts();
+    if (stale()) return;
+    await this._softGallery(() => this._renderLoadShapeGallery());
+    if (stale()) return;
+    await this._softGallery(() => this._renderInsights());
+    if (stale()) return;
+    await this._softGallery(() => this._renderLedgerCharts());
+    if (stale()) return;
+    await this._softGallery(() => this._renderTodGallery());
+    if (stale()) return;
+    await this._softGallery(() => this._renderWeatherMoney());
+  }
+
+  /** One gallery pass after the active entry's sync reaches complete. */
+  _selectChapterView(chapter, id) {
+    if (!chapter) return;
+    const target = [...chapter.querySelectorAll("[data-view-panel]")].find((view) => view.dataset.viewPanel === id);
+    const chip = [...chapter.querySelectorAll("[data-view]")].find((button) => button.dataset.view === id && !button.disabled);
+    if (!target || !chip) return;
+    for (const view of chapter.querySelectorAll("[data-view-panel]")) view.hidden = view !== target;
+    for (const button of chapter.querySelectorAll("[data-view]")) {
+      button.setAttribute("aria-pressed", String(button === chip));
+    }
+    try { localStorage.setItem("pge_chapter_view_" + chapter.dataset.chapter, id); }
+    catch (_err) { /* storage can be unavailable */ }
+    this._resizeChartsUnder(target);
+  }
+
+  _mountDeferred(record) {
+    if (record.promise) return record.promise;
+    const host = record.sourceHost;
+    record.promise = (async () => {
+      try {
+        const chart = await runGalleryFactory(this, record, host);
+        if (!galleryRecordCurrent(this, record)) return;
+        if (chart) this._charts.push(chart);
+        else host.closest("figure")?.setAttribute("hidden", "");
+      } catch (err) {
+        if (galleryRecordCurrent(this, record)) {
+          host.textContent = "This chart could not load. Refresh to try again.";
+          console.warn("PGE chart initialization failed", err);
+        }
+      } finally {
+        if (galleryRecordCurrent(this, record)) host.classList.remove("chart-skeleton");
+      }
+    })();
+    return record.promise;
+  }
+
+  async _refreshGalleriesAfterSync() {
+    const gen = ++this._galleryRenderGen;
+    const entryId = this._activeEntryId;
+    const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
+    this._pendingMounts = new Map();
+    this._chartFactories = new Map();
+    if (await rerenderFactoryHosts(this, stale)) await this._resumeChartDialog?.();
   }
 
   async _renderHero() {
     const account = this._account;
     if (!account) return;
-    const range = this._resolveChartRange();
-    const period = this._period || range.period;
+    const stamp = { entryId: this._activeEntryId, gen: this._galleryRenderGen || 0 };
+    const stale = () =>
+      stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0);
+    const usageRange = this._resolveChartRange();
+    const usagePeriod = this._period || usageRange.period;
+    const overviewRange = this._basePresetRange("24h");
     const ids = account.statistic_ids;
     const colors = seriesColors(this);
     // High ceiling so range accounting is not LTTB-downsampled away.
     const maxPoints = 20000;
 
-    const raw = await this._fetchUsageSeries(ids, range.start, range.end, period, maxPoints);
-    // Chart view uses projectDirectionalUsage shape; accounting uses projectUsageSeries.
-    const chartProjection = projectDirectionalUsage(raw);
-    const accountingProjection = projectUsageSeries(raw);
-    this._lastSeries = { ...raw, projection: accountingProjection, range, period };
+    const usageRaw = await this._fetchUsageSeries(
+      ids,
+      usageRange.start,
+      usageRange.end,
+      usagePeriod,
+      maxPoints,
+    );
+    if (stale()) return;
+    const usageChartProjection = projectDirectionalUsage(usageRaw);
+    const accountingProjection = projectUsageSeries(usageRaw);
+    this._lastSeries = {
+      ...usageRaw,
+      projection: accountingProjection,
+      range: usageRange,
+      period: usagePeriod,
+    };
 
-    const usageHost = this.shadowRoot.getElementById("chart-usage");
-    if (usageHost) {
-      this._disposeHostCharts(usageHost);
-      const chart = await createUsageComboChart(usageHost, {
-        kwh: { xs: raw.kwh?.xs || [], ys: raw.kwh?.values || [] },
-        returned: { xs: raw.returned?.xs || [], ys: raw.returned?.values || [] },
-        cost: { xs: raw.cost?.xs || [], ys: raw.cost?.values || [] },
-        compensation: {
-          xs: raw.compensation?.xs || [],
-          ys: raw.compensation?.values || [],
-        },
-        temp: { xs: raw.temp?.xs || [], ys: raw.temp?.means || [] },
-        colors,
-        projection: chartProjection,
-      });
-      if (chart) this._charts.push(chart);
+    const reuseOverview =
+      usageRange.start.getTime() === overviewRange.start.getTime() &&
+      usageRange.end.getTime() === overviewRange.end.getTime() &&
+      usagePeriod === "hour";
+    let overviewRaw = usageRaw;
+    let overviewProjection = usageChartProjection;
+    if (!reuseOverview) {
+      overviewRaw = await this._fetchUsageSeries(
+        ids,
+        overviewRange.start,
+        overviewRange.end,
+        "hour",
+        maxPoints,
+      );
+      if (stale()) return;
+      overviewProjection = projectDirectionalUsage(overviewRaw);
     }
+
+    const usagePainted = await this._paintUsageCombo(
+      "chart-usage",
+      usageRaw,
+      usageChartProjection,
+      usagePeriod,
+      this._usageMetric,
+      stamp,
+      colors,
+    );
+    if (!usagePainted) return;
+    const overviewPainted = await this._paintUsageCombo(
+      "chart-overview-usage",
+      overviewRaw,
+      overviewProjection,
+      "hour",
+      "kwh",
+      stamp,
+      colors,
+    );
+    if (!overviewPainted) return;
+    this._setOverviewUsageTitle(overviewRange);
     void this._renderUsageStats();
+  }
+
+  _setOverviewUsageTitle(range) {
+    const heading = this.shadowRoot.querySelector("#overview-usage-card > h2");
+    if (!heading) return;
+    heading.textContent = `Last 24 hours · ${formatRangeLabel(range.start, range.end)}`;
+  }
+
+  async _paintUsageCombo(hostId, raw, projection, period, metric, stamp, colors) {
+    const usageHost = this.shadowRoot.getElementById(hostId);
+    if (!usageHost) return true;
+    this._disposeHostCharts(usageHost);
+    const chart = await createUsageComboChart(usageHost, {
+      kwh: { xs: raw.kwh?.xs || [], ys: raw.kwh?.values || [] },
+      returned: { xs: raw.returned?.xs || [], ys: raw.returned?.values || [] },
+      cost: { xs: raw.cost?.xs || [], ys: raw.cost?.values || [] },
+      compensation: {
+        xs: raw.compensation?.xs || [],
+        ys: raw.compensation?.values || [],
+      },
+      temp: { xs: raw.temp?.xs || [], ys: raw.temp?.means || [] },
+      colors,
+      projection,
+      periodColors: period === "hour" ? todColors(usageHost) : null,
+      metric,
+    });
+    if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) {
+      try {
+        chart?.destroy?.();
+      } catch (_err) {
+        /* account changed while the usage chart was initializing */
+      }
+      return false;
+    }
+    if (chart) this._charts.push(chart);
+    return true;
+  }
+
+  _plainChart(technical, source) {
+    const known = {
+      "Usage combo": ["Your energy, hour by hour", "Energy you used, outdoor temperature, and PGE's usage estimate on one chart.", "Bars are energy, colored by Time of Day when the range is hourly. The lines are temperature and the amount PGE estimated.", "You can see busy hours, the weather, and the estimate together."],
+      "Typical day": ["A typical weekday vs weekend", "Your average use for each hour, weekdays against weekends, with your overnight floor.", "The higher line is the busier kind of day. The floor line is overnight power.", "It shows when a normal day peaks."],
+      "Hour by weekday": ["Your weekly rhythm", "Darker squares are hours when you usually use more.", "Rows are days of the week and columns are hours.", "A dark column is a habit, not a one-off."],
+      "Daily kWh histogram": ["How big is a normal day?", "How many days fell into each daily usage range.", "Taller bars are ranges that happen more often.", "You can see what a normal day looks like for this home."],
+      "Year over year": ["This year vs past years", "Monthly totals for each year. Months with missing days are left out.", "Each line is a year. A gap means that month was incomplete.", "You can compare seasons without a partial month pretending to be low."],
+      "Billing-cycle race": ["This bill vs last bill, day by day", "Running total for the current bill next to the last bill at the same day.", "Day 1 is the first day of each bill. A gap means a missing day.", "You can see whether this bill is ahead of the last one."],
+      "Daily spread": ["Unusual days", "Days above the top line or below the bottom line were far from normal for you.", "The middle line is your average. The outer lines are unusually high or low.", "Those days are worth a second look."],
+      "Always-on load history": ["Always-on power over time", "Your lowest overnight use each night. A lasting rise often means a device that never turns off.", "Each point is one complete night. Missing nights are gaps.", "A step up that stays up is usually a new always-on device."],
+      "Duck curve": ["Solar export vs use by hour", "When you send energy to the grid and when you pull from it.", "Import and export are separate lines across the day.", "You can see the hours solar covers your use."],
+      "Duck curve by month": ["Solar export and use by month", "Monthly totals of energy used and exported, with PGE's estimates.", "Each month shows use, export, and PGE's estimate.", "It shows how solar and use change through the year."],
+      "Weather vs usage": ["Hotter and colder days vs your use", "Each dot is a day: outdoor temperature against energy used.", "Right is hotter. Up is more energy.", "The slope is how much weather moves your use."],
+      "Degree days vs kWh": ["Heating and cooling demand vs your use", "How much heating or cooling the weather called for, next to what you used.", "One line is energy and one is degree days.", "They rise together when weather is driving the bill."],
+      "Temperature bins": ["How temperature changes your daily use", "Your average day in each outdoor temperature band.", "Each bar is the average day in that temperature band.", "You can see which temperatures cost the most energy."],
+      "Weather-normalized counterfactual": ["Is it the weather, or is it you?", "What the weather alone predicts you would use, next to what you used.", "The top pane is actual and predicted. The lower pane is the running gap.", "A growing gap means your use changed beyond the weather."],
+      "Monthly average rate": ["PGE's estimated cost per kWh each month", "Monthly average cost per kWh from PGE's estimate.", "Each bar is that month's average from PGE's hourly estimate.", "It is an estimate, not the billed rate."],
+      "kWh calendar": ["Your year in usage", "One square per day, darker means more energy.", "Read across a month and down the years.", "Dark days are the ones that used the most."],
+      "Temperature calendar": ["Your year in temperature", "One square per day, colored from cold to hot.", "Read across a month and down the years.", "It sits next to the usage calendar so you can compare."],
+      "Why this bill changed": ["Why this bill changed", "How bill length, weather, rates, and your usage each moved the amount due.", "Bars add up to the change from the previous bill.", "The longest bar is the main reason the amount moved."],
+      "Statement waterfall": ["From last balance to this bill", "Last amount due, minus your payment, plus new charges.", "Each step moves the running total.", "You can see payment and new charges separately."],
+      "Statement vs portal estimate": ["Your bill vs PGE's hourly estimate", "Each statement next to the sum of PGE's hourly estimates for the same days.", "One series is the bill and one is PGE's estimate.", "A gap means the hourly estimate did not match the statement."],
+      "Bill kWh vs imported kWh": ["Billed kWh vs recorded kWh", "Energy on each bill next to the hourly data recorded here.", "Compare the two bars for the same statement.", "They should be close when the hourly history is complete."],
+      "Balance and amount due": ["What you owe over time", "Account balance and amount due as they changed.", "Each point is a recorded balance or amount due.", "You can see whether the balance is rising."],
+      "Stacked bill anatomy": ["What's in each bill", "Each bill split into basic charge, energy, delivery, taxes, and other.", "Switch between dollars and percent. Percent shows the share of the bill.", "You can see which part of the bill grew."],
+      "Ledger dollars": ["Billed vs paid", "Each month's bill next to what you paid.", "One series is billed and one is paid.", "A gap means a month you paid more or less than the bill."],
+      "Ledger kWh": ["Billed energy by statement", "Energy on each statement.", "Each bar is the energy on that statement.", "It is the billed energy, not the hourly recorder series."],
+      "Money-hours Pareto": ["Your most expensive hours", "Hours of the day ranked by estimated cost, with how much of the total they add up to.", "The top bar is the most expensive hour. The label is its share of the total.", "A few hours can hold a large share of the estimated cost."],
+      "Stacked area": ["When your energy lands on the Time of Day clock", "Hourly use colored by off-peak, mid-peak, and on-peak.", "The colors are the Time of Day periods.", "You can see how much use lands in the expensive hours."],
+      "kWh by period": ["Typical hourly use in each period", "The usual range of hourly use in each Time of Day period.", "The box is the usual range. Dots outside it were unusual hours.", "It shows whether on-peak hours are also high-use hours."],
+      "Sankey": ["Where your energy dollars go by period", "Energy in each period flowing into its estimated cost.", "The width is energy. The label on the right is the estimated dollars.", "It is a local estimate, not a billed Time of Day charge."],
+      "Monthly period mix": ["Your Time of Day mix by month", "Share of each month's energy in each period.", "The stack always adds to 100 percent.", "A growing on-peak band means more of the month landed in expensive hours."],
+      "Local Basic minus local TOD": ["Would Time of Day have saved money?", "Estimated monthly difference between Basic and Time of Day pricing.", "Above zero means the local Time of Day estimate was lower.", "It is a local estimate, not PGE's official comparison."],
+      "Forward 48-hour ribbon": ["The next 48 hours on the Time of Day clock", "Your usual use for each coming hour, colored by period.", "Each bar is your historical average for that hour of the week.", "It does not include hours PGE has not published yet."],
+      "Load-shift simulator": ["Try moving a big load", "Monthly cost of a load like an EV charge at each start hour.", "Each bar is the local estimate for starting at that hour.", "The line is Schedule 7 base plus Schedule 125, not a full Basic bill."],
+      "Day fingerprint": ["Comparing days across five measures", "Each line is a day: energy, peak hour, temperature, on-peak share, and price.", "Lines that stand apart were unusual days.", "You can spot odd days without opening each one."],
+      "Monthly ridgelines": ["How your daily pattern shifts by month", "Average hourly use for each month, stacked.", "Each ridge is one month.", "You can see the daily shape change through the year."],
+      "Daypart stream": ["Morning, afternoon, evening, overnight", "How your use splits across parts of the day over time.", "The bands are the parts of the day.", "A band that grows is taking more of your energy."],
+      "Published week": ["Last week, day by day", "Each day of the last full week, hour by hour.", "Compare the seven days side by side.", "It is the latest complete week PGE has published."],
+      "Program savings": ["Program savings this year", "Year-to-date savings reported by PGE programs.", "The value is PGE's reported year-to-date savings.", "It is not calculated from your hourly usage."],
+      "Baseload band": ["Your always-on floor across the day", "Weekday average by hour with your overnight minimum as a line.", "The line is the overnight floor.", "Use above the line is the part that turns on and off."],
+      "24-hour polar clock": ["Your day as a clock", "Average weekday use around a 24-hour dial.", "Longer bars are hours you usually use more.", "The clock makes the daily rhythm easy to scan."],
+      "Latest statement treemap": ["Your latest bill as blocks", "Each block's size is that charge's share of the latest bill.", "Bigger blocks are a larger share.", "You can see what dominated the last bill."],
+    };
+    const row = known[technical];
+    if (!row) {
+      return {
+        title: technical,
+        what: "Your recorded PGE history for this chart.",
+        how: "Compare the marks with the axis labels. A gap means a sample was not published.",
+        why: "It is your own history, not a comparison with another home.",
+        source: source || "PGE history stored in Home Assistant.",
+      };
+    }
+    return { title: row[0], what: row[1], how: row[2], why: row[3], source: source || "PGE history stored in Home Assistant." };
+  }
+
+  _figure(id, { eyebrow, title, what, how, why, source, wide = false, extra = "", note = false }) {
+    const plain = this._plainChart(eyebrow, source || what);
+    const esc = (value) => this._escape(String(value ?? ""));
+    const definition = (term, text) => `<dt>${esc(term)}</dt><dd>${esc(text)}</dd>`;
+    const shownTitle = plain.title || title;
+    const termHint = {
+      "chart-baseload": "Always-on power (baseload): energy your home uses every hour, even when you are asleep or away. Fridges, routers, and devices on standby add to it.",
+      "chart-baseload-history": "Always-on power (baseload): energy your home uses every hour, even when you are asleep or away. Fridges, routers, and devices on standby add to it.",
+      "chart-degree-days": "A degree day measures how much heating or cooling the outdoor temperature called for, using a 65°F base.",
+      "chart-spread": "Standard deviation: how far your days sit from your own average. Days beyond two standard deviations were unusual for you.",
+      "chart-weather-counterfactual": "Weather-normalized: what the weather alone predicts you would use, next to what you actually used. R² is how much of the variation in your use the weather model explains. It is a fit score, not a promise.",
+      "chart-bill-explainer": "A statement window is the set of days from one bill's end to the next.",
+      "chart-statement-portal": "A statement window is the set of days from one bill's end to the next.",
+      "chart-bill-imported": "A statement window is the set of days from one bill's end to the next.",
+    }[id];
+    const about = `<dl>${definition("What this shows", plain.what)}${termHint ? definition("Term", termHint) : ""}${definition("How to read it", plain.how)}
+            ${definition("Why it matters", plain.why)}${definition("Data source", plain.source)}</dl>`;
+    return `<figure class="chart-card ${wide ? "fig-wide" : ""}" data-figure="${esc(id)}" data-chart="${esc(id)}">
+      <div class="fig-head">
+        <div class="fig-titles">
+          <h3 class="fig-title" data-headline-for="${esc(id)}"><span class="fig-title-text">${esc(shownTitle)}</span></h3></div>
+        ${this._hint(about, { html: true, label: "About this chart" })}
+        <button type="button" class="fig-expand" data-expand="${esc(id)}" aria-label="Expand ${esc(shownTitle)}" disabled>
+          <ha-icon icon="mdi:arrow-expand"></ha-icon></button>
+      </div>
+      ${extra}
+      ${note ? `<p class="fig-note muted"></p>` : ""}
+      <div class="chart-host" id="${esc(id)}"></div>
+    </figure>`;
+  }
+
+  _loadShapeGalleryHtml() {
+    const wide = new Set(["chart-spread", "chart-baseload-history"]);
+    const figure = (id, title, caption) =>
+      this._figure(id, {
+        eyebrow: title,
+        title,
+        what: caption,
+        how: "Read the horizontal axis as time or category and the vertical axis as the amount. A gap means that sample was not published.",
+        why: "The shape of your own history is easier to see than a table of the same numbers.",
+        source: caption,
+        wide: wide.has(id),
+        note: id === "chart-baseload-history",
+      });
+    return `
+      <section class="card chapter" data-chapter="when-you-use" data-persist="chart_gallery_load"${this._detailsOpenAttr("chart_gallery_load")}>
+        <header class="chapter-head"><span class="eyebrow"><ha-icon icon="mdi:lightning-bolt-outline"></ha-icon>When you use energy</span>
+          <h2 class="chapter-headline" data-chapter-headline="when-you-use">A typical weekday vs weekend</h2></header>
+        <div class="chapter-lead">${figure("chart-typical-day", "Typical day", "Horizontal: Pacific hour. Vertical: mean kWh. Source: imported hourly consumption.")}</div>
+        <div class="view-chips" role="group" aria-label="More views">
+          <button type="button" class="chip" data-view="chart-hour-weekday" aria-pressed="true">Weekly rhythm</button>
+          <button type="button" class="chip" data-view="chart-histogram" aria-pressed="false">How big is a normal day?</button>
+          <button type="button" class="chip" data-view="chart-yoy" aria-pressed="false">This year vs past years</button>
+          <button type="button" class="chip" data-view="chart-cycle-race" aria-pressed="false">This bill vs last bill</button>
+          <button type="button" class="chip" data-view="chart-spread" aria-pressed="false">Unusual days</button>
+          <button type="button" class="chip" data-view="chart-duck" aria-pressed="false">Solar export</button>
+          <button type="button" class="chip" data-view="chart-duck-months" aria-pressed="false">Solar by month</button>
+          <button type="button" class="chip" data-view="chart-baseload-history" aria-pressed="false">Always-on power</button>
+        </div>
+        <div class="chapter-views">
+          <div data-view-panel="chart-hour-weekday">${figure("chart-hour-weekday", "Hour by weekday", "Horizontal: Pacific hour. Vertical: weekday. Color: mean kWh. Source: imported hourly consumption.")}</div>
+          <div data-view-panel="chart-histogram" hidden>${figure("chart-histogram", "Daily kWh histogram", "Horizontal: daily kWh bin. Vertical: number of days. Source: imported daily consumption.")}</div>
+          <div data-view-panel="chart-yoy" hidden>${figure("chart-yoy", "Year over year", "Horizontal: month. Vertical: kWh. Source: imported daily consumption.")}</div>
+          <div data-view-panel="chart-cycle-race" hidden>${figure("chart-cycle-race", "Billing-cycle race", "Horizontal: day of statement. Vertical: cumulative kWh. Source: imported hourly consumption.")}</div>
+          <div data-view-panel="chart-spread" hidden>${figure("chart-spread", "Daily spread", "Horizontal: date. Vertical: daily kWh. Lines: mean and mean plus or minus two standard deviations. Source: imported daily consumption.")}</div>
+          <div data-view-panel="chart-duck" hidden>${figure("chart-duck", "Duck curve", "Horizontal: Pacific hour. Vertical: kWh. Import and export. Shown only when the account has returned energy.")}</div>
+          <div data-view-panel="chart-duck-months" hidden>${figure("chart-duck-months", "Duck curve by month", "Horizontal: month. Vertical: kWh and dollars. Import, export, PGE usage estimate, and export compensation.")}</div>
+          <div data-view-panel="chart-baseload-history" hidden>${figure("chart-baseload-history", "Always-on load history", "Horizontal: date. Vertical: minimum kWh in Pacific hours 0 through 5. Markers are steps. Yearly cost uses the trailing 365-day PGE usage estimate.")}</div>
+        </div>
+      </section>`;
+  }
+
+  async _renderLoadShapeGallery() {
+    await renderLoadShape(this, {
+      baseloadFloor,
+      cycleCumulative,
+      dayFingerprints,
+      histogramBins,
+      hourWeekdayMatrix,
+      monthRidges,
+      monthlyByYear,
+      publishedWeekDays,
+      spreadBand,
+      typicalDayProfiles,
+      gapDailyRows,
+    });
+  }
+
+  _todGalleryHtml() {
+    const wide = new Set(["chart-tod-stacked"]);
+    const figure = (id, title, caption) =>
+      this._figure(id, {
+        eyebrow: title,
+        title,
+        what: caption,
+        how: "Read the horizontal axis as time or category and the vertical axis as the amount. A gap means that sample was not published.",
+        why: "The shape of your own history is easier to see than a table of the same numbers.",
+        source: caption,
+        wide: wide.has(id),
+        note: id === "chart-baseload-history",
+      });
+    return `
+      <section class="card chapter" data-chapter="tod-charts" data-persist="chart_gallery_tod"${this._detailsOpenAttr("chart_gallery_tod")}>
+        <header class="chapter-head"><span class="eyebrow"><ha-icon icon="mdi:clock-time-four-outline"></ha-icon>Your Time of Day</span>
+          <h2 class="chapter-headline">Shift your usage</h2></header>
+        <figure data-chart="chart-shift-sim">
+          <h3>Load-shift simulator ${this._hint("What a weekday load costs per month at each start hour. Local TOD imported-energy estimate versus Schedule 7 base plus Schedule 125. That line is not a full Basic bill. Weekends are all off-peak.")}</h3>
+          <div class="shift-form">
+            <label>Load <select id="chart-shift-preset">
+              <option value="ev">EV 7.2 kW for 4 h</option>
+              <option value="dryer">Dryer 3 kW for 1 h</option>
+              <option value="dishwasher">Dishwasher 1.2 kW for 2 h</option>
+              <option value="custom">Custom</option>
+            </select></label>
+            <label>kW <input id="chart-shift-kw" type="number" min="0" step="0.1" value="7.2"></label>
+            <label>Hours <input id="chart-shift-hours" type="number" min="0" step="0.5" value="4"></label>
+            <label>Runs per month <input id="chart-shift-runs" type="number" min="0" step="1" value="20"></label>
+          </div>
+          <div class="chart-host" id="chart-shift-sim"></div>
+        </figure>
+        ${figure("chart-tod-stacked", "Stacked area", "Horizontal: time. Vertical: kWh. Source: imported hourly consumption classified with the Pacific Time of Day schedule.")}
+        ${figure("chart-period-mix", "Monthly period mix", "Horizontal: month. Vertical: share of kWh. Source: imported hourly consumption.")}
+        ${figure("chart-money-pareto", "Money-hours Pareto", "Horizontal: dollars. Vertical: Pacific hour. Source: hourly kWh times the local catalog rate. Local TOD imported-energy estimate.")}
+        ${figure("chart-period-box", "kWh by period", "Horizontal: period. Vertical: hourly kWh. Source: imported hourly consumption.")}
+        ${figure("chart-tod-delta", "Local Basic minus local TOD", "Horizontal: month. Vertical: dollars, positive means the local TOD estimate is lower. Source: local catalog prices on hourly kWh.")}
+        ${figure("chart-forward-ribbon", "Forward 48-hour ribbon", "Horizontal: next Pacific hour. Vertical: historical mean kWh. Bars follow the offline schedule. No recorder data past the published end.")}
+        ${figure("chart-sankey", "Sankey", "Period kWh into local estimate dollars. Source: hourly consumption and the local catalog. Not portal hourly amount.")}
+      </section>`;
+  }
+
+  async _renderTodGallery() {
+    await renderTodCharts(this, {
+      forwardRibbon,
+      hourWeekdayMatrix,
+      moneyHourPareto,
+      periodBox,
+      periodMixByMonth,
+      sankeyFlows,
+      todMinusBasicByMonth,
+    });
+    if (this.shadowRoot?.getElementById("chart-bill-explainer")) {
+      await this._renderInsightCharts();
+    }
+  }
+
+  _weatherGalleryHtml() {
+    const wide = new Set(["chart-degree-days", "chart-weather-counterfactual"]);
+    const figure = (id, title, caption) =>
+      this._figure(id, {
+        eyebrow: title,
+        title,
+        what: caption,
+        how: "Read the horizontal axis as time or category and the vertical axis as the amount. A gap means that sample was not published.",
+        why: "The shape of your own history is easier to see than a table of the same numbers.",
+        source: caption,
+        wide: wide.has(id),
+        note: id === "chart-baseload-history",
+      });
+    return `
+      ${figure("chart-degree-days", "Degree days vs kWh", "Horizontal: date. Vertical: kWh and degree days at a 65 °F base. Source: daily imported consumption and mean outdoor temperature.")}
+      ${figure("chart-temp-bins", "Temperature bins", "Horizontal: outdoor temperature band. Vertical: mean daily kWh. Source: daily imported consumption and mean outdoor temperature.")}
+      ${figure("chart-weather-counterfactual", "Weather-normalized counterfactual", "Actual daily kWh against the weather model fit on an earlier baseline. The cumulative gap is on the right. r2 is the fit quality.")}
+      <div id="kpi-degree-price"></div>`;
+  }
+
+  _billingGalleryHtml() {
+    const wide = new Set(["chart-statement-portal", "chart-bill-imported", "chart-balance-due"]);
+    const figure = (id, title, caption) =>
+      this._figure(id, {
+        eyebrow: title,
+        title,
+        what: caption,
+        how: "Read the horizontal axis as time or category and the vertical axis as the amount. A gap means that sample was not published.",
+        why: "The shape of your own history is easier to see than a table of the same numbers.",
+        source: caption,
+        wide: wide.has(id),
+        note: id === "chart-baseload-history",
+      });
+    return `
+      <section class="card chapter" data-chapter="billing-charts" data-persist="chart_gallery_billing"${this._detailsOpenAttr("chart_gallery_billing")}>
+        <header class="chapter-head"><span class="eyebrow"><ha-icon icon="mdi:receipt-text-outline"></ha-icon>Why this bill changed</span>
+          <h2 class="chapter-headline" data-chapter-headline="billing-charts">Why this bill changed</h2></header>
+        <div class="chapter-lead">${figure("chart-bill-explainer", "Why this bill changed", "Approximate statement windows. Bars sum to the change in amount due.")}</div>
+        ${figure("chart-statement-portal", "Statement vs portal estimate", "Approximate statement window. Billed amount against summed PGE usage estimate.")}
+        ${figure("chart-bill-imported", "Bill kWh vs imported kWh", "Approximate statement window. Billed kWh against summed imported kWh.")}
+        ${figure("chart-balance-due", "Balance and amount due", "Horizontal: time. Vertical: dollars. Source: account balance and amount due means. Not a cumulative sum.")}
+      </section>
+      <div id="chart-pdf-slot"></div>`;
+  }
+
+  async _renderWeatherMoney() {
+    const stamp = { entryId: this._activeEntryId, gen: this._galleryRenderGen || 0 };
+    const stale = () =>
+      stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0);
+    await renderWeatherMoney(this, {
+      billVsImported,
+      degreeDayPoint,
+      statementGap,
+      statementWindows,
+      tempBins,
+    });
+    if (stale()) return;
+    await this._renderPdfSolar();
+    if (stale()) return;
+    await this._renderInsightCharts();
+  }
+
+  async _renderInsightCharts() {
+    await renderInsights(this, {
+      baseloadSteps,
+      billExplainer,
+      centsPerKwh,
+      counterfactual,
+      daypartDays,
+      degreePrice,
+      shiftCostByStartHour,
+      statementWindows,
+      weatherModel,
+      overnightFloorDays,
+    });
+  }
+
+  async _renderPdfSolar() {
+    await renderPdfSolar(this, {
+      billAnatomyRows,
+      billFamilies,
+      duckHourProfiles,
+      duckMonthBars,
+      hasExport,
+      lineItemShares,
+      treemapSlices,
+      waterfallSteps,
+    });
+    const pdf = this.shadowRoot?.querySelector("#chart-pdf-slot details");
+    if (pdf) this._bindPersistentDetails(pdf.parentElement);
+  }
+
+  _pdfGalleryHtml() {
+    const figure = (id, title, caption) =>
+      this._figure(id, {
+        eyebrow: title,
+        title,
+        what: caption,
+        how: "Read the horizontal axis as time or category and the vertical axis as the amount. A gap means that sample was not published.",
+        why: "The shape of your own history is easier to see than a table of the same numbers.",
+        source: caption,
+      });
+    return `
+      <section class="card chapter" data-chapter="bill-pdf" data-persist="chart_gallery_pdf"${this._detailsOpenAttr("chart_gallery_pdf")}>
+        <header class="chapter-head"><span class="eyebrow"><ha-icon icon="mdi:receipt-text-outline"></ha-icon>What's in your bill</span>
+          <h2 class="chapter-headline" data-chapter-headline="bill-pdf">What's in each bill</h2></header>
+        <div class="metric-toggle" role="group" aria-label="Bill mix">
+          <button type="button" data-bill-mode="dollars" aria-pressed="${this._billAnatomyMode !== "percent"}">$</button>
+          <button type="button" data-bill-mode="percent" aria-pressed="${this._billAnatomyMode === "percent"}">%</button>
+        </div>
+        <div class="chapter-lead">${figure("chart-bill-anatomy", "Stacked bill anatomy", "Horizontal: statement. Vertical: dollars or percent. Basic, energy use, delivery, taxes, and other.")}</div>
+        ${figure("chart-waterfall", "Statement waterfall", "Previous amount due, payment, new charges, amount due.")}
+      </section>`;
   }
 
   _fmtWhen(unixSec) {
@@ -2079,13 +3910,33 @@ class PgeEnergyPanel extends HTMLElement {
       if (!key) return;
       el.addEventListener("toggle", () => {
         this._setDetailsOpen(key, el.open);
+        if (!el.open) return;
+        const resize = () => this._resizeChartsUnder(el);
+        resize();
+        requestAnimationFrame(resize);
       });
     });
+  }
+
+  /** ECharts inits at zero width while a gallery `<details>` is closed. */
+  _resizeChartsUnder(root) {
+    if (!root) return;
+    for (const wrapped of this._charts || []) {
+      const dom = wrapped?.chart?.getDom?.();
+      if (!dom || !root.contains(dom)) continue;
+      try {
+        wrapped.chart.resize();
+      } catch (_err) {
+        /* disposed */
+      }
+    }
   }
 
   _rollupTable(title, caption, rows, keyLabel, persistKey, { signed = false, netAmount = false } = {}) {
     const populated = this._populatedRollupRows(rows);
     if (!populated.length) return "";
+    const showBuckets = rollupColumns(populated.map((row) => ({ buckets: row.samples }))).showBuckets;
+    const kwhText = (raw) => (raw == null || Number.isNaN(Number(raw)) ? "" : Number(raw).toFixed(2));
     const kwhHead = signed ? "Net kWh" : "Import kWh";
     const costHead = netAmount ? "Net interval amount" : "Import cost";
     const rateHead = netAmount ? "Net $/kWh (est.)" : "$/kWh";
@@ -2100,7 +3951,7 @@ class PgeEnergyPanel extends HTMLElement {
       raw == null || Number.isNaN(Number(raw)) ? "" : String(Number(raw));
     const body = populated
       .map((r) => {
-        const kwh = cell(r.kwh, false, { allowZero: signed });
+        const kwh = kwhText(r.kwh);
         const cost = cell(r.cost, true, { allowZero: netAmount });
         const rate = cell(r.rate, true);
         const temp = cell(r.avgTemp);
@@ -2111,8 +3962,7 @@ class PgeEnergyPanel extends HTMLElement {
           <td data-sort="${numAttr(r.cost)}">${cost || "—"}</td>
           <td data-sort="${numAttr(r.rate)}">${rate || "—"}</td>
           <td data-sort="${numAttr(r.avgTemp)}">${temp || "—"}</td>
-          <td data-sort="${numAttr(r.samples)}">${r.samples || ""}</td>
-          <td data-sort="${numAttr(r.peakKwh)}">${peak || "—"}</td>
+          ${showBuckets ? `<td data-sort="${numAttr(r.samples)}">${r.samples || ""}</td><td data-sort="${numAttr(r.peakKwh)}">${peak || "—"}</td>` : ""}
         </tr>`;
       })
       .join("");
@@ -2153,8 +4003,7 @@ class PgeEnergyPanel extends HTMLElement {
               <th data-col="2" title="Sort by ${this._escape(costHead)}">${this._escape(costHead)}</th>
               <th data-col="3" title="Sort by ${this._escape(rateHead)}">${this._escape(rateHead)}</th>
               <th data-col="4" title="Sort by temperature">Avg °F</th>
-              <th data-col="5" title="Sort by buckets">Buckets</th>
-              <th data-col="6" title="Sort by peak">Peak bucket</th>
+              ${showBuckets ? `<th data-col="5" title="Sort by buckets">Buckets</th><th data-col="6" title="Sort by peak">Peak bucket</th>` : ""}
             </tr></thead>
             <tbody>${body}</tbody>
             <tfoot><tr>
@@ -2175,8 +4024,7 @@ class PgeEnergyPanel extends HTMLElement {
                   : ""
               }</td>
               <td></td>
-              <td>${totS || ""}</td>
-              <td></td>
+              ${showBuckets ? `<td>${totS || ""}</td><td></td>` : ""}
             </tr></tfoot>
           </table>
         </div>
@@ -2376,24 +4224,28 @@ class PgeEnergyPanel extends HTMLElement {
       "÷ span hours",
       { suffix: " kWh" }
     );
+    if (spanDays > 1) {
     addMetric(
       signed ? "Avg net kWh / day" : "Avg import kWh / day",
       acct.avgKwhPerDay,
       "÷ span days",
       { suffix: " kWh" }
     );
+    }
     addMetric(
       netAmount ? "Avg net amount / hour" : "Avg import cost / hour",
       acct.avgCostPerHour,
       "",
       { money: true }
     );
+    if (spanDays > 1) {
     addMetric(
       netAmount ? "Avg net amount / day" : "Avg import cost / day",
       acct.avgCostPerDay,
       "",
       { money: true }
     );
+    }
     if (acct.spanMonths >= 1.5) {
       addMetric(
         signed ? "Avg net kWh / month" : "Avg import kWh / month",
@@ -2481,7 +4333,7 @@ class PgeEnergyPanel extends HTMLElement {
       );
       addMetric("Median hour flow", acct.hour.median, `${acct.hour.count} hours`, { suffix: " kWh" });
     }
-    if (acct.bestDay?.kwh) {
+    if (spanDays > 1 && acct.bestDay?.kwh) {
       addMetric(
         signed ? "Highest net day" : "Highest day",
         acct.bestDay.kwh,
@@ -2489,7 +4341,7 @@ class PgeEnergyPanel extends HTMLElement {
         { suffix: " kWh" }
       );
     }
-    if (acct.worstDay?.kwh != null) {
+    if (spanDays > 1 && acct.worstDay?.kwh != null) {
       addMetric(
         signed ? "Lowest net day" : "Lowest day",
         acct.worstDay.kwh,
@@ -2624,12 +4476,19 @@ class PgeEnergyPanel extends HTMLElement {
         </div>`
         )
         .join("");
-      blocks.push(`
+      blocks.push(
+        section === "Totals & averages" || section === "Summary"
+          ? `
         <div class="usage-summary-section">
           <div class="usage-summary-section-title">${this._escape(section)}</div>
           <div class="usage-summary-items">${items}</div>
-        </div>
-      `);
+        </div>`
+          : `
+        <details class="usage-accounting usage-summary-section">
+          <summary><span class="rollup-title">${this._escape(section)}</span></summary>
+          <div class="usage-summary-items">${items}</div>
+        </details>`
+      );
       current = [];
     };
     let sectionName = "Summary";
@@ -2687,51 +4546,75 @@ class PgeEnergyPanel extends HTMLElement {
   async _renderInsights() {
     const account = this._account;
     if (!account) return;
+    const stamp = { entryId: this._activeEntryId, gen: this._galleryRenderGen || 0 };
     this._disposeHostCharts(
       this.shadowRoot.getElementById("scatter"),
       this.shadowRoot.getElementById("cost-per-kwh"),
-      this.shadowRoot.getElementById("billed-paid"),
       this.shadowRoot.getElementById("heatmap-kwh"),
       this.shadowRoot.getElementById("heatmap-temp")
     );
-    const range = rangePresets()["12mo"];
+    // Weather vs usage and the monthly rate use a fixed year. The header range
+    // is hidden on Analytics, and a 24h chip would leave the scatter empty.
+    const costRange = rangePresets()["12mo"];
+    const historyEnd = publishedDataEnd();
     const ids = account.statistic_ids;
     const colors = seriesColors(this);
-    const [kwhDay, tempDay, billAmt, payAmt, costDay] = await Promise.all([
+    const [kwhDay, tempDay, billAmt, payAmt, costDay, kwhForRate, kwhHistory, tempHistory] =
+      await Promise.all([
       fetchStatisticSeries(this._hass, ids.consumption, {
-        start: range.start,
-        end: range.end,
+        start: costRange.start,
+        end: costRange.end,
         period: "day",
         maxPoints: 400,
       }),
       fetchStatisticSeries(this._hass, ids.temperature, {
-        start: range.start,
-        end: range.end,
+        start: costRange.start,
+        end: costRange.end,
         period: "day",
         maxPoints: 400,
       }),
       fetchStatisticSeries(this._hass, ids.bill_amount, {
-        start: range.start,
-        end: range.end,
+        start: costRange.start,
+        end: costRange.end,
         period: "month",
         maxPoints: 48,
       }),
       fetchStatisticSeries(this._hass, ids.payment_amount, {
-        start: range.start,
-        end: range.end,
+        start: costRange.start,
+        end: costRange.end,
         period: "month",
         maxPoints: 48,
       }),
       fetchStatisticSeries(this._hass, ids.cost, {
-        start: range.start,
-        end: range.end,
+        start: costRange.start,
+        end: costRange.end,
         period: "day",
         maxPoints: 400,
       }),
+      fetchStatisticSeries(this._hass, ids.consumption, {
+        start: costRange.start,
+        end: costRange.end,
+        period: "day",
+        maxPoints: 400,
+      }),
+      fetchStatisticSeries(this._hass, ids.consumption, {
+        start: HEATMAP_HISTORY_START,
+        end: historyEnd,
+        period: "day",
+        maxPoints: HEATMAP_MAX_DAYS,
+      }),
+      fetchStatisticSeries(this._hass, ids.temperature, {
+        start: HEATMAP_HISTORY_START,
+        end: historyEnd,
+        period: "day",
+        maxPoints: HEATMAP_MAX_DAYS,
+      }),
     ]);
+    if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) return;
 
     const scatterHost = this.shadowRoot.getElementById("scatter");
     if (scatterHost) {
+      scatterHost.hidden = false;
       const tempMap = new Map((tempDay.xs || []).map((t, i) => [t, tempDay.means[i]]));
       const sx = [];
       const sy = [];
@@ -2753,11 +4636,12 @@ class PgeEnergyPanel extends HTMLElement {
         color: colors.kwh,
       });
       if (chart) this._charts.push(chart);
+      else scatterHost.hidden = true;
     }
 
     const cpkHost = this.shadowRoot.getElementById("cost-per-kwh");
     if (cpkHost) {
-      const { xs, ys } = this._monthlyRateSeries(kwhDay, costDay);
+      const { xs, ys } = this._monthlyRateSeries(kwhForRate, costDay);
       const chart = await createLineChart(cpkHost, {
         xs,
         ys,
@@ -2769,32 +4653,104 @@ class PgeEnergyPanel extends HTMLElement {
       if (chart) this._charts.push(chart);
     }
 
-    const bpHost = this.shadowRoot.getElementById("billed-paid");
-    if (bpHost) {
-      bpHost.replaceChildren();
-      const chart = await createMonthCompareChart(bpHost, {
-        billedXs: billAmt.xs,
-        billedYs: billAmt.values,
-        payXs: payAmt.xs,
-        payYs: payAmt.values,
-        colors,
-      });
-      if (chart) this._charts.push(chart);
-    }
-
+    const heatWindow = this._heatmapWindowKey(); // 12mo default, or a year, or all
+    const kwhWindow = this._sliceHeatmap(kwhHistory.xs, kwhHistory.values, heatWindow);
+    const tempWindow = this._sliceHeatmap(tempHistory.xs, tempHistory.means, heatWindow);
+    this._renderHeatmapChips(kwhHistory.xs);
     const hmKwh = await renderHeatmap(this.shadowRoot.getElementById("heatmap-kwh"), {
-      xs: kwhDay.xs,
-      ys: kwhDay.values,
+      xs: kwhWindow.xs,
+      ys: kwhWindow.ys,
       title: "Daily kWh (imported history)",
+      onClick: (ymd) => this._openUsageDay(ymd),
     });
     const hmTemp = await renderHeatmap(this.shadowRoot.getElementById("heatmap-temp"), {
-      xs: tempDay.xs,
-      ys: tempDay.means,
+      xs: tempWindow.xs,
+      ys: tempWindow.ys,
       diverging: true,
       title: "Daily avg temperature (imported history)",
     });
     if (hmKwh) this._charts.push(hmKwh);
     if (hmTemp) this._charts.push(hmTemp);
+  }
+
+  _openUsageDay(ymd) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd || "")) return;
+    const published = pacificYmd(new Date(publishedDataEnd().getTime() - 1));
+    if (ymd > published) return;
+    const [year, month, day] = ymd.split("-").map(Number);
+    const next = new Date(Date.UTC(year, month - 1, day + 1));
+    const nextYmd = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-${String(next.getUTCDate()).padStart(2, "0")}`;
+    this._customRange = { start: pacificMidnightUtc(ymd), end: pacificMidnightUtc(nextYmd) };
+    this._rangeShift = 0;
+    this._period = "hour";
+    this._selectPanelTab("usage", { writeHistory: true });
+    this._renderFilters();
+    void this._renderRangeScope();
+  }
+
+  _heatmapWindowKey() {
+    try {
+      return localStorage.getItem("pge_heatmap_window") || "12mo";
+    } catch (_err) {
+      return "12mo";
+    }
+  }
+
+  _sliceHeatmap(xs, ys, windowKey) {
+    const pairs = (xs || []).map((ts, index) => ({ ts, value: ys?.[index] }));
+    if (!pairs.length || windowKey === "all") return { xs: xs || [], ys: ys || [] };
+    const end = publishedDataEnd();
+    const endYmd = pacificYmd(new Date(end.getTime() - 1));
+    let startYmd = "0000-01-01";
+    let stopYmd = "9999-12-31";
+    if (windowKey === "12mo") {
+      const [year, month] = endYmd.split("-").map(Number);
+      const start = new Date(Date.UTC(year, month - 12, 1));
+      startYmd = `${start.getUTCFullYear()}-${String(start.getUTCMonth() + 1).padStart(2, "0")}-01`;
+      stopYmd = endYmd;
+    } else if (/^\d{4}$/.test(windowKey)) {
+      startYmd = `${windowKey}-01-01`;
+      stopYmd = `${windowKey}-12-31`;
+    }
+    const kept = pairs.filter((row) => {
+      const ymd = pacificYmd(row.ts);
+      return ymd >= startYmd && ymd <= stopYmd;
+    });
+    return { xs: kept.map((row) => row.ts), ys: kept.map((row) => row.value) };
+  }
+
+  _renderHeatmapChips(xs) {
+    const host = this.shadowRoot.getElementById("heatmap-chips");
+    if (!host) return;
+    const years = [...new Set((xs || []).map((ts) => pacificYmd(ts).slice(0, 4)))].sort();
+    const current = this._heatmapWindowKey();
+    const recent = years.slice(-2);
+    const older = years.filter((year) => !recent.includes(year));
+    const chips = ["12mo", ...recent];
+    const olderOptions = older
+      .map((year) => `<option value="${year}" ${year === current ? "selected" : ""}>${year}</option>`)
+      .join("");
+    host.innerHTML = `
+      ${chips.map((key) => {
+        const label = key === "12mo" ? "12 months" : key;
+        return `<button type="button" class="chip" data-heat="${key}" aria-pressed="${key === current}">${label}</button>`;
+      }).join("")}
+      ${olderOptions ? `<select class="range-more" data-heat-more aria-label="More years"><option value="" ${older.includes(current) ? "" : "selected"}>More years…</option>${olderOptions}</select>` : ""}
+      <button type="button" class="chip" data-heat="all" aria-pressed="${current === "all"}">All years</button>
+    `;
+    const choose = async (key) => {
+      if (!key) return;
+      try {
+        localStorage.setItem("pge_heatmap_window", key);
+      } catch (_err) {
+        /* storage can be unavailable */
+      }
+      await this._renderInsights();
+    };
+    host.querySelectorAll("[data-heat]").forEach((btn) => {
+      btn.addEventListener("click", () => choose(btn.dataset.heat));
+    });
+    host.querySelector("[data-heat-more]")?.addEventListener("change", (ev) => choose(ev.target.value));
   }
 
   _renderBillPdfHeader() {
@@ -2883,7 +4839,7 @@ class PgeEnergyPanel extends HTMLElement {
     }
     if (!rows.length) return "";
     return `
-      <details class="usage-accounting" open>
+      <details class="usage-accounting">
         <summary>Statement details (PDF)</summary>
         <div class="usage-accounting-body">${this._renderSummaryPairs(rows)}</div>
       </details>
@@ -2918,7 +4874,7 @@ class PgeEnergyPanel extends HTMLElement {
       html += `<div class="tod-grid-head tod-hour">${h}</div>`;
     }
     for (const day of days) {
-      html += `<div class="tod-grid-label">${this._escape(day.name)}</div>`;
+      html += `<div class="tod-grid-label"><span class="tod-day-full">${this._escape(day.name)}</span><span class="tod-day-short">${this._escape(day.name.slice(0, 3))}</span></div>`;
       for (let h = 0; h < 24; h++) {
         const period = todPeriodForPacific(day.ymd, h);
         const isNow = day.ymd === nowParts.ymd && h === nowParts.hour;
@@ -2947,7 +4903,6 @@ class PgeEnergyPanel extends HTMLElement {
       <details class="tod-holidays" data-persist="tod_holidays"${this._detailsOpenAttr("tod_holidays")}>
         <summary>Off-peak days & holidays ${year}</summary>
         <div class="tod-holidays-body">
-          <p class="muted">Off-peak all day on Saturdays, Sundays, and observed holidays. Weekday windows (Pacific): off-peak 12am–7am and 9pm–12am, mid-peak 7am–5pm, on-peak 5pm–9pm.</p>
           <p>${labels.join(" · ")}</p>
         </div>
       </details>
@@ -2978,7 +4933,7 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   _todAvailablePresets() {
-    const available = new Set(this._availablePresets || RANGE_PRESET_PRIMARY);
+    const available = new Set(this._availablePresets || RANGE_PRESET_TOD);
     if (this._billBounds()) {
       available.add("cycle");
       available.add("last_cycle");
@@ -3041,7 +4996,7 @@ class PgeEnergyPanel extends HTMLElement {
       ? "Custom"
       : RANGE_PRESET_LABELS[this._todRangeKey] || this._todRangeKey;
     const label = `${presetLabel} · ${formatRangeLabel(range.start, range.end)}`;
-    const primaryButtons = RANGE_PRESET_PRIMARY.map((k) => {
+    const primaryButtons = RANGE_PRESET_TOD.map((k) => {
       const enabled = available.has(k);
       const active = !customActive && this._todRangeKey === k;
       const text = RANGE_PRESET_LABELS[k] || k;
@@ -3057,16 +5012,26 @@ class PgeEnergyPanel extends HTMLElement {
       }>${this._escape(text)}</option>`;
     }).join("");
     const endInclusive = new Date(Math.max(range.start.getTime(), range.end.getTime() - 1));
+    const customOpen = !!this._todRangeCustomOpen || customActive;
     return `
       <div class="filters tod-range" aria-label="TOD estimate range">
-        <p class="muted tod-range-caption">Window for the local savings / cost estimate — independent of Usage. Custom ranges longer than 60 days are clipped to the newest 60 days so hourly totals stay exact.</p>
-        ${primaryButtons}
-        <select id="tod-range-more" class="range-more ${moreActive ? "active" : ""}" aria-label="More TOD ranges">
-          <option value="" ${moreActive ? "" : "selected"}>More…</option>
-          ${moreOptions}
-        </select>
-        <span class="range-label">${this._escape(label)}</span>
-        <div class="range-custom">
+        <div class="range-row">
+          <div class="seg range-presets" role="group" aria-label="TOD range presets">
+            ${primaryButtons}
+          </div>
+          <div class="range-tools">
+            <span class="range-label">${this._escape(label)}</span>
+            <button type="button" class="ghost range-custom-toggle" id="tod-range-custom-toggle" aria-expanded="${
+              customOpen ? "true" : "false"
+            }" aria-pressed="${customOpen ? "true" : "false"}" aria-controls="tod-range-custom" aria-label="Custom range"><ha-icon icon="mdi:calendar-range"></ha-icon></button>
+            <select id="tod-range-more" class="range-more ghost ${moreActive ? "active" : ""}" aria-label="More TOD ranges">
+              <option value="" ${moreActive ? "" : "selected"}>More…</option>
+              ${moreOptions}
+            </select>
+            ${this._hint("Window for the local savings and cost estimate. Independent of Usage. Custom ranges longer than 60 days are clipped to the newest 60 days so hourly totals stay exact.")}
+          </div>
+        </div>
+        <div class="range-custom" id="tod-range-custom" ${customOpen ? "" : "hidden"}>
           <input type="datetime-local" id="tod-range-start" aria-label="TOD range start" value="${this._escape(
             this._toLocalInputValue(range.start)
           )}" />
@@ -3096,6 +5061,10 @@ class PgeEnergyPanel extends HTMLElement {
         await this._renderTod();
       });
     }
+    host.querySelector("#tod-range-custom-toggle")?.addEventListener("click", async () => {
+      this._todRangeCustomOpen = !this._todRangeCustomOpen;
+      await this._renderTod();
+    });
     const apply = host.querySelector("#tod-range-apply");
     if (apply) {
       apply.addEventListener("click", async () => {
@@ -3111,9 +5080,16 @@ class PgeEnergyPanel extends HTMLElement {
         if (end <= start) return;
         const clamped = this._clampTodExactWindow(start, end);
         this._todCustomRange = { start: clamped.start, end: clamped.end };
+        this._todRangeCustomOpen = true;
         this._todRangeTouched = true;
         await this._renderTod();
       });
+    }
+    const active = host.querySelector("[data-tod-range].active");
+    const scroller = active?.closest(".seg.range-presets");
+    if (active && scroller) {
+      const left = active.offsetLeft - Math.max(0, (scroller.clientWidth - active.offsetWidth) / 2);
+      scroller.scrollLeft = Math.max(0, left);
     }
   }
 
@@ -3132,6 +5108,8 @@ class PgeEnergyPanel extends HTMLElement {
   async _renderTod() {
     const el = this.shadowRoot.getElementById("tod");
     if (!el) return;
+    this._todDirty = false;
+    this._disposeHostCharts(el);
     const gen = ++this._todRenderGen;
     try {
       await this._renderTodBody(el, gen);
@@ -3166,18 +5144,26 @@ class PgeEnergyPanel extends HTMLElement {
       ? ` · updated ${this._fmtDate(tod.portal_fetched_at)}`
       : "";
     const nextAt = tod.next_transition_at;
-    let nextLabel = "—";
+    let nextValue = "—";
+    let nextDelta = "—";
     if (nextAt) {
+      const when = new Date(nextAt);
       const parts = pacificParts(new Date(nextAt));
       const nextPeriod = todPeriodForPacific(parts.ymd, parts.hour);
-      nextLabel = `${this._todCountdown(nextAt)} → ${TOD_PERIOD_LABELS[nextPeriod] || nextPeriod}`;
+      const clock = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Los_Angeles",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(when);
+      nextValue = `${TOD_PERIOD_LABELS[nextPeriod] || nextPeriod} at ${clock}`;
+      nextDelta = `in ${this._todCountdown(nextAt)}`;
     }
     const dayNote = tod.is_holiday
       ? "Holiday — off-peak all day"
       : tod.is_weekend
         ? "Weekend — off-peak all day"
         : "Weekday schedule";
-    const sourceHint = `Rates: ${sourceLabel}${fetched}`;
+    const sourceHint = `Live rate: ${sourceLabel}${fetched}`;
     this._ensureTodRangeKey();
 
     // Catalog data from the domain tariff updater (effective-dated).
@@ -3215,15 +5201,14 @@ class PgeEnergyPanel extends HTMLElement {
           </tr>`;
         }).join("");
         usageHtml = `
-          <h3>Usage by period</h3>
+          <h3>Usage by period ${this._hint("PGE usage estimate: the portal hourly amount. It may ignore Time of Day and is not a billed charge.")}</h3>
           <p class="muted" style="margin:0 0 8px">${windowNote}</p>
           ${this._todShareBar(kwh)}
           <table class="tod-table">
-            <thead><tr><th>Period</th><th class="num">Energy</th><th class="num">Cost</th><th class="num">Share</th><th class="num">Avg billed</th></tr></thead>
+            <thead><tr><th>Period</th><th class="num">Energy</th><th class="num">Cost</th><th class="num">Share</th><th class="num">Avg portal ¢/kWh</th></tr></thead>
             <tbody>${rows}</tbody>
             <tfoot><tr><td>Total</td><td class="num">${this._fmt(totalKwh, " kWh")}</td><td class="num">${this._fmt(importedCost, "", true)}</td><td class="num">100%</td><td class="num">—</td></tr></tfoot>
           </table>
-          <p class="muted" style="margin:8px 0 0">Cost and avg billed are imported hourly amounts; share uses energy.</p>
         `;
 
         // Dual-source plan comparison using effective-dated catalogs.
@@ -3344,6 +5329,7 @@ class PgeEnergyPanel extends HTMLElement {
     }
 
     el.innerHTML = `
+      <section class="card">
       <h2>Time of Day</h2>
       <div class="tod-header">
         <span class="badge ${
@@ -3360,10 +5346,10 @@ class PgeEnergyPanel extends HTMLElement {
       <div class="kpi-row">
         <div class="kpi tod-${period}"><div class="label">Period now</div><div class="value">${TOD_PERIOD_LABELS[period]}</div><div class="delta">${this._escape(dayNote)}</div></div>
         <div class="kpi"><div class="label">Current rate</div><div class="value">${rateCents != null ? this._fmt(rateCents, " ¢/kWh") : "—"}</div><div class="delta">${this._escape(sourceLabel)}</div></div>
-        <div class="kpi"><div class="label">Next transition</div><div class="value">${this._escape(this._todCountdown(nextAt))}</div><div class="delta">${this._escape(nextLabel)}</div></div>
+        <div class="kpi"><div class="label">Next transition</div><div class="value">${this._escape(nextValue)}</div><div class="delta">${this._escape(nextDelta)}</div></div>
       </div>
       <div class="tod-schedule">
-        <h3>Week schedule (Pacific)</h3>
+        <h3>Week schedule (Pacific) ${this._hint("Time of Day periods are off-peak, mid-peak, and on-peak. The hours change by season and are all off-peak on weekends and holidays. Weekday windows (Pacific): off-peak 12am–7am and 9pm–12am, mid-peak 7am–5pm, on-peak 5pm–9pm.")}</h3>
         <div class="tod-legend">
           ${TOD_PERIODS.map((p) => `<span class="legend ${p}"><i></i>${TOD_PERIOD_LABELS[p]}</span>`).join("")}
           <span class="muted" style="margin-left:auto">Highlighted column = now</span>
@@ -3371,16 +5357,21 @@ class PgeEnergyPanel extends HTMLElement {
         ${this._todWeekGrid()}
         ${this._todHolidayNote()}
       </div>
+      </section>
+      <section class="card">
       <div class="usage-accounting tod-usage">
         ${this._todRangeControlsHtml()}
         ${usageHtml}
         ${savingsHtml}
       </div>
       ${this._tariffStatusHtml(tariffStatus, todCatalog, basicCatalog)}
+      </section>
+      ${this._todGalleryHtml()}
     `;
     if (gen !== this._todRenderGen) return;
     this._bindPersistentDetails(el);
     this._bindTodRange(el);
+    await this._softGallery(() => this._renderTodGallery());
   }
 
   _tariffStatusHtml(status, todCatalog, basicCatalog) {
@@ -3390,13 +5381,17 @@ class PgeEnergyPanel extends HTMLElement {
     const isStale = status.is_stale;
     const hasStatus = status.last_attempt || status.last_success || status.is_stale !== undefined;
     const lastError = status.last_error || null;
+    const catalogState = !hasStatus ? "unknown" : isStale ? "stale" : "current";
     const statusBadge = !hasStatus ? `<span class="badge unknown">unknown</span>` : isStale ? `<span class="badge off">stale</span>` : `<span class="badge on">current</span>`;
     const effectiveRow = todCatalog.length > 0 ? todCatalog[todCatalog.length - 1] : null;
     const effectiveFrom = effectiveRow?.effective_from || null;
     const periodLabel = effectiveFrom ? ` effective ${this._escape(effectiveFrom)}` : "";
+    const catalogTitle = effectiveFrom
+      ? `Catalog: ${catalogState} (effective ${effectiveFrom})`
+      : `Catalog: ${catalogState}`;
     return `
-      <details class="tariff-status-block"${this._detailsOpenAttr("tariff_status")}>
-        <summary>Tariff sources ${statusBadge}</summary>
+      <details class="tariff-status-block" data-persist="tariff_status"${this._detailsOpenAttr("tariff_status")}>
+        <summary><span class="rollup-title">${this._escape(catalogTitle)} ${statusBadge}</span></summary>
         <div class="tod-table-wrap">
           <table class="tod-table">
             <thead><tr><th>Source</th><th>Last check</th><th>Last success</th><th>TOD rows</th><th>Basic rows</th><th>Note</th></tr></thead>
@@ -3528,7 +5523,11 @@ class PgeEnergyPanel extends HTMLElement {
         </div>
       `;
     } else if (reconciled && reconciled.status === "not_comparable") {
-      const reason = reconciled.diagnostics?.reason || "unavailable";
+      const reasonCode = reconciled.diagnostics?.reason || "";
+      const reason =
+        reasonCode === "no_official_data"
+          ? "PGE has no official comparison for this account"
+          : "Comparison unavailable";
       reconHtml = `<div class="reconciliation"><span class="badge">Not comparable</span> <span class="muted">${this._escape(reason)}</span></div>`;
     }
 
@@ -3707,7 +5706,7 @@ class PgeEnergyPanel extends HTMLElement {
     `;
   }
 
-  _renderBillingPrograms() {
+  _renderBillingPrograms(mountGallery = false) {
     const billing = this.shadowRoot.getElementById("billing");
     const programs = this.shadowRoot.getElementById("programs");
     if (!billing || !programs || !this._account) return;
@@ -3715,9 +5714,10 @@ class PgeEnergyPanel extends HTMLElement {
     const includeBilling = this._account.options?.include_billing !== false;
 
     if (!includeBilling) {
+      this._disposeHostCharts(billing);
       billing.innerHTML = `<h2>Billing</h2><p class="muted">Billing import is disabled in Configure → Sync settings.</p>`;
-      programs.innerHTML = `<h2>Programs</h2><p class="muted">Enable billing & programs to see enrollment.</p>`;
-      return;
+      programs.innerHTML = `<h2>Programs</h2><p class="muted">Enable billing & programs to see enrollment.</p>${this._ptrEventHtml(e)}`;
+      return false;
     }
 
     const billingGroups = [
@@ -3785,27 +5785,58 @@ class PgeEnergyPanel extends HTMLElement {
       }
     }
     const summaryHtml = this._renderSummaryPairs(metrics);
-    this._disposeHostCharts(
-      this.shadowRoot.getElementById("ledger-bill"),
-      this.shadowRoot.getElementById("ledger-kwh")
-    );
+    if (!mountGallery && this._patchBillingText(summaryHtml)) {
+      this._renderProgramsCard(programs, e);
+      return false;
+    }
+    this._disposeHostCharts(billing);
     billing.innerHTML = `
-      <h2>Billing</h2>
-      <p class="muted" style="margin:0 0 12px">Account balance, statement, and lifetime totals from PGE billing sync.</p>
-      ${this._renderBillPdfHeader()}
+      <section class="card">
+      <h2>Billing ${this._hint("Account balance, statement, and lifetime totals from PGE billing sync. Ledger charts use external statistic ids, including bill kWh, which has no mirrored entity.")}</h2>
+      <div id="billing-pdf-header">${this._renderBillPdfHeader()}</div>
       <div class="usage-accounting-body">
+        <div id="billing-summary">
         ${
           summaryHtml ||
           `<p class="muted stats-meta">No billing values yet — wait for a sync or check Configure → Sync settings.</p>`
         }
-        ${this._renderBillPdfStatementDetails()}
-        <p class="muted stats-meta" style="margin-top:12px">Ledger charts use external statistic ids (including bill_kwh, which has no mirrored entity).</p>
-        <div class="chart-host" id="ledger-bill"></div>
-        <div class="chart-host" id="ledger-kwh" style="margin-top:8px"></div>
+        </div>
       </div>
+      </section>
+      <section class="card">
+        <div id="billing-pdf-details">${this._renderBillPdfStatementDetails()}</div>
+      </section>
+      <section class="card">
+        <figure class="chart-card">
+          <div class="fig-head"><h3 class="fig-title"><span class="fig-title-text">Billed vs paid</span></h3></div>
+          <div class="chart-host" id="ledger-bill"></div>
+        </figure>
+        <figure class="chart-card">
+          <div class="fig-head"><h3 class="fig-title"><span class="fig-title-text">Billed kWh</span></h3></div>
+          <div class="chart-host" id="ledger-kwh"></div>
+        </figure>
+      </section>
+      ${this._billingGalleryHtml()}
     `;
-    void this._renderLedgerCharts();
+    this._bindPersistentDetails(billing);
+    this._renderProgramsCard(programs, e);
+    return true;
+  }
 
+  _patchBillingText(summaryHtml) {
+    const summary = this.shadowRoot.getElementById("billing-summary");
+    const pdfHeader = this.shadowRoot.getElementById("billing-pdf-header");
+    const pdfDetails = this.shadowRoot.getElementById("billing-pdf-details");
+    if (!summary || !pdfHeader || !pdfDetails) return false;
+    summary.innerHTML =
+      summaryHtml ||
+      `<p class="muted stats-meta">No billing values yet — wait for a sync or check Configure → Sync settings.</p>`;
+    pdfHeader.innerHTML = this._renderBillPdfHeader();
+    pdfDetails.innerHTML = this._renderBillPdfStatementDetails();
+    return true;
+  }
+
+  _renderProgramsCard(programs, e) {
     const prog = [
       ["Auto Pay", e.autopay],
       ["Paperless bill", e.paperless_bill],
@@ -3850,12 +5881,42 @@ class PgeEnergyPanel extends HTMLElement {
           .join("")}
       </div>
       ${ptrFootnote}
+      ${this._ptrEventHtml(e)}
     `;
+  }
+
+  _ptrEventHtml(e) {
+    const active = stateDisplay(this._hass, e.ptr_event_active, null);
+    const detected = stateDisplay(this._hass, e.ptr_event_detected, null);
+    const start = stateDisplay(this._hass, e.ptr_event_start, null);
+    const end = stateDisplay(this._hass, e.ptr_event_end, null);
+    const sections = [];
+    if (active === "on") {
+      sections.push(`<div class="program on">
+        <div class="name">Peak Time Event Active</div>
+        <div class="state">${this._escape(start)} – ${this._escape(end)}</div>
+      </div>`);
+    } else if (start != null) {
+      sections.push(`<div class="program">
+        <div class="name">Scheduled PTR Event</div>
+        <div class="state">${this._escape(start)} – ${this._escape(end)}</div>
+      </div>`);
+    }
+    if (detected === "on") {
+      const detDate = stateAttr(this._hass, e.ptr_event_detected, "event_date");
+      sections.push(`<div class="program on">
+        <div class="name">PTR Event Detected</div>
+        <div class="state">${this._escape(detDate || "Unknown date")}</div>
+      </div>`);
+    }
+    if (sections.length === 0) return "";
+    return `<div class="programs ptr-events">${sections.join("")}</div>`;
   }
 
   async _renderLedgerCharts() {
     const account = this._account;
     if (!account) return;
+    const stamp = { entryId: this._activeEntryId, gen: this._galleryRenderGen || 0 };
     const colors = seriesColors(this);
     const range = rangePresets()["12mo"];
     const billHost = this.shadowRoot.getElementById("ledger-bill");
@@ -3882,6 +5943,7 @@ class PgeEnergyPanel extends HTMLElement {
           period: "month",
         }),
       ]);
+      if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) return;
       const money = await createMonthCompareChart(billHost, {
         billedXs: bill.xs,
         billedYs: bill.values,
@@ -3889,6 +5951,14 @@ class PgeEnergyPanel extends HTMLElement {
         payYs: pay.values,
         colors,
       });
+      if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) {
+        try {
+          money?.destroy?.();
+        } catch (_err) {
+          /* account changed while the ledger chart was initializing */
+        }
+        return;
+      }
       if (money) this._charts.push(money);
       const kwhChart = await createBarChart(kwhHost, {
         xs: kwh.xs,
@@ -3897,7 +5967,15 @@ class PgeEnergyPanel extends HTMLElement {
         color: colors.kwh,
         unit: " kWh",
       });
-      if (kwhChart) this._charts.push(kwhChart);
+      if (kwhChart && (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0))) {
+        try {
+          kwhChart.destroy?.();
+        } catch (_err) {
+          /* account changed while the ledger chart was initializing */
+        }
+      } else if (kwhChart) {
+        this._charts.push(kwhChart);
+      }
     } catch (_err) {
       billHost.innerHTML = `<p class="muted">Ledger statistics not available yet.</p>`;
     }
@@ -3911,7 +5989,9 @@ class PgeEnergyPanel extends HTMLElement {
     body.innerHTML = `
       <div class="entities">
         <div class="entity-row"><span>Auth expiration</span><strong>${this._escape(
-          sync.auth_expiration || stateDisplay(this._hass, e.auth_expiration)
+          this._fmtPacificDateTime(sync.auth_expiration) ||
+            this._fmtPacificDateTime(stateDisplay(this._hass, e.auth_expiration)) ||
+            stateDisplay(this._hass, e.auth_expiration)
         )}</strong></div>
         <div class="entity-row"><span>Last API error</span><strong>${this._escape(
           sync.last_api_error || stateDisplay(this._hass, e.last_api_error)
@@ -3925,8 +6005,25 @@ class PgeEnergyPanel extends HTMLElement {
         <div class="entity-row"><span>Consumption statistic</span><strong>${this._escape(
           this._account.statistic_ids.consumption
         )}</strong></div>
+        <div class="entity-row"><span>Last Recorded PTR Event</span><strong>${this._escape(
+          this._lastRecordedPtrLabel(e)
+        )}</strong></div>
       </div>
     `;
+  }
+
+  _lastRecordedPtrLabel(e) {
+    const events = stateAttr(this._hass, e?.program_peak_time_rebates, "peak_time_events");
+    if (!Array.isArray(events) || events.length === 0) return "—";
+    const newest = events[events.length - 1];
+    if (!newest || typeof newest !== "object") return "—";
+    const date = newest.event_date ? String(newest.event_date) : "";
+    const credit =
+      newest.event_earned_credit != null && newest.event_earned_credit !== ""
+        ? ` · $${newest.event_earned_credit}`
+        : "";
+    const label = `${date}${credit}`.trim();
+    return label || "—";
   }
 
   _fmt(value, suffix = "", money = false) {
@@ -3938,6 +6035,32 @@ class PgeEnergyPanel extends HTMLElement {
       }).format(value);
     }
     return `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}${suffix}`;
+  }
+
+  /** Pacific clock time, for example "Oct 13, 1:00 AM PT". */
+  _fmtPacificDateTime(value) {
+    if (value == null || value === "" || value === "—" || value === "unknown" || value === "unavailable") {
+      return "";
+    }
+    const d = value instanceof Date ? value : new Date(value);
+    if (!Number.isFinite(d.getTime())) return "";
+    const formatted = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(d);
+    return `${formatted} PT`;
+  }
+
+  /** Keep each YYYY-MM-DD intact so a 4-column tile wraps at the arrow, not at a hyphen. */
+  _fmtRangeDelta(text) {
+    const parts = String(text || "").split(" → ");
+    if (parts.length === 2 && parts[0] && parts[1]) {
+      return `<span class="date">${this._escape(parts[0])}</span> → <span class="date">${this._escape(parts[1])}</span>`;
+    }
+    return this._escape(text || "");
   }
 
   /** PGE calendar day as YYYY-MM-DD. */

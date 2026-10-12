@@ -24,6 +24,8 @@ from .const import (
     CONF_INCLUDE_BILLING,
     DEFAULT_INCLUDE_BILLING,
     DOMAIN,
+    ENTITY_UNIQUE_PTR_EVENT_ACTIVE,
+    ENTITY_UNIQUE_PTR_EVENT_DETECTED,
 )
 from .coordinator import PGECoordinator
 from .entity import PGEBaseEntity
@@ -37,25 +39,27 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    if not bool(get_entry_option(entry, CONF_INCLUDE_BILLING, DEFAULT_INCLUDE_BILLING)):
-        return
-
     coordinator: PGECoordinator = hass.data[DOMAIN][entry.entry_id]
     account_key = coordinator.account_key
-
-    async_add_entities(
-        [
-            PGEAutopayBinarySensor(coordinator, account_key),
-            PGEPaperlessBinarySensor(coordinator, account_key),
-            PGEPeakTimeRebatesBinarySensor(coordinator, account_key),
-            PGEGreenFutureBinarySensor(coordinator, account_key),
-            PGETimeOfDayBinarySensor(coordinator, account_key),
-            PGESmartThermostatBinarySensor(coordinator, account_key),
-            PGEHabitatSupportBinarySensor(coordinator, account_key),
-            PGESmartChargingBinarySensor(coordinator, account_key),
-            PGESmartBatteryBinarySensor(coordinator, account_key),
-        ]
-    )
+    entities: list[BinarySensorEntity] = [
+        PGEPtrEventActiveBinarySensor(coordinator, account_key),
+    ]
+    if bool(get_entry_option(entry, CONF_INCLUDE_BILLING, DEFAULT_INCLUDE_BILLING)):
+        entities.extend(
+            [
+                PGEAutopayBinarySensor(coordinator, account_key),
+                PGEPaperlessBinarySensor(coordinator, account_key),
+                PGEPeakTimeRebatesBinarySensor(coordinator, account_key),
+                PGEGreenFutureBinarySensor(coordinator, account_key),
+                PGETimeOfDayBinarySensor(coordinator, account_key),
+                PGESmartThermostatBinarySensor(coordinator, account_key),
+                PGEHabitatSupportBinarySensor(coordinator, account_key),
+                PGESmartChargingBinarySensor(coordinator, account_key),
+                PGESmartBatteryBinarySensor(coordinator, account_key),
+                PGEPtrEventDetectedBinarySensor(coordinator, account_key),
+            ]
+        )
+    async_add_entities(entities)
 
 
 class _PGEBinarySensor(PGEBaseEntity, BinarySensorEntity):
@@ -257,3 +261,52 @@ class PGESmartBatteryBinarySensor(_PGEProgramBinarySensor):
         if isinstance(detail, dict):
             attrs["smart_battery_detail"] = detail
         return attrs
+
+
+class PGEPtrEventActiveBinarySensor(_PGEBinarySensor):
+    """True when now is inside the manually scheduled PTR event window."""
+
+    _attr_translation_key = "ptr_event_active"
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator, account_key, ENTITY_UNIQUE_PTR_EVENT_ACTIVE)
+
+    @property
+    def is_on(self) -> bool | None:
+        return self.coordinator.ptr.event_active
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        event = self.coordinator.ptr.scheduled_event
+        if not event:
+            return {}
+        return {
+            "start": event.get("start"),
+            "end": event.get("end"),
+            "label": event.get("label", ""),
+            "source": "manual",
+        }
+
+
+class PGEPtrEventDetectedBinarySensor(_PGEBinarySensor):
+    """True when GraphQL has added a new PTR eventDate not yet acknowledged."""
+
+    _attr_translation_key = "ptr_event_detected"
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator, account_key, ENTITY_UNIQUE_PTR_EVENT_DETECTED)
+
+    @property
+    def is_on(self) -> bool | None:
+        return self.coordinator.ptr.event_detected
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        detected = self.coordinator.ptr.detected_event
+        if not detected:
+            return {}
+        return {
+            "event_date": detected.get("event_date"),
+            "event_earned_credit": detected.get("event_earned_credit"),
+            "source": "graphql",
+        }
