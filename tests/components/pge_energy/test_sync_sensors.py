@@ -24,7 +24,10 @@ def test_sync_sensors_read_snapshot():
         message="Hourly 4/20",
         error=None,
     )
-    assert PGESyncStatusSensor(coordinator, "ak").native_value == "backfilling"
+    status = PGESyncStatusSensor(coordinator, "ak")
+    assert status.native_value == "backfilling"
+    assert status.extra_state_attributes["api_host"]
+    assert status.extra_state_attributes["last_host_switch"] is None
     assert PGESyncProgressSensor(coordinator, "ak").native_value == 20
     assert PGESyncEtaSensor(coordinator, "ak").native_value == 40.0
     assert PGESyncDetailSensor(coordinator, "ak").native_value == "Hourly 4/20"

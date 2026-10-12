@@ -27,12 +27,14 @@ from homeassistant.helpers.selector import (
 
 from . import portal_auth
 from .api import PGEApiClient
+from .api_host import HostOverrideError, parse_host_override
 from .auth import PGEAuthManager, generate_stable_account_key
 from .billing_api import PGEBillingApiClient
 from .const import (
     AUTH_MODE_CREDENTIAL,
     CONF_ACCOUNT_ID,
     CONF_ACCOUNT_KEY,
+    CONF_API_HOST,
     CONF_AUTH_MODE,
     CONF_AUTO_BACKFILL,
     CONF_BACKFILL_CONCURRENCY,
@@ -505,6 +507,15 @@ def _optional_tod_rate_schema_item(entry: config_entries.ConfigEntry, key: str) 
     return vol.Optional(key), selector
 
 
+def _api_host_field(entry: config_entries.ConfigEntry) -> dict[Any, Any]:
+    """Optional API origin. Omit the default when unset so a blank box stays blank."""
+    current = get_entry_option(entry, CONF_API_HOST, None)
+    selector = TextSelector(TextSelectorConfig(type=TextSelectorType.URL))
+    if isinstance(current, str) and current.strip():
+        return {vol.Optional(CONF_API_HOST, default=current.strip()): selector}
+    return {vol.Optional(CONF_API_HOST): selector}
+
+
 def _options_schema(entry: config_entries.ConfigEntry) -> vol.Schema:
     history_mode = get_entry_option(entry, CONF_HISTORY_MODE, DEFAULT_HISTORY_MODE)
     history_mode_value = history_mode.value if isinstance(history_mode, HistoryMode) else str(history_mode)
@@ -642,6 +653,7 @@ def _options_schema(entry: config_entries.ConfigEntry) -> vol.Schema:
                     mode=NumberSelectorMode.BOX,
                 )
             ),
+            **_api_host_field(entry),
             vol.Required(
                 CONF_BACKFILL_CONCURRENCY,
                 default=int(get_entry_option(entry, CONF_BACKFILL_CONCURRENCY, DEFAULT_BACKFILL_CONCURRENCY)),
@@ -829,6 +841,12 @@ class PGEOptionsFlow(config_entries.OptionsFlow):
                         datetime.fromisoformat(str(start_date))
                     except ValueError:
                         errors["base"] = "invalid_history_start"
+            api_host: str | None = None
+            if not errors:
+                try:
+                    api_host = parse_host_override(user_input.get(CONF_API_HOST))
+                except HostOverrideError:
+                    errors["base"] = "api_host_invalid"
             if not errors:
                 unit = str(user_input[CONF_POLLING_INTERVAL_UNIT])
                 # Validate conversion (also clamps to MIN_POLLING_INTERVAL minutes).
@@ -859,6 +877,7 @@ class PGEOptionsFlow(config_entries.OptionsFlow):
                     CONF_BILL_PDF_ROLLING_COUNT: int(
                         user_input.get(CONF_BILL_PDF_ROLLING_COUNT, DEFAULT_BILL_PDF_ROLLING_COUNT)
                     ),
+                    CONF_API_HOST: api_host,
                     CONF_BACKFILL_CONCURRENCY: int(user_input[CONF_BACKFILL_CONCURRENCY]),
                     CONF_TOD_RATE_OFF_PEAK: _clean_tod_rate(user_input.get(CONF_TOD_RATE_OFF_PEAK)),
                     CONF_TOD_RATE_MID_PEAK: _clean_tod_rate(user_input.get(CONF_TOD_RATE_MID_PEAK)),

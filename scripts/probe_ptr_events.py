@@ -21,15 +21,16 @@ import aiohttp
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from custom_components.pge_energy import portal_auth
+from custom_components.pge_energy.api_host import graphql_url
 from custom_components.pge_energy.auth import PGEAuthManager, generate_immutable_account_key
 from custom_components.pge_energy.billing_api import (
     GET_PEAK_TIME_REBATE_ENROLLMENT_DETAILS,
     PGEBillingApiClient,
 )
+from custom_components.pge_energy.const import PGE_PORTAL_ORIGIN, PGE_PORTAL_REFERER
 
-GRAPHQL_URL = "https://api.portlandgeneral.com/pge-graphql"
-ORIGIN = "https://portlandgeneral.com"
-REFERER = "https://portlandgeneral.com/"
+ORIGIN = PGE_PORTAL_ORIGIN
+REFERER = PGE_PORTAL_REFERER
 TIMEOUT = aiohttp.ClientTimeout(total=30)
 
 
@@ -125,7 +126,7 @@ async def main() -> None:
 
             try:
                 async with session.post(
-                    GRAPHQL_URL,
+                    graphql_url(),
                     json=payload,
                     headers=headers,
                     timeout=TIMEOUT,
@@ -198,7 +199,7 @@ async def main() -> None:
             "operationName": "getPeakTimeRebateEnrollmentDetails",
         }
         async with session.post(
-            GRAPHQL_URL,
+            graphql_url(),
             json=payload,
             headers=headers,
             timeout=TIMEOUT,

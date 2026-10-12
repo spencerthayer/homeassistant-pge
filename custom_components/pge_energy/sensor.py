@@ -23,6 +23,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .api_host import public_hostname, resolver_from_client
 from .bill_pdf_statistics import BILL_PDF_METRIC_SUFFIXES, get_bill_pdf_statistic_suffix
 from .bill_pdf_store import normalized_from_entry
 from .billing_models import BillDetails, EnergyTrackerEstimates
@@ -760,6 +761,15 @@ class PGESyncStatusSensor(PGEBaseEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         return self.coordinator.sync_progress.status
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        resolver = resolver_from_client(getattr(self.coordinator, "client", None))
+        host = resolver.sticky
+        return {
+            "api_host": public_hostname(host) if host else None,
+            "last_host_switch": resolver.last_switch_reason,
+        }
 
 
 class PGESyncPhaseSensor(PGEBaseEntity, SensorEntity):

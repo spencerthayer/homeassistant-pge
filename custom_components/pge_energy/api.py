@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -14,7 +13,18 @@ from typing import Any
 
 import aiohttp
 
+from .api_host import (
+    MAX_AUTH_ATTEMPTS,
+    ApiHostResolver,
+    FailureClass,
+    classify_http,
+    content_type_of,
+    get_resolver,
+    graphql_url,
+    host_detail,
+)
 from .auth import PGEAuthManager
+from .const import PGE_WIDGET_ORIGIN, PGE_WIDGET_REFERER
 from .exceptions import (
     PGEAuthenticationError,
     PGEAuthorizationError,
@@ -31,10 +41,8 @@ from .models import (
 
 _LOGGER = logging.getLogger(__name__)
 
-GRAPHQL_URL = "https://api.portlandgeneral.com/pge-graphql"
 OPERATION_NAME = "GetUsageCompare"
-DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30)
-MAX_RETRIES = 3
+DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=5, sock_connect=5)
 ALPHA_CAPTURE_PREFIX = "PGE_ALPHA_GRID_CAPTURE"
 _CAPTURE_MAX_RESPONSES = 20
 _CAPTURE_MAX_ROWS = 40
@@ -383,6 +391,7 @@ class PGEApiClient:
         *,
         auth_manager: PGEAuthManager | None = None,
         capture_graphql_diagnostics: bool = False,
+        host_resolver: ApiHostResolver | None = None,
     ) -> None:
         self._session = session
         # Prefer explicit auth_manager; allow passing manager as second positional.
@@ -401,6 +410,8 @@ class PGEApiClient:
             self._legacy_token = None
             self._legacy_person_id = None
             self._legacy_account_id = None
+        self._hosts = host_resolver or get_resolver()
+        self.host_resolver = self._hosts
         self._rate_limit_until: datetime | None = None
         self._capture_graphql_diagnostics = capture_graphql_diagnostics
         self._captured_requests: set[tuple[UsageResolution, str, str]] = set()
@@ -499,7 +510,7 @@ class PGEApiClient:
         }
         try:
             async with self._session.post(
-                GRAPHQL_URL,
+                graphql_url(self._hosts.endpoint_origin()),
                 json=payload,
                 headers=headers,
                 timeout=_INTROSPECTION_TIMEOUT,
@@ -614,15 +625,18 @@ class PGEApiClient:
             "authorization": f"Bearer {token}",
             "aws_graphql_server": "graphql_server",
             "content-type": "application/json",
-            "origin": "https://widget.portlandgeneral.com",
-            "referer": "https://widget.portlandgeneral.com/",
+            "origin": PGE_WIDGET_ORIGIN,
+            "referer": PGE_WIDGET_REFERER,
         }
 
-        last_exc: Exception | None = None
-        for attempt in range(1, MAX_RETRIES + 1):
+        exclude: set[str] = set()
+        last_error: PGEConnectionError | None = None
+        for _attempt in range(MAX_AUTH_ATTEMPTS):
+            origin = await self._hosts.acquire(self._session, exclude=exclude)
+            url = graphql_url(origin)
             try:
                 async with self._session.post(
-                    GRAPHQL_URL,
+                    url,
                     json=payload,
                     headers=headers,
                     timeout=DEFAULT_TIMEOUT,
@@ -636,23 +650,31 @@ class PGEApiClient:
                         self._rate_limit_until = datetime.now(UTC) + timedelta(seconds=delay)
                         raise PGERateLimitError(f"Rate limited, retry after {delay}s")
                     if resp.status in (502, 503, 504):
-                        if attempt < MAX_RETRIES:
-                            await asyncio.sleep(2**attempt)
-                            continue
-                        raise PGEConnectionError(f"HTTP {resp.status} after {MAX_RETRIES} attempts")
+                        exclude.add(origin)
+                        self._hosts.mark_failure(origin, status=resp.status)
+                        last_error = PGEConnectionError(host_detail(f"HTTP {resp.status}", url))
+                        continue
                     if resp.status != 200:
                         body = await resp.text()
-                        raise PGEConnectionError(f"HTTP {resp.status}: {_sanitize_error_text(body)}")
+                        kind = classify_http(resp.status, content_type=content_type_of(resp), body=body)
+                        if kind is FailureClass.HOST:
+                            exclude.add(origin)
+                            self._hosts.mark_failure(origin, status=resp.status)
+                            last_error = PGEConnectionError(
+                                host_detail(f"HTTP {resp.status}: {_sanitize_error_text(body)}", url)
+                            )
+                            continue
+                        raise PGEConnectionError(host_detail(f"HTTP {resp.status}: {_sanitize_error_text(body)}", url))
 
                     data = await resp.json()
 
             except (TimeoutError, aiohttp.ClientError) as exc:
-                last_exc = exc
-                if attempt < MAX_RETRIES:
-                    await asyncio.sleep(2**attempt)
-                    continue
-                raise PGEConnectionError(f"Connection failed: {exc}") from exc
+                exclude.add(origin)
+                self._hosts.mark_failure(origin, status=None)
+                last_error = PGEConnectionError(host_detail(f"Connection failed ({type(exc).__name__})", url))
+                continue
             else:
+                self._hosts.mark_success(origin, reason="usage request succeeded")
                 if self._capture_graphql_diagnostics and not data.get("errors"):
                     try:
                         self._log_usage_capture(data, resolution, list_field, start, end, account_key)
@@ -674,7 +696,7 @@ class PGEApiClient:
                         )
                 return _parse_usage_response(data, resolution, account_key)
 
-        raise PGEConnectionError(f"Request failed after {MAX_RETRIES} attempts: {last_exc}")
+        raise last_error or PGEConnectionError(host_detail("PGE API host unavailable", url))
 
     async def get_monthly_usage_paged(
         self,

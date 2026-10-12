@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from datetime import UTC, datetime, timedelta
@@ -9,6 +8,15 @@ from typing import Any
 
 import aiohttp
 
+from .api_host import (
+    MAX_AUTH_ATTEMPTS,
+    FailureClass,
+    classify_http,
+    content_type_of,
+    graphql_url,
+    host_detail,
+    resolver_from_client,
+)
 from .auth import PGEAuthManager
 from .billing_models import (
     AccountSnapshot,
@@ -22,6 +30,7 @@ from .billing_models import (
     RateCompareSnapshot,
     sanitize_rate_compare_attrs,
 )
+from .const import PGE_PORTAL_ORIGIN, PGE_PORTAL_REFERER
 from .exceptions import (
     PGEAuthenticationError,
     PGEAuthorizationError,
@@ -33,14 +42,12 @@ from .exceptions import (
 
 _LOGGER = logging.getLogger(__name__)
 
-GRAPHQL_URL = "https://api.portlandgeneral.com/pge-graphql"
-DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30)
-MAX_RETRIES = 3
+DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=5, sock_connect=5)
 
 # Portal-style origin (account/bill/programs calls originate from the main
 # portal SPA, not the usage widget).
-_ORIGIN = "https://portlandgeneral.com"
-_REFERER = "https://portlandgeneral.com/"
+_ORIGIN = PGE_PORTAL_ORIGIN
+_REFERER = PGE_PORTAL_REFERER
 
 # ---------------------------------------------------------------------------
 # GraphQL documents (captured from portal JS discovery). Field/param names for
@@ -477,9 +484,14 @@ class PGEBillingApiClient:
             "operationName": operation_name,
         }
 
+        hosts = resolver_from_client(self._auth_manager)
         renewed = False
-        last_exc: Exception | None = None
-        for attempt in range(1, MAX_RETRIES + 1):
+        exclude: set[str] = set()
+        last_error: PGEConnectionError | None = None
+        host_failures = 0
+        while host_failures < MAX_AUTH_ATTEMPTS:
+            origin = await hosts.acquire(self._session, exclude=exclude)
+            url = graphql_url(origin)
             token = await self._auth_manager.ensure_valid_token()
             headers = {
                 "accept": "*/*",
@@ -491,7 +503,7 @@ class PGEBillingApiClient:
             }
             try:
                 async with self._session.post(
-                    GRAPHQL_URL,
+                    url,
                     json=payload,
                     headers=headers,
                     timeout=DEFAULT_TIMEOUT,
@@ -509,23 +521,34 @@ class PGEBillingApiClient:
                         self._rate_limit_until = datetime.now(UTC) + timedelta(seconds=delay)
                         raise PGERateLimitError(f"Rate limited, retry after {delay}s")
                     if resp.status in (502, 503, 504):
-                        if attempt < MAX_RETRIES:
-                            await asyncio.sleep(2**attempt)
-                            continue
-                        raise PGEConnectionError(f"HTTP {resp.status} after {MAX_RETRIES} attempts")
+                        host_failures += 1
+                        exclude.add(origin)
+                        hosts.mark_failure(origin, status=resp.status)
+                        last_error = PGEConnectionError(host_detail(f"HTTP {resp.status}", url))
+                        continue
                     if resp.status != 200:
                         body = await resp.text()
-                        raise PGEConnectionError(f"HTTP {resp.status}: {_sanitize_error_text(body)}")
+                        kind = classify_http(resp.status, content_type=content_type_of(resp), body=body)
+                        if kind is FailureClass.HOST:
+                            host_failures += 1
+                            exclude.add(origin)
+                            hosts.mark_failure(origin, status=resp.status)
+                            last_error = PGEConnectionError(
+                                host_detail(f"HTTP {resp.status}: {_sanitize_error_text(body)}", url)
+                            )
+                            continue
+                        raise PGEConnectionError(host_detail(f"HTTP {resp.status}: {_sanitize_error_text(body)}", url))
 
                     data = await resp.json()
 
             except (TimeoutError, aiohttp.ClientError) as exc:
-                last_exc = exc
-                if attempt < MAX_RETRIES:
-                    await asyncio.sleep(2**attempt)
-                    continue
-                raise PGEConnectionError(f"Connection failed: {exc}") from exc
+                host_failures += 1
+                exclude.add(origin)
+                hosts.mark_failure(origin, status=None)
+                last_error = PGEConnectionError(host_detail(f"Connection failed ({type(exc).__name__})", url))
+                continue
             else:
+                hosts.mark_success(origin, reason="billing request succeeded")
                 if data.get("errors"):
                     _classify_graphql_errors(list(data["errors"]))
                 result = data.get("data")
@@ -533,7 +556,9 @@ class PGEBillingApiClient:
                     raise PGESchemaError("GraphQL response missing data")
                 return result
 
-        raise PGEConnectionError(f"Request failed after {MAX_RETRIES} attempts: {last_exc}")
+        raise last_error or PGEConnectionError(
+            host_detail("PGE API host unavailable", graphql_url(hosts.endpoint_origin()))
+        )
 
     # -- Account detail -----------------------------------------------------
 

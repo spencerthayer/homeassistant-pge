@@ -13,6 +13,7 @@ from custom_components.pge_energy.exceptions import (
 )
 from custom_components.pge_energy.portal_auth import (
     _classify_cognito_error,
+    _cognito_initiate_auth,
     _extract_accounts,
     _extract_detail_list_accounts,
     _merge_account_ids,
@@ -46,6 +47,17 @@ class TestClassifyCognitoError:
                     "message": "Incorrect username or password.",
                 }
             )
+
+
+@pytest.mark.asyncio
+async def test_cognito_json_401_still_maps_rate_limit() -> None:
+    session = _mock_session_post([(401, {"__type": "TooManyRequestsException", "message": "Too many requests"})])
+    with pytest.raises(PGERateLimitError):
+        await _cognito_initiate_auth(
+            session,
+            auth_flow="USER_PASSWORD_AUTH",
+            auth_parameters={"USERNAME": "user", "PASSWORD": "secret"},
+        )
 
 
 class TestClassifyChallenge:

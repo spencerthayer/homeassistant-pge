@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
-VERSION = "0.10.6"
+VERSION = "0.11.0"
 PLATFORMS = ["sensor", "binary_sensor"]
 
 # Custom panel (registered once per HA instance, not per entry).
@@ -48,6 +48,9 @@ CONF_BACKFILL_CONCURRENCY = "backfill_concurrency"
 CONF_AUTO_BACKFILL = "auto_backfill"
 CONF_HISTORY_MODE = "history_mode"
 CONF_HISTORY_START_DATE = "history_start_date"
+CONF_API_HOST = "api_host"
+PGE_API_HOST_ENV = "PGE_API_HOST"
+PGE_API_HOST_ALLOW_FOREIGN_ENV = "PGE_API_HOST_ALLOW_FOREIGN"
 
 
 class HistoryMode(StrEnum):
@@ -294,7 +297,34 @@ CONF_BILL_PDF_RETENTION = "bill_pdf_retention"
 DEFAULT_BILL_PDF_RETENTION = "latest"
 CONF_BILL_PDF_ROLLING_COUNT = "bill_pdf_rolling_count"
 DEFAULT_BILL_PDF_ROLLING_COUNT = 12
-BILL_PDF_API_URL = "https://api.portlandgeneral.com/pge-bill-api/pdf/bills"
+# Apigee origins. Preferred host is first. Paths below attach to whichever
+# origin the resolver marks active. See docs/DATA_CONTRACT.md.
+# https://github.com/spencerthayer/homeassistant-pge/pull/39
+PGE_API_HOST_SUFFIX = ".portlandgeneral.com"
+PGE_API_HOSTS: tuple[str, ...] = (
+    "https://api.portlandgeneral.com",
+    "https://apix.portlandgeneral.com",
+)
+PGE_API_HOST_LABELS: tuple[str, ...] = (
+    "api",
+    "apix",
+    "api-gw",
+    "gw",
+    "portal",
+    "mobile",
+    "edge",
+)
+PGE_API_TOKEN_PATH = "/pg-token-implicit-aws/token"
+PGE_API_GRAPHQL_PATH = "/pge-graphql"
+PGE_API_BILL_PDF_PATH = "/pge-bill-api/pdf/bills"
+APIGEE_CLIENT_ID = "rHuS10KrfsLwFAr2sZ7MHh7oHELGx6YK"
+PGE_PORTAL_ORIGIN = "https://portlandgeneral.com"
+PGE_PORTAL_REFERER = "https://portlandgeneral.com/"
+PGE_WIDGET_ORIGIN = "https://widget.portlandgeneral.com"
+PGE_WIDGET_REFERER = "https://widget.portlandgeneral.com/"
+PGE_TOD_PAGE_URL = "https://portlandgeneral.com/about/info/pricing-plans/time-of-day"
+PGE_TOD_PAGE_DATA_URL = "https://portlandgeneral.com/page-data/about/info/pricing-plans/time-of-day/page-data.json"
+PGE_TARIFF_PAGE_DATA_URL = "https://portlandgeneral.com/page-data/about/info/rates-and-regulatory/tariff/page-data.json"
 BILL_PDF_PARSER_VERSION = 1
 BILL_PDF_MAX_BYTES = 10 * 1024 * 1024
 BILL_PDF_MAX_PAGES = 24
@@ -361,5 +391,4 @@ CONF_MANUAL_SYNC_ACTION = "manual_sync_action"
 MANUAL_SYNC_ACTION_REFRESH = "refresh"
 MANUAL_SYNC_ACTION_BACKFILL = "backfill"
 
-GRAPHQL_URL = "https://api.portlandgeneral.com/pge-graphql"
 OPERATION_NAME = "GetUsageCompare"

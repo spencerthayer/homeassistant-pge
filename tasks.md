@@ -1,5 +1,19 @@
 # Tasks
 
+## PGE API host failover (0.11.0)
+
+- [x] Single origin list plus path joiners. `portlandgeneral.com` under `custom_components/` stays in `const.py`.
+- [x] HTTP failure classes: 401/403/429 stay put. 502/503/504 and non-JSON gateway bodies fail over.
+- [x] Resolver: credential-free probe, no same-host retry ladder, circuit breaker, 24h return to the preferred host.
+- [x] Operator pin: `PGE_API_HOST` wins over Configure → API host. Foreign hosts require the unsupported opt-in.
+- [x] Bounded sibling labels are probed before credentials. A guessed label must return HTTP 401. Listed hosts and an operator pin keep the looser probe.
+- [x] Token-exchange HTTP 401 on a listed host or operator pin is an auth error and does not open a host cooldown. A guessed label that 401s the real token is dropped and the sweep continues. Cognito JSON 401 still maps MFA and rate limits. Entry resolvers own introspection and billing/PDF fallback URLs.
+- [x] Each config entry has its own host resolver. Clearing a pin stops traffic to that host. A cooled preferred host can still be probed once per cycle.
+- [x] Sync status, diagnostics, and import Store record the sticky host. No tokens in that snapshot.
+- [ ] Publish GitHub Release `v0.11.0` only after an explicit request, and only once CI is green on the pushed SHA.
+- [x] Live HA UAT: preferred host probed alive, sync status complete, `/pge` populated. Guessed-host token 401 sweep is covered by `test_guessed_host_401_on_the_real_token_keeps_sweeping`.
+- [ ] Live schema and recorder duplicate follow-ups: `.agents/plans/billing-schema-and-statistic-collision.md`
+
 ## Issue #5 UAT follow-ups — TOD panel cost + program credit sensors (MINOR)
 
 **Context:** Live HA fact-check on [#5 comment](https://github.com/spencerthayer/homeassistant-pge/issues/5#issuecomment-5305006740) confirmed:

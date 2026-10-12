@@ -15,6 +15,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 
 from .api import PGEApiClient
+from .api_host import apply_configured_host, forget_resolver
 from .auth import PGEAuthManager
 from .backfill import async_backfill_range, async_fetch_hourly_day
 from .billing_statistics import (
@@ -29,6 +30,7 @@ from .const import (
     BACKFILL_STALL_TIMEOUT,
     CONF_ACCOUNT_ID,
     CONF_ACCOUNT_KEY,
+    CONF_API_HOST,
     CONF_AUTH_MODE,
     CONF_AUTO_BACKFILL,
     CONF_BEARER_TOKEN,
@@ -153,10 +155,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
     if entry.title != desired_title:
         hass.config_entries.async_update_entry(entry, title=desired_title)
 
+    resolver = apply_configured_host(get_entry_option(entry, CONF_API_HOST, None), entry.entry_id)
+    auth_manager.host_resolver = resolver
+
     session = aiohttp_client.async_get_clientsession(hass)
     client = PGEApiClient(
         session,
         auth_manager=auth_manager,
+        host_resolver=resolver,
         capture_graphql_diagnostics=bool(
             get_entry_option(
                 entry,
@@ -776,6 +782,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool
             # Land any coalesced write before the store cache is dropped.
             await async_flush_import_state(hass, entry.entry_id)
         discard_store_cache(entry.entry_id)
+        forget_resolver(entry.entry_id)
         hass.data[DOMAIN].pop(entry.entry_id, None)
         remaining = [key for key, value in hass.data.get(DOMAIN, {}).items() if isinstance(value, PGECoordinator)]
         if not remaining:
