@@ -67,6 +67,7 @@ import {
   monthlyByYear,
   publishedWeekDays,
   spreadBand,
+  storySummary,
   typicalDayProfiles,
   gapDailyRows,
   overnightFloorDays,
@@ -276,6 +277,7 @@ dialog.drawer[open] { animation: pge-slide-in var(--pge-dur) var(--pge-ease); }
   color: var(--secondary-text-color);
 }
 .card h2, .card h3 { margin: 0 0 12px; font-size: 1.1rem; font-weight: 600; color: var(--primary-text-color); }
+.story-line { margin: 0 0 8px; font: var(--pge-text-headline); border-left: 3px solid var(--primary-color); padding-left: 12px; }
 .kpi-groups { display: grid; gap: var(--pge-space-4, 16px); }
 .kpi-group h3 { margin: 0 0 var(--pge-space-2, 8px); font: var(--pge-text-headline); }
 .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
@@ -800,7 +802,14 @@ details.usage-accounting .usage-accounting-body { padding: 0 0 4px; }
 
 /* Phone */
 @media (max-width: 640px) {
+  .kpi-groups { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 12px; }
+  .kpi-group { flex: 0 0 85%; scroll-snap-align: start; }
+  .section-tabs { overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+  .hdr-row { gap: 8px; }
   .toolbar { padding: 6px 10px; gap: 8px; }
+@media (max-width: 400px) {
+  .section-tabs [role="tab"] span { display: none; }
+}
   .content { padding: 10px; }
   .card { padding: 12px; border-radius: 10px; }
   .card h2, .card h3 { font-size: 1.05rem; }
@@ -2195,6 +2204,16 @@ class PgeEnergyPanel extends HTMLElement {
       </details>
     `;
     this._bindGlanceKpiClipboard(el);
+    const story = this.shadowRoot.getElementById("story");
+    if (story) {
+      const rows = storySummary({
+        estimate: { low: estNextMin, high: estNextMax },
+      });
+      story.hidden = rows.length === 0;
+      story.innerHTML = rows
+        .map((row) => `<p class="story-line tone-${row.tone}">${this._escape(row.text)}</p>`)
+        .join("");
+    }
   }
 
   /** Wire At a glance KPI tiles to copy label/value/delta on click or Enter/Space. */

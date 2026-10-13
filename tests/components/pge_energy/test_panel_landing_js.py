@@ -20,6 +20,12 @@ def test_panel_section_anchors_and_resolver_present():
     assert "this._landingApplied" in source
 
 
+def test_story_band_is_wired():
+    source = FRONTEND.read_text(encoding="utf-8")
+    assert 'id="story"' in source
+    assert "storySummary" in source
+
+
 def test_native_controls_match_panel_chips():
     source = FRONTEND.read_text(encoding="utf-8")
     assert 'input[type="datetime-local"]' in source
