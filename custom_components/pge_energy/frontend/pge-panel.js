@@ -147,6 +147,11 @@ const STYLE = `
   --pge-tod-off: var(--success-color, #1baf7a);
   --pge-tod-mid: var(--warning-color, #eb6834);
   --pge-tod-on: var(--error-color, #e34948);
+  --pge-bill-basic: var(--blue-grey-color, #607d8b);
+  --pge-bill-energy: var(--pge-series-kwh);
+  --pge-bill-delivery: var(--purple-color, #7b61ff);
+  --pge-bill-taxes: var(--amber-color, #ffc107);
+  --pge-bill-other: var(--brown-color, #795548);
   color-scheme: light;
 }
 :host *, :host *::before, :host *::after { box-sizing: border-box; }

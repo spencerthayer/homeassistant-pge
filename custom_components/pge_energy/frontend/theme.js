@@ -121,6 +121,64 @@ export function seriesColors(el = null) {
   };
 }
 
+export const BILL_FAMILY_KEYS = ["basic", "energyUse", "delivery", "taxes", "other"];
+
+export function distinctPalette(colors) {
+  const seen = new Set();
+  const out = [];
+  for (const color of colors || []) {
+    const key = String(color)
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "")
+      .replace(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/, "#$1$1$2$2$3$3");
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
+export function todColors(el = null) {
+  const root = el || document.documentElement;
+  return {
+    off_peak: cssVar("--pge-tod-off", "#1baf7a", root),
+    mid_peak: cssVar("--pge-tod-mid", "#eb6834", root),
+    on_peak: cssVar("--pge-tod-on", "#e34948", root),
+  };
+}
+
+export function billFamilyColors(el = null) {
+  const root = el || document.documentElement;
+  return {
+    basic: cssVar("--pge-bill-basic", "#607d8b", root),
+    energyUse: cssVar("--pge-bill-energy", "#2a78d6", root),
+    delivery: cssVar("--pge-bill-delivery", "#7b61ff", root),
+    taxes: cssVar("--pge-bill-taxes", "#ffc107", root),
+    other: cssVar("--pge-bill-other", "#795548", root),
+  };
+}
+
+/** Series palette with no repeated color; extra HA tokens pad it to at least 8. */
+export function galleryPalette(el = null) {
+  const root = el || (typeof document !== "undefined" ? document.documentElement : null);
+  const c = seriesColors(root);
+  const preferred = distinctPalette([
+    c.kwh,
+    c.cost,
+    c.export,
+    c.payment,
+    c.tempHot,
+    cssVar("--teal-color", "#009688", root),
+    cssVar("--pink-color", "#e91e63", root),
+    cssVar("--indigo-color", "#3f51b5", root),
+    cssVar("--lime-color", "#cddc39", root),
+  ]);
+  const fallback = ["#2a78d6", "#eb6834", "#7b61ff", "#1baf7a", "#e34948", "#009688", "#e91e63", "#3f51b5"];
+  const padded = distinctPalette([...preferred, ...fallback, "#607d8b", "#795548", "#ffc107", "#cddc39"]);
+  return padded.slice(0, 8);
+}
+
 /** Shared ECharts tooltip chrome that follows the active theme. */
 export function tooltipTheme(el = null) {
   const t = chromeColors(el);

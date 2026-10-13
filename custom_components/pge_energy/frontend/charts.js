@@ -12,6 +12,7 @@ import {
 } from "./data.js?v=0.12.2";
 import {
   chromeColors,
+  galleryPalette,
   seriesColors,
   tooltipTheme,
   withAlpha,
@@ -1600,7 +1601,7 @@ export async function createGalleryChart(host, {
   const finite = series.reduce((count, row) => count + countFinite(row?.values), 0);
   if (finite < 2) return showChartEmpty(host, "Not enough history.");
   const { theme, tip, colors } = galleryBase(host);
-  const palette = [colors.kwh, colors.cost, colors.export, colors.payment, colors.tempHot, colors.savings, colors.warn];
+  const palette = galleryPalette(host);
   const timeAxis = categories.length > 0 && typeof categories[0] === "number" && categories[0] > 1e9;
   const built = series.map((row, index) => {
     const color = row.color || palette[index % palette.length];
