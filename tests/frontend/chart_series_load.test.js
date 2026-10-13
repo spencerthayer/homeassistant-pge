@@ -7,6 +7,7 @@ import { pacificMidnightUtc } from "../../custom_components/pge_energy/frontend/
 import {
   baseloadFloor,
   cycleCumulative,
+  gapDailyRows,
   overnightFloorDays,
   dayFingerprints,
   hourWeekdayMatrix,
@@ -110,6 +111,30 @@ describe("load-shape series", () => {
     );
     assert.deepEqual(out.dayIndex, [0, 1]);
     assert.deepEqual(out.cumulative, [2, 5]);
+  });
+
+  it("daily gaps preserve zero without hourly history", () => {
+    const out = gapDailyRows(
+      [
+        { ts: atHour("2026-01-01", 0), kwh: 0 },
+        { ts: atHour("2026-01-03", 0), kwh: 9 },
+      ],
+      "2026-01-01",
+      "2026-01-04",
+    );
+    assert.deepEqual(
+      out.map((row) => row.kwh),
+      [0, null, 9],
+    );
+    const kept = gapDailyRows([{ ts: atHour("2026-01-02", 0), kwh: 0 }], "2026-01-02", "2026-01-03");
+    assert.equal(kept[0].kwh, 0);
+    const forced = gapDailyRows(
+      [{ ts: atHour("2026-01-02", 0), kwh: 0 }],
+      "2026-01-02",
+      "2026-01-03",
+      new Set(["2026-01-02"]),
+    );
+    assert.equal(forced[0].kwh, null);
   });
 
   it("spreadBand on [2, 4] returns mean 3 and sample standard deviation sqrt(2)", () => {

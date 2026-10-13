@@ -244,7 +244,11 @@ export async function renderLoadShape(panel, fns) {
 
   await mount( "chart-polar", (host) => createPolarBar(host, { values: profiles.weekday }));
 
-  const dailyKwh = daily.map((row) => row.kwh).filter((value) => value != null);
+  const spreadRows =
+    typeof fns.gapDailyRows === "function"
+      ? fns.gapDailyRows(daily, pacificYmd(start5), pacificYmd(end))
+      : daily;
+  const dailyKwh = spreadRows.map((row) => row.kwh).filter((value) => value != null);
   const histogram = fns.histogramBins(dailyKwh);
   await mount( "chart-histogram", (host) =>
     createGalleryChart(host, {
@@ -278,7 +282,7 @@ export async function renderLoadShape(panel, fns) {
   const band = fns.spreadBand(dailyKwh);
   await mount( "chart-spread", (host) =>
     createGalleryChart(host, {
-      categories: daily.map((row) => row.ts),
+      categories: spreadRows.map((row) => row.ts),
       yName: "kWh",
       markLines: band
         ? [
@@ -287,7 +291,7 @@ export async function renderLoadShape(panel, fns) {
             { y: band.high, name: "Mean + 2 sd" },
           ]
         : [],
-      series: [{ name: "Daily kWh", values: daily.map((row) => row.kwh) }],
+      series: [{ name: "Daily kWh", values: spreadRows.map((row) => row.kwh), connectNulls: false }],
     }),
   );
 

@@ -202,6 +202,26 @@ export function cycleCumulative(samples, startTs) {
 }
 
 /**
+ * One row per Pacific day from startYmd inclusive to endYmdExclusive.
+ * Absent days and dates in confirmedMissing stay null. A recorded zero stays zero.
+ */
+export function gapDailyRows(rows, startYmd, endYmdExclusive, confirmedMissing = new Set()) {
+  const byDay = new Map(
+    (rows || []).filter((row) => Number.isFinite(row.ts)).map((row) => [pacificYmd(row.ts), row]),
+  );
+  const out = [];
+  for (let ymd = startYmd; ymd < endYmdExclusive; ymd = addDays(ymd, 1)) {
+    const row = byDay.get(ymd);
+    out.push({
+      ...row,
+      ts: pacificMidnightUtc(ymd).getTime() / 1000,
+      kwh: confirmedMissing.has(ymd) ? null : finite(row?.kwh),
+    });
+  }
+  return out;
+}
+
+/**
  * Mean and sample standard deviation. `low` / `high` are mean ± 2 sd.
  * @returns {{ mean: number, sd: number, low: number, high: number }|null}
  */

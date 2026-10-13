@@ -61,6 +61,7 @@ import {
   publishedWeekDays,
   spreadBand,
   typicalDayProfiles,
+  gapDailyRows,
   overnightFloorDays,
   baseloadSteps,
   billExplainer,
@@ -2163,6 +2164,7 @@ class PgeEnergyPanel extends HTMLElement {
       publishedWeekDays,
       spreadBand,
       typicalDayProfiles,
+      gapDailyRows,
     });
   }
 
