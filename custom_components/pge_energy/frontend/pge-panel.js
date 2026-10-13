@@ -462,6 +462,7 @@ details.sync-gaps-panel {
   gap: var(--pge-space-4, 16px);
 }
 .chart-gallery figure { margin: 0; }
+.fig-wide { grid-column: 1 / -1; }
 .fig-head { display: flex; align-items: flex-start; gap: var(--pge-space-2, 8px); }
 .fig-titles { flex: 1; min-width: 0; }
 .fig-title { margin: 2px 0 0; font: var(--pge-text-headline); }
@@ -1372,8 +1373,8 @@ class PgeEnergyPanel extends HTMLElement {
         <div id="heatmap-temp"></div>
         <p class="muted" style="grid-column:1/-1;margin:0">Gray cells are days without an imported sample in recorder — not a full calendar year of PGE data.</p>
       </section>
-      <details class="chart-gallery" data-section="more-charts" data-persist="chart_gallery_more"${this._detailsOpenAttr("chart_gallery_more")}>
-        <summary><span class="rollup-title">More charts</span></summary>
+      <section class="chapter explore-more" data-chapter="explore" data-section="more-charts" data-persist="chart_gallery_more"${this._detailsOpenAttr("chart_gallery_more")}>
+        <header class="chapter-head"><span class="eyebrow">Explore more</span><h2 class="chapter-headline">More ways to look at your history</h2></header>
         ${this._figure("chart-fingerprint", { eyebrow: "Day fingerprint", title: "Day fingerprint", what: "Each line is a day: energy, peak hour, temperature, on-peak share, and price.", how: "Lines that sit apart from the pack were unusual days.", why: "It shows which days were odd without opening each one.", source: "Imported hourly consumption, cost, and temperature." })}
         ${this._figure("chart-ridgelines", { eyebrow: "Monthly ridgelines", title: "Monthly ridgelines", what: "Average hourly use for each month, stacked.", how: "Each ridge is one month. Higher means more use at that hour.", why: "You can see how the day shifts across the year.", source: "Imported hourly consumption." })}
         ${this._figure("chart-daypart-stream", { eyebrow: "Daypart stream", title: "Daypart stream", what: "How your use splits across parts of the day over time.", how: "The bands are overnight, morning, afternoon, and evening.", why: "A band that grows is a part of the day that is taking more of your energy.", source: "Imported hourly consumption." })}
@@ -1382,7 +1383,7 @@ class PgeEnergyPanel extends HTMLElement {
         ${this._figure("chart-baseload", { eyebrow: "Baseload band", title: "Baseload band", what: "Weekday average by hour with your overnight minimum as a line.", how: "The line is the lowest overnight hour in the weekday average.", why: "Anything above that line is use that turns on and off.", source: "Imported hourly consumption." })}
         ${this._figure("chart-polar", { eyebrow: "24-hour polar clock", title: "24-hour polar clock", what: "Average weekday use around a 24-hour dial.", how: "Noon is at the top. Longer bars are hours you use more.", why: "A clock makes the daily rhythm easier to see than a list of hours.", source: "Imported hourly consumption." })}
         ${this._figure("chart-treemap", { eyebrow: "Latest statement treemap", title: "Latest statement treemap", what: "Each block's size is that charge's share of the latest bill.", how: "Bigger blocks are a larger share of the latest statement.", why: "You can see what dominated the last bill without reading every line.", source: "Latest PDF statement families." })}
-      </details>
+      </section>
       </div>
       <div class="tab-panel" id="panel-billing" data-tab="billing" role="tabpanel" aria-labelledby="tab-billing">
       <section class="card" id="billing"></section>
@@ -1439,6 +1440,11 @@ class PgeEnergyPanel extends HTMLElement {
       await this._renderAll();
     });
     content.addEventListener("click", (ev) => {
+      const view = ev.target.closest?.("[data-view]");
+      if (view) {
+        this._selectChapterView(view.closest(".chapter"), view.dataset.view);
+        return;
+      }
       const button = ev.target.closest?.("[data-expand], button.explore-card");
       if (!button || button.disabled) return;
       const id = button.dataset.expand || button.dataset.chart;
@@ -2404,6 +2410,20 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   /** One gallery pass after the active entry's sync reaches complete. */
+  _selectChapterView(chapter, id) {
+    if (!chapter) return;
+    const target = [...chapter.querySelectorAll("[data-view-panel]")].find((view) => view.dataset.viewPanel === id);
+    const chip = [...chapter.querySelectorAll("[data-view]")].find((button) => button.dataset.view === id && !button.disabled);
+    if (!target || !chip) return;
+    for (const view of chapter.querySelectorAll("[data-view-panel]")) view.hidden = view !== target;
+    for (const button of chapter.querySelectorAll("[data-view]")) {
+      button.setAttribute("aria-pressed", String(button === chip));
+    }
+    try { localStorage.setItem("pge_chapter_view_" + chapter.dataset.chapter, id); }
+    catch (_err) { /* storage can be unavailable */ }
+    this._resizeChartsUnder(target);
+  }
+
   _mountDeferred(record) {
     if (record.promise) return record.promise;
     const host = record.sourceHost;
@@ -2578,18 +2598,31 @@ class PgeEnergyPanel extends HTMLElement {
         note: id === "chart-baseload-history",
       });
     return `
-      <details class="chart-gallery" data-persist="chart_gallery_load"${this._detailsOpenAttr("chart_gallery_load")}>
-        <summary><span class="rollup-title">Load shape</span></summary>
-        ${figure("chart-typical-day", "Typical day", "Horizontal: Pacific hour. Vertical: mean kWh. Source: imported hourly consumption.")}
-        ${figure("chart-hour-weekday", "Hour by weekday", "Horizontal: Pacific hour. Vertical: weekday. Color: mean kWh. Source: imported hourly consumption.")}
-        ${figure("chart-histogram", "Daily kWh histogram", "Horizontal: daily kWh bin. Vertical: number of days. Source: imported daily consumption.")}
-        ${figure("chart-yoy", "Year over year", "Horizontal: month. Vertical: kWh. Source: imported daily consumption.")}
-        ${figure("chart-cycle-race", "Billing-cycle race", "Horizontal: day of statement. Vertical: cumulative kWh. Source: imported hourly consumption.")}
-        ${figure("chart-spread", "Daily spread", "Horizontal: date. Vertical: daily kWh. Lines: mean and mean plus or minus two standard deviations. Source: imported daily consumption.")}
-        ${figure("chart-duck", "Duck curve", "Horizontal: Pacific hour. Vertical: kWh. Import and export. Shown only when the account has returned energy.")}
-        ${figure("chart-duck-months", "Duck curve by month", "Horizontal: month. Vertical: kWh and dollars. Import, export, PGE usage estimate, and export compensation.")}
-        ${figure("chart-baseload-history", "Always-on load history", "Horizontal: date. Vertical: minimum kWh in Pacific hours 0 through 5. Markers are steps. Yearly cost uses the trailing 365-day PGE usage estimate.")}
-      </details>`;
+      <section class="chapter" data-chapter="when-you-use" data-persist="chart_gallery_load"${this._detailsOpenAttr("chart_gallery_load")}>
+        <header class="chapter-head"><span class="eyebrow"><ha-icon icon="mdi:lightning-bolt-outline"></ha-icon>When you use energy</span>
+          <h2 class="chapter-headline" data-chapter-headline="when-you-use">A typical weekday vs weekend</h2></header>
+        <div class="chapter-lead">${figure("chart-typical-day", "Typical day", "Horizontal: Pacific hour. Vertical: mean kWh. Source: imported hourly consumption.")}</div>
+        <div class="view-chips" role="group" aria-label="More views">
+          <button type="button" class="chip" data-view="chart-hour-weekday" aria-pressed="true">Weekly rhythm</button>
+          <button type="button" class="chip" data-view="chart-histogram" aria-pressed="false">How big is a normal day?</button>
+          <button type="button" class="chip" data-view="chart-yoy" aria-pressed="false">This year vs past years</button>
+          <button type="button" class="chip" data-view="chart-cycle-race" aria-pressed="false">This bill vs last bill</button>
+          <button type="button" class="chip" data-view="chart-spread" aria-pressed="false">Unusual days</button>
+          <button type="button" class="chip" data-view="chart-duck" aria-pressed="false">Solar export</button>
+          <button type="button" class="chip" data-view="chart-duck-months" aria-pressed="false">Solar by month</button>
+          <button type="button" class="chip" data-view="chart-baseload-history" aria-pressed="false">Always-on power</button>
+        </div>
+        <div class="chapter-views">
+          <div data-view-panel="chart-hour-weekday">${figure("chart-hour-weekday", "Hour by weekday", "Horizontal: Pacific hour. Vertical: weekday. Color: mean kWh. Source: imported hourly consumption.")}</div>
+          <div data-view-panel="chart-histogram" hidden>${figure("chart-histogram", "Daily kWh histogram", "Horizontal: daily kWh bin. Vertical: number of days. Source: imported daily consumption.")}</div>
+          <div data-view-panel="chart-yoy" hidden>${figure("chart-yoy", "Year over year", "Horizontal: month. Vertical: kWh. Source: imported daily consumption.")}</div>
+          <div data-view-panel="chart-cycle-race" hidden>${figure("chart-cycle-race", "Billing-cycle race", "Horizontal: day of statement. Vertical: cumulative kWh. Source: imported hourly consumption.")}</div>
+          <div data-view-panel="chart-spread" hidden>${figure("chart-spread", "Daily spread", "Horizontal: date. Vertical: daily kWh. Lines: mean and mean plus or minus two standard deviations. Source: imported daily consumption.")}</div>
+          <div data-view-panel="chart-duck" hidden>${figure("chart-duck", "Duck curve", "Horizontal: Pacific hour. Vertical: kWh. Import and export. Shown only when the account has returned energy.")}</div>
+          <div data-view-panel="chart-duck-months" hidden>${figure("chart-duck-months", "Duck curve by month", "Horizontal: month. Vertical: kWh and dollars. Import, export, PGE usage estimate, and export compensation.")}</div>
+          <div data-view-panel="chart-baseload-history" hidden>${figure("chart-baseload-history", "Always-on load history", "Horizontal: date. Vertical: minimum kWh in Pacific hours 0 through 5. Markers are steps. Yearly cost uses the trailing 365-day PGE usage estimate.")}</div>
+        </div>
+      </section>`;
   }
 
   async _renderLoadShapeGallery() {
@@ -2622,8 +2655,9 @@ class PgeEnergyPanel extends HTMLElement {
         note: id === "chart-baseload-history",
       });
     return `
-      <details class="chart-gallery" data-persist="chart_gallery_tod"${this._detailsOpenAttr("chart_gallery_tod")}>
-        <summary><span class="rollup-title">Charts</span></summary>
+      <section class="chapter" data-chapter="tod-charts" data-persist="chart_gallery_tod"${this._detailsOpenAttr("chart_gallery_tod")}>
+        <header class="chapter-head"><span class="eyebrow"><ha-icon icon="mdi:clock-time-four-outline"></ha-icon>Your Time of Day</span>
+          <h2 class="chapter-headline">Your most expensive hours</h2></header>
         <figure data-chart="chart-shift-sim">
           <h3>Load-shift simulator</h3>
           <p class="muted">What a weekday load costs per month at each start hour. Local TOD imported-energy estimate versus Schedule 7 base plus Schedule 125. That line is not a full Basic bill. Weekends are all off-peak.</p>
@@ -2645,7 +2679,7 @@ class PgeEnergyPanel extends HTMLElement {
         ${figure("chart-tod-delta", "Local Basic minus local TOD", "Horizontal: month. Vertical: dollars, positive means the local TOD estimate is lower. Source: local catalog prices on hourly kWh.")}
         ${figure("chart-forward-ribbon", "Forward 48-hour ribbon", "Horizontal: next Pacific hour. Vertical: historical mean kWh. Bars follow the offline schedule. No recorder data past the published end.")}
         ${figure("chart-sankey", "Sankey", "Period kWh into local estimate dollars. Source: hourly consumption and the local catalog. Not portal hourly amount.")}
-      </details>`;
+      </section>`;
   }
 
   async _renderTodGallery() {
@@ -2697,13 +2731,14 @@ class PgeEnergyPanel extends HTMLElement {
         note: id === "chart-baseload-history",
       });
     return `
-      <details class="chart-gallery" data-persist="chart_gallery_billing"${this._detailsOpenAttr("chart_gallery_billing")}>
-        <summary><span class="rollup-title">Charts</span></summary>
+      <section class="chapter" data-chapter="billing-charts" data-persist="chart_gallery_billing"${this._detailsOpenAttr("chart_gallery_billing")}>
+        <header class="chapter-head"><span class="eyebrow"><ha-icon icon="mdi:receipt-text-outline"></ha-icon>Why this bill changed</span>
+          <h2 class="chapter-headline">Why this bill changed</h2></header>
         ${figure("chart-bill-explainer", "Why this bill changed", "Approximate statement windows. Bars sum to the change in amount due.")}
         ${figure("chart-statement-portal", "Statement vs portal estimate", "Approximate statement window. Billed amount against summed PGE usage estimate.")}
         ${figure("chart-bill-imported", "Bill kWh vs imported kWh", "Approximate statement window. Billed kWh against summed imported kWh.")}
         ${figure("chart-balance-due", "Balance and amount due", "Horizontal: time. Vertical: dollars. Source: account balance and amount due means. Not a cumulative sum.")}
-      </details>
+      </section>
       <div id="chart-pdf-slot"></div>`;
   }
 
@@ -2765,15 +2800,16 @@ class PgeEnergyPanel extends HTMLElement {
         source: caption,
       });
     return `
-      <details class="chart-gallery" data-persist="chart_gallery_pdf"${this._detailsOpenAttr("chart_gallery_pdf")}>
-        <summary><span class="rollup-title">Bill PDF</span></summary>
+      <section class="chapter" data-chapter="bill-pdf" data-persist="chart_gallery_pdf"${this._detailsOpenAttr("chart_gallery_pdf")}>
+        <header class="chapter-head"><span class="eyebrow"><ha-icon icon="mdi:receipt-text-outline"></ha-icon>What's in your bill</span>
+          <h2 class="chapter-headline">What's in each bill</h2></header>
         <div class="metric-toggle" role="group" aria-label="Bill mix">
           <button type="button" data-bill-mode="dollars" aria-pressed="${this._billAnatomyMode !== "percent"}">$</button>
           <button type="button" data-bill-mode="percent" aria-pressed="${this._billAnatomyMode === "percent"}">%</button>
         </div>
         ${figure("chart-bill-anatomy", "Stacked bill anatomy", "Horizontal: statement. Vertical: dollars or percent. Basic, energy use, delivery, taxes, and other.")}
         ${figure("chart-waterfall", "Statement waterfall", "Previous amount due, payment, new charges, amount due.")}
-      </details>`;
+      </section>`;
   }
 
   _fmtWhen(unixSec) {
