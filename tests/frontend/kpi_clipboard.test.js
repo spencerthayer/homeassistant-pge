@@ -3,7 +3,31 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatKpiClipboardText } from "../../custom_components/pge_energy/frontend/data.js";
+import { countUpFrames, formatKpiClipboardText, pctDelta, rollupColumns } from "../../custom_components/pge_energy/frontend/data.js";
+
+describe("rollupColumns", () => {
+  it("hides buckets when every row has one bucket", () => {
+    assert.equal(rollupColumns([{ buckets: 1 }, { buckets: 1 }]).showBuckets, false);
+    assert.equal(rollupColumns([{ buckets: 1 }, { buckets: 2 }]).showBuckets, true);
+  });
+});
+
+describe("countUpFrames", () => {
+  it("returns eased frames ending at the target", () => {
+    const frames = countUpFrames(0, 68.64, 6);
+    assert.equal(frames.length, 6);
+    assert.equal(frames[frames.length - 1], 68.64);
+    assert.ok(frames[1] > frames[0]);
+  });
+});
+
+describe("pctDelta", () => {
+  it("returns the percent change and null for a missing or zero baseline", () => {
+    assert.ok(Math.abs(pctDelta(68.64, 60) - 14.4) < 0.001);
+    assert.equal(pctDelta(5, 0), null);
+    assert.equal(pctDelta(null, 5), null);
+  });
+});
 
 describe("formatKpiClipboardText", () => {
   it("joins label, value, and delta on separate lines", () => {

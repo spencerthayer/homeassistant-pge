@@ -5,8 +5,8 @@
 
 const _cache = new Map();
 
-function _cacheKey(statisticId, period, start, end) {
-  return `${statisticId}|${period}|${start}|${end}`;
+function _cacheKey(statisticId, period, start, end, maxPoints) {
+  return `${statisticId}|${period}|${start}|${end}|${maxPoints}`;
 }
 
 /** Largest-Triangle-Three-Buckets downsample for [x, y] pairs. */
@@ -97,7 +97,7 @@ export async function sumStatisticChange(hass, statisticId, { start, end, period
 export async function fetchStatisticSeries(hass, statisticId, { start, end, period = "hour", maxPoints = 1200 } = {}) {
   const startIso = start instanceof Date ? start.toISOString() : start;
   const endIso = end instanceof Date ? end.toISOString() : end;
-  const key = _cacheKey(statisticId, period, startIso, endIso);
+  const key = _cacheKey(statisticId, period, startIso, endIso, maxPoints);
   if (_cache.has(key)) {
     return _cache.get(key);
   }
@@ -343,6 +343,19 @@ export function formatSignedUsd(value, digits = 2) {
   return `$${abs}`;
 }
 
+/** One tooltip line a homeowner can read. */
+export function formatTooltipRow({ name, value, unit, estimate } = {}) {
+  if (value == null || value === "" || !Number.isFinite(Number(value))) return `${name}: no data`;
+  const n = Number(value);
+  if (unit === "$") {
+    const money = `$${Math.abs(n).toFixed(2)}`;
+    const signed = n < 0 ? `−${money}` : money;
+    return estimate ? `${name}: about ${signed} (PGE estimate)` : `${name}: ${signed}`;
+  }
+  const suffix = unit ? ` ${unit}` : "";
+  return `${name}: ${n.toFixed(2)}${suffix}`;
+}
+
 /** Human kWh label; negative flow shown as positive export magnitude when signed. */
 export function formatSignedKwh(value, { signed = false } = {}) {
   if (value == null || value === "" || value === "-") return "—";
@@ -356,6 +369,32 @@ export function formatSignedKwh(value, { signed = false } = {}) {
  * Clipboard payload for an At a glance KPI tile (label / value / optional delta).
  * Omits empty parts and collapses whitespace so sparklines never pollute the copy.
  */
+export function rollupColumns(rows) {
+  const showBuckets = (rows || []).some((row) => Number(row?.buckets) > 1);
+  return { showBuckets };
+}
+
+/** Percent change from a baseline. Zero or missing baselines stay null. */
+export function countUpFrames(from, to, frames) {
+  const start = Number(from) || 0;
+  const end = Number(to);
+  const count = Math.max(1, Number(frames) || 1);
+  const values = [];
+  for (let i = 1; i <= count; i++) {
+    const t = i / count;
+    const eased = 1 - (1 - t) ** 3;
+    values.push(start + (end - start) * eased);
+  }
+  values[values.length - 1] = end;
+  return values;
+}
+
+export function pctDelta(value, baseline) {
+  return value == null || !baseline || !Number.isFinite(value) || !Number.isFinite(baseline)
+    ? null
+    : ((value - baseline) / baseline) * 100;
+}
+
 export function formatKpiClipboardText({ label, value, delta } = {}) {
   const parts = [label, value, delta]
     .map((part) => (part == null ? "" : String(part).replace(/\s+/g, " ").trim()))
@@ -1768,4 +1807,49 @@ export function detectFlatPortalRates({ hourlyKwh, hourlyCost, todCatalog } = {}
     status: "varied",
     diagnostics: { observedSpread, expectedSpread, medians, bands },
   };
+}
+
+export const PANEL_TABS = ["glance", "usage", "analytics", "billing", "tod", "programs"];
+export const PANEL_TAB_LABELS = {
+  glance: "Overview",
+  usage: "Usage",
+  analytics: "Analytics",
+  billing: "Billing",
+  tod: "Time of Day",
+  programs: "Programs",
+};
+export const PANEL_TAB_ICONS = {
+  glance: "mdi:view-dashboard-outline",
+  usage: "mdi:lightning-bolt-outline",
+  analytics: "mdi:chart-scatter-plot",
+  billing: "mdi:receipt-text-outline",
+  tod: "mdi:clock-time-four-outline",
+  programs: "mdi:leaf",
+};
+
+export function syncPillState(status = {}) {
+  const failed = Number(status.failed_days || status.failedDays || 0);
+  const state = String(status.status || "idle");
+  if (failed > 0 || status.error || state === "error" || state === "failed") {
+    return { tone: "critical", text: "Sync issue" };
+  }
+  if (state === "backfilling") {
+    const pct = Math.round(Number(status.percent) || 0);
+    return { tone: "warn", text: `Backfilling ${pct}%` };
+  }
+  if (state === "complete") return { tone: "good", text: "Synced" };
+  return { tone: "warn", text: state === "idle" ? "Sync status" : state };
+}
+
+export function panelTabHash(tab) {
+  return tab === "glance" ? "#overview" : `#${tab}`;
+}
+
+export function resolvePanelTab(hash, defaultSection) {
+  const key = String(hash || "").replace(/^#/, "");
+  if (key === "overview" || key === "kpis") return "glance";
+  if (key === "hero") return "usage";
+  if (key === "insights-weather") return "analytics";
+  if (PANEL_TABS.includes(key)) return key;
+  return PANEL_TABS.includes(defaultSection) ? defaultSection : "glance";
 }

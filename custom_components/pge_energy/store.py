@@ -148,6 +148,12 @@ class ImportStoreData:
     newest_interval: str | None = None
     # Sticky API host and cooldown clocks. No tokens. Missing on older stores.
     api_host: dict[str, Any] | None = None
+    # Peak Time Rebate manual schedule + detection state (additive, no schema bump).
+    ptr_scheduled_event: dict[str, Any] | None = None
+    ptr_seen_event_dates: list[str] = field(default_factory=list)
+    ptr_detected_event: dict[str, Any] | None = None
+    # Distinguishes "detection has never run" from "ran when history was empty".
+    ptr_detection_initialized: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -204,6 +210,10 @@ class ImportStoreData:
             last_successful_update=data.get("last_successful_update"),
             newest_interval=data.get("newest_interval"),
             api_host=_load_dict_snapshot(data, "api_host"),
+            ptr_scheduled_event=_load_dict_snapshot(data, "ptr_scheduled_event"),
+            ptr_seen_event_dates=list(data.get("ptr_seen_event_dates") or []),
+            ptr_detected_event=_load_dict_snapshot(data, "ptr_detected_event"),
+            ptr_detection_initialized=_load_ptr_detection_initialized(data),
         )
 
 
@@ -216,6 +226,14 @@ def _load_bill_pdf_index(data: dict[str, Any]) -> dict[str, BillPdfIndexEntry]:
 
 def _load_tod_snapshot(data: dict[str, Any]) -> dict[str, Any] | None:
     return _load_dict_snapshot(data, "tod_snapshot")
+
+
+def _load_ptr_detection_initialized(data: dict[str, Any]) -> bool:
+    """Older stores omit the flag. A non-empty seen list means detection already ran."""
+    raw = data.get("ptr_detection_initialized")
+    if raw is None:
+        return bool(data.get("ptr_seen_event_dates"))
+    return bool(raw)
 
 
 def _load_dict_snapshot(data: dict[str, Any], key: str) -> dict[str, Any] | None:

@@ -37,6 +37,11 @@ from .const import (
     DOMAIN,
     E_TOU_PERIODS,
     ENABLE_TOD_SENSORS,
+    ENTITY_NAME_LIFETIME_COMPENSATION,
+    ENTITY_NAME_LIFETIME_COST,
+    ENTITY_NAME_LIFETIME_EXPORT,
+    ENTITY_NAME_LIFETIME_IMPORT,
+    ENTITY_NAME_OUTDOOR_TEMPERATURE,
     ENTITY_UNIQUE_ACCOUNT_BALANCE,
     ENTITY_UNIQUE_AMOUNT_DUE,
     ENTITY_UNIQUE_BILL_AVG_TEMPERATURE,
@@ -67,6 +72,8 @@ from .const import (
     ENTITY_UNIQUE_LIFETIME_PAYMENTS,
     ENTITY_UNIQUE_NET_METERING,
     ENTITY_UNIQUE_NEXT_PTR_EVENT_DATE,
+    ENTITY_UNIQUE_PTR_EVENT_END,
+    ENTITY_UNIQUE_PTR_EVENT_START,
     ENTITY_UNIQUE_RETURN,
     ENTITY_UNIQUE_SYNC_DETAIL,
     ENTITY_UNIQUE_SYNC_ERROR,
@@ -232,6 +239,13 @@ async def async_setup_entry(
             ]
         )
 
+    entities.extend(
+        [
+            PGEPtrEventStartSensor(coordinator, account_key),
+            PGEPtrEventEndSensor(coordinator, account_key),
+        ]
+    )
+
     if bool(get_entry_option(entry, CONF_INCLUDE_BILLING, DEFAULT_INCLUDE_BILLING)):
         entities.extend(
             [
@@ -329,7 +343,7 @@ class _StatisticLinkedSensor(PGEBaseEntity, SensorEntity):
 class PGEEnergySensor(_StatisticLinkedSensor):
     """Lifetime grid-imported energy (kWh). State is lifetime cumulative sum."""
 
-    _attr_name = "Consumption"
+    _attr_name = ENTITY_NAME_LIFETIME_IMPORT
     # Keep documented object-id suffix ``_energy`` on fresh installs (unique_id
     # remains ``…_energy``; existing registry rows are never renamed).
     _attr_suggested_object_id = "energy"
@@ -343,7 +357,7 @@ class PGEEnergySensor(_StatisticLinkedSensor):
 
     @property
     def suggested_object_id(self) -> str | None:
-        """Force ``…_energy`` object id even though the friendly name is Consumption."""
+        """Force ``…_energy`` object id even though the friendly name is Lifetime import."""
         return "energy"
 
     @property
@@ -354,7 +368,9 @@ class PGEEnergySensor(_StatisticLinkedSensor):
 class PGEReturnSensor(_StatisticLinkedSensor):
     """Lifetime grid-exported energy (kWh). State is lifetime cumulative sum."""
 
-    _attr_name = "Return"
+    _attr_name = ENTITY_NAME_LIFETIME_EXPORT
+    # Keep documented object-id suffix ``_return`` on fresh installs.
+    _attr_suggested_object_id = "return"
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
@@ -364,6 +380,11 @@ class PGEReturnSensor(_StatisticLinkedSensor):
         super().__init__(coordinator, account_key, ENTITY_UNIQUE_RETURN)
 
     @property
+    def suggested_object_id(self) -> str | None:
+        """Force ``…_return`` even though the friendly name is Lifetime export."""
+        return "return"
+
+    @property
     def native_value(self) -> float | None:
         return self.coordinator.lifetime_return_kwh
 
@@ -371,7 +392,9 @@ class PGEReturnSensor(_StatisticLinkedSensor):
 class PGECostSensor(_StatisticLinkedSensor):
     """Lifetime imported cost (USD). State is lifetime cumulative sum."""
 
-    _attr_name = "Cost"
+    _attr_name = ENTITY_NAME_LIFETIME_COST
+    # Keep documented object-id suffix ``_cost`` on fresh installs.
+    _attr_suggested_object_id = "cost"
     _attr_native_unit_of_measurement = "USD"
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_state_class = SensorStateClass.TOTAL
@@ -381,6 +404,11 @@ class PGECostSensor(_StatisticLinkedSensor):
         super().__init__(coordinator, account_key, ENTITY_UNIQUE_COST)
 
     @property
+    def suggested_object_id(self) -> str | None:
+        """Force ``…_cost`` even though the friendly name is Lifetime cost."""
+        return "cost"
+
+    @property
     def native_value(self) -> float | None:
         return self.coordinator.lifetime_cost_usd
 
@@ -388,7 +416,9 @@ class PGECostSensor(_StatisticLinkedSensor):
 class PGECompensationSensor(_StatisticLinkedSensor):
     """Lifetime export compensation (USD). State is lifetime cumulative sum."""
 
-    _attr_name = "Compensation"
+    _attr_name = ENTITY_NAME_LIFETIME_COMPENSATION
+    # Keep documented object-id suffix ``_compensation`` on fresh installs.
+    _attr_suggested_object_id = "compensation"
     _attr_native_unit_of_measurement = "USD"
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_state_class = SensorStateClass.TOTAL
@@ -399,6 +429,11 @@ class PGECompensationSensor(_StatisticLinkedSensor):
         super().__init__(coordinator, account_key, ENTITY_UNIQUE_COMPENSATION)
 
     @property
+    def suggested_object_id(self) -> str | None:
+        """Force ``…_compensation`` even though the friendly name is Lifetime compensation."""
+        return "compensation"
+
+    @property
     def native_value(self) -> float | None:
         return self.coordinator.lifetime_compensation_usd
 
@@ -406,7 +441,7 @@ class PGECompensationSensor(_StatisticLinkedSensor):
 class PGEOutdoorTemperatureSensor(_StatisticLinkedSensor):
     """Latest PGE-reported outdoor temperature (°F) for an interval."""
 
-    _attr_name = "Outdoor temperature"
+    _attr_name = ENTITY_NAME_OUTDOOR_TEMPERATURE
     _attr_native_unit_of_measurement = UnitOfTemperature.FAHRENHEIT
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1282,6 +1317,68 @@ class PGENextPtrEventDateSensor(PGEBaseEntity, SensorEntity):
                 except ValueError:
                     continue
         return None
+
+
+class PGEPtrEventStartSensor(PGEBaseEntity, SensorEntity):
+    """Scheduled PTR event start time (Pacific ISO)."""
+
+    _attr_translation_key = "ptr_event_start"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_unique_id: str
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{account_key}_{ENTITY_UNIQUE_PTR_EVENT_START}"
+
+    @property
+    def native_value(self) -> datetime | None:
+        event = self.coordinator.ptr.scheduled_event
+        if not event:
+            return None
+        raw = event.get("start")
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                from .time_util import PGE_TZ
+
+                dt = dt.replace(tzinfo=PGE_TZ)
+            return dt
+        except (ValueError, TypeError):
+            return None
+
+
+class PGEPtrEventEndSensor(PGEBaseEntity, SensorEntity):
+    """Scheduled PTR event end time (Pacific ISO)."""
+
+    _attr_translation_key = "ptr_event_end"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_unique_id: str
+
+    def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{account_key}_{ENTITY_UNIQUE_PTR_EVENT_END}"
+
+    @property
+    def native_value(self) -> datetime | None:
+        event = self.coordinator.ptr.scheduled_event
+        if not event:
+            return None
+        raw = event.get("end")
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                from .time_util import PGE_TZ
+
+                dt = dt.replace(tzinfo=PGE_TZ)
+            return dt
+        except (ValueError, TypeError):
+            return None
 
 
 class PGENetMeteringSensor(PGEBaseEntity, SensorEntity):
