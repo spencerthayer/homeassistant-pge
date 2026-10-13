@@ -248,6 +248,10 @@ dialog.drawer {
 dialog.drawer::backdrop { background: rgb(0 0 0 / 0.35); backdrop-filter: blur(2px); }
 dialog.drawer[open] { animation: pge-slide-in var(--pge-dur) var(--pge-ease); }
 @keyframes pge-slide-in { from { transform: translateX(24px); opacity: 0; } }
+@keyframes pge-fade-up { from { opacity: 0; transform: translateY(6px); } }
+.tab-panel:not([hidden]) { animation: pge-fade-up var(--pge-dur) var(--pge-ease); }
+details { interpolate-size: allow-keywords; }
+.sync-pill.warn::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--pge-status-warn); }
 .toolbar button.menu {
   background: none; border: 0; color: inherit; cursor: pointer;
   font-size: 22px; width: 40px; height: 40px;
@@ -1301,7 +1305,7 @@ class PgeEnergyPanel extends HTMLElement {
         <div class="hdr-range" id="filters"></div>
       </header>
       <div class="tab-panel" id="panel-glance" data-tab="glance" role="tabpanel" aria-labelledby="tab-glance">
-        <section class="card" id="story"></section>
+        <section class="card story-band" id="story" data-story="overview"></section>
         <section class="card" id="kpis"></section>
         <div class="chart-host usage-combo" id="chart-overview-usage"></div>
       </div>

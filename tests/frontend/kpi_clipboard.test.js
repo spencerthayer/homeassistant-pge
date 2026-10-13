@@ -3,7 +3,16 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatKpiClipboardText, pctDelta } from "../../custom_components/pge_energy/frontend/data.js";
+import { countUpFrames, formatKpiClipboardText, pctDelta } from "../../custom_components/pge_energy/frontend/data.js";
+
+describe("countUpFrames", () => {
+  it("returns eased frames ending at the target", () => {
+    const frames = countUpFrames(0, 68.64, 6);
+    assert.equal(frames.length, 6);
+    assert.equal(frames[frames.length - 1], 68.64);
+    assert.ok(frames[1] > frames[0]);
+  });
+});
 
 describe("pctDelta", () => {
   it("returns the percent change and null for a missing or zero baseline", () => {

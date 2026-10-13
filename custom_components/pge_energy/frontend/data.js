@@ -370,6 +370,20 @@ export function formatSignedKwh(value, { signed = false } = {}) {
  * Omits empty parts and collapses whitespace so sparklines never pollute the copy.
  */
 /** Percent change from a baseline. Zero or missing baselines stay null. */
+export function countUpFrames(from, to, frames) {
+  const start = Number(from) || 0;
+  const end = Number(to);
+  const count = Math.max(1, Number(frames) || 1);
+  const values = [];
+  for (let i = 1; i <= count; i++) {
+    const t = i / count;
+    const eased = 1 - (1 - t) ** 3;
+    values.push(start + (end - start) * eased);
+  }
+  values[values.length - 1] = end;
+  return values;
+}
+
 export function pctDelta(value, baseline) {
   return value == null || !baseline || !Number.isFinite(value) || !Number.isFinite(baseline)
     ? null
