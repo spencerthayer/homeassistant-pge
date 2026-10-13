@@ -3,7 +3,14 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { countUpFrames, formatKpiClipboardText, pctDelta } from "../../custom_components/pge_energy/frontend/data.js";
+import { countUpFrames, formatKpiClipboardText, pctDelta, rollupColumns } from "../../custom_components/pge_energy/frontend/data.js";
+
+describe("rollupColumns", () => {
+  it("hides buckets when every row has one bucket", () => {
+    assert.equal(rollupColumns([{ buckets: 1 }, { buckets: 1 }]).showBuckets, false);
+    assert.equal(rollupColumns([{ buckets: 1 }, { buckets: 2 }]).showBuckets, true);
+  });
+});
 
 describe("countUpFrames", () => {
   it("returns eased frames ending at the target", () => {

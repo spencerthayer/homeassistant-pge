@@ -369,6 +369,11 @@ export function formatSignedKwh(value, { signed = false } = {}) {
  * Clipboard payload for an At a glance KPI tile (label / value / optional delta).
  * Omits empty parts and collapses whitespace so sparklines never pollute the copy.
  */
+export function rollupColumns(rows) {
+  const showBuckets = (rows || []).some((row) => Number(row?.buckets) > 1);
+  return { showBuckets };
+}
+
 /** Percent change from a baseline. Zero or missing baselines stay null. */
 export function countUpFrames(from, to, frames) {
   const start = Number(from) || 0;

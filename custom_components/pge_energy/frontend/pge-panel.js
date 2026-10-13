@@ -28,6 +28,7 @@ import {
   fetchStatisticSeries,
   formatKpiClipboardText,
   pctDelta,
+  rollupColumns,
   formatRangeLabel,
   formatSignedUsd,
   invalidateStatsCache,
@@ -2793,6 +2794,8 @@ class PgeEnergyPanel extends HTMLElement {
   _rollupTable(title, caption, rows, keyLabel, persistKey, { signed = false, netAmount = false } = {}) {
     const populated = this._populatedRollupRows(rows);
     if (!populated.length) return "";
+    const showBuckets = rollupColumns(populated.map((row) => ({ buckets: row.samples }))).showBuckets;
+    const kwhText = (raw) => (raw == null || Number.isNaN(Number(raw)) ? "" : Number(raw).toFixed(2));
     const kwhHead = signed ? "Net kWh" : "Import kWh";
     const costHead = netAmount ? "Net interval amount" : "Import cost";
     const rateHead = netAmount ? "Net $/kWh (est.)" : "$/kWh";
@@ -2807,7 +2810,7 @@ class PgeEnergyPanel extends HTMLElement {
       raw == null || Number.isNaN(Number(raw)) ? "" : String(Number(raw));
     const body = populated
       .map((r) => {
-        const kwh = cell(r.kwh, false, { allowZero: signed });
+        const kwh = kwhText(r.kwh);
         const cost = cell(r.cost, true, { allowZero: netAmount });
         const rate = cell(r.rate, true);
         const temp = cell(r.avgTemp);
@@ -2818,8 +2821,7 @@ class PgeEnergyPanel extends HTMLElement {
           <td data-sort="${numAttr(r.cost)}">${cost || "—"}</td>
           <td data-sort="${numAttr(r.rate)}">${rate || "—"}</td>
           <td data-sort="${numAttr(r.avgTemp)}">${temp || "—"}</td>
-          <td data-sort="${numAttr(r.samples)}">${r.samples || ""}</td>
-          <td data-sort="${numAttr(r.peakKwh)}">${peak || "—"}</td>
+          ${showBuckets ? `<td data-sort="${numAttr(r.samples)}">${r.samples || ""}</td><td data-sort="${numAttr(r.peakKwh)}">${peak || "—"}</td>` : ""}
         </tr>`;
       })
       .join("");
@@ -2860,8 +2862,7 @@ class PgeEnergyPanel extends HTMLElement {
               <th data-col="2" title="Sort by ${this._escape(costHead)}">${this._escape(costHead)}</th>
               <th data-col="3" title="Sort by ${this._escape(rateHead)}">${this._escape(rateHead)}</th>
               <th data-col="4" title="Sort by temperature">Avg °F</th>
-              <th data-col="5" title="Sort by buckets">Buckets</th>
-              <th data-col="6" title="Sort by peak">Peak bucket</th>
+              ${showBuckets ? `<th data-col="5" title="Sort by buckets">Buckets</th><th data-col="6" title="Sort by peak">Peak bucket</th>` : ""}
             </tr></thead>
             <tbody>${body}</tbody>
             <tfoot><tr>
@@ -2882,8 +2883,7 @@ class PgeEnergyPanel extends HTMLElement {
                   : ""
               }</td>
               <td></td>
-              <td>${totS || ""}</td>
-              <td></td>
+              ${showBuckets ? `<td>${totS || ""}</td><td></td>` : ""}
             </tr></tfoot>
           </table>
         </div>
@@ -3083,24 +3083,28 @@ class PgeEnergyPanel extends HTMLElement {
       "÷ span hours",
       { suffix: " kWh" }
     );
+    if (spanDays > 1) {
     addMetric(
       signed ? "Avg net kWh / day" : "Avg import kWh / day",
       acct.avgKwhPerDay,
       "÷ span days",
       { suffix: " kWh" }
     );
+    }
     addMetric(
       netAmount ? "Avg net amount / hour" : "Avg import cost / hour",
       acct.avgCostPerHour,
       "",
       { money: true }
     );
+    if (spanDays > 1) {
     addMetric(
       netAmount ? "Avg net amount / day" : "Avg import cost / day",
       acct.avgCostPerDay,
       "",
       { money: true }
     );
+    }
     if (acct.spanMonths >= 1.5) {
       addMetric(
         signed ? "Avg net kWh / month" : "Avg import kWh / month",
@@ -3188,7 +3192,7 @@ class PgeEnergyPanel extends HTMLElement {
       );
       addMetric("Median hour flow", acct.hour.median, `${acct.hour.count} hours`, { suffix: " kWh" });
     }
-    if (acct.bestDay?.kwh) {
+    if (spanDays > 1 && acct.bestDay?.kwh) {
       addMetric(
         signed ? "Highest net day" : "Highest day",
         acct.bestDay.kwh,
@@ -3196,7 +3200,7 @@ class PgeEnergyPanel extends HTMLElement {
         { suffix: " kWh" }
       );
     }
-    if (acct.worstDay?.kwh != null) {
+    if (spanDays > 1 && acct.worstDay?.kwh != null) {
       addMetric(
         signed ? "Lowest net day" : "Lowest day",
         acct.worstDay.kwh,
