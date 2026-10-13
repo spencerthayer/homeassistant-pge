@@ -231,6 +231,13 @@ def test_heatmaps_use_full_recorded_history():
     assert "heatmap-scroll" not in source
 
 
+def test_usage_metric_toggle():
+    charts = CHARTS_JS.read_text(encoding="utf-8")
+    panel = PANEL_JS.read_text(encoding="utf-8")
+    assert "pge_usage_metric" in panel
+    assert "metric = \"kwh\"" in charts or 'metric = "kwh"' in charts
+
+
 def test_usage_combo_accepts_period_colors():
     charts = CHARTS_JS.read_text(encoding="utf-8")
     panel = PANEL_JS.read_text(encoding="utf-8")

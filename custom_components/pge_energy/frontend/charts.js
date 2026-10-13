@@ -670,7 +670,7 @@ function _categoryLabel(ms) {
 /** Single Usage chart: signed grid-flow bars + amount + outdoor temperature. */
 export async function createUsageComboChart(
   host,
-  { kwh, returned, cost, compensation, temp, colors, projection = null, periodColors = null }
+  { kwh, returned, cost, compensation, temp, colors, projection = null, periodColors = null, metric = "kwh" }
 ) {
   const root = resolveRoot(host);
   const theme = themeColors(root);
@@ -951,6 +951,28 @@ export async function createUsageComboChart(
         : []),
     ],
   };
+  const showCost = metric === "cost";
+  if (showCost) {
+    option.series[0].name = "PGE usage estimate ($)";
+    option.series[0].data = (useCategory ? amountVals : amountVals).map((value) => {
+      const raw = Array.isArray(value) ? value[1] : value;
+      if (raw == null || !Number.isFinite(Number(raw))) return value;
+      const n = Number(raw);
+      return Array.isArray(value)
+        ? { value, itemStyle: { color: c.cost, borderRadius: [4, 4, 0, 0] } }
+        : { value: n, itemStyle: { color: c.cost, borderRadius: [4, 4, 0, 0] } };
+    });
+    option.yAxis[0].name = "PGE usage estimate ($)";
+    option.series = option.series.filter((series) => series.name !== amountName);
+    option.legend.data = ["PGE usage estimate ($)", "°F"];
+  } else {
+    option.series = option.series.filter((series) => series.name !== amountName);
+    option.yAxis = [option.yAxis[0], option.yAxis[2]];
+    for (const series of option.series) {
+      if (series.yAxisIndex === 2) series.yAxisIndex = 1;
+    }
+    option.legend.data = (option.legend.data || legendData).filter((name) => name !== amountName);
+  }
   return mount(host, option, { height: 380 });
 }
 

@@ -995,6 +995,13 @@ class PgeEnergyPanel extends HTMLElement {
     this._unsubSync = null;
     this._charts = [];
     this._rangeKey = "24h";
+    this._usageMetric = "kwh";
+    try {
+      const stored = localStorage.getItem("pge_usage_metric");
+      if (stored === "kwh" || stored === "cost") this._usageMetric = stored;
+    } catch (_err) {
+      /* storage can be unavailable */
+    }
     this._rangeShift = 0;
     this._customRange = null;
     this._todRangeKey = "last_cycle";
@@ -1271,6 +1278,10 @@ class PgeEnergyPanel extends HTMLElement {
       <div class="tab-panel" id="panel-usage" data-tab="usage" role="tabpanel" aria-labelledby="tab-usage">
       <section class="card" id="hero">
         <h2>Usage</h2>
+        <div class="metric-toggle" role="group" aria-label="Usage metric">
+          <button type="button" data-metric="kwh" aria-pressed="${this._usageMetric === "kwh"}">kWh</button>
+          <button type="button" data-metric="cost" aria-pressed="${this._usageMetric === "cost"}">Dollars</button>
+        </div>
         <div class="chart-host usage-combo" id="chart-usage"></div>
         <div class="usage-stats" id="usage-stats"></div>
         ${this._loadShapeGalleryHtml()}
@@ -1336,6 +1347,21 @@ class PgeEnergyPanel extends HTMLElement {
     });
     content.querySelector(".drawer-close")?.addEventListener("click", () => {
       this.shadowRoot.getElementById("sync-drawer")?.close();
+    });
+    content.querySelectorAll("[data-metric]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const metric = btn.dataset.metric === "cost" ? "cost" : "kwh";
+        this._usageMetric = metric;
+        try {
+          localStorage.setItem("pge_usage_metric", metric);
+        } catch (_err) {
+          /* storage can be unavailable */
+        }
+        content.querySelectorAll("[data-metric]").forEach((peer) => {
+          peer.setAttribute("aria-pressed", String(peer === btn));
+        });
+        await this._renderRangeScope();
+      });
     });
     this._bindPersistentDetails(content.querySelector("#hero"));
     this._bindPersistentDetails(content.querySelector("#panel-analytics"));
@@ -2303,7 +2329,8 @@ class PgeEnergyPanel extends HTMLElement {
         temp: { xs: raw.temp?.xs || [], ys: raw.temp?.means || [] },
         colors,
         projection: chartProjection,
-        periodColors: this._period === "hour" ? todColors(usageHost) : null,
+        periodColors: this._period === "hour" && this._usageMetric !== "cost" ? todColors(usageHost) : null,
+        metric: this._usageMetric,
       });
       if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) {
         try {
