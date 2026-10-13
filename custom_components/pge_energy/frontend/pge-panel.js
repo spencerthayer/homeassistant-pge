@@ -49,7 +49,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.12.1";
+} from "./data.js?v=0.12.2";
 import {
   baseloadFloor,
   cycleCumulative,
@@ -88,8 +88,8 @@ import {
   lineItemShares,
   treemapSlices,
   waterfallSteps,
-} from "./chart-series.js?v=0.12.1";
-import { renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney } from "./chart-gallery.js?v=0.12.1";
+} from "./chart-series.js?v=0.12.2";
+import { renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney } from "./chart-gallery.js?v=0.12.2";
 import {
   createBarChart,
   createLineChart,
@@ -99,9 +99,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.12.1";
-import { sparklineSvg } from "./svg-helpers.js?v=0.12.1";
-import { applyPanelTheme } from "./theme.js?v=0.12.1";
+} from "./charts.js?v=0.12.2";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.2";
+import { applyPanelTheme } from "./theme.js?v=0.12.2";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -4277,17 +4277,7 @@ class PgeEnergyPanel extends HTMLElement {
         <div class="state">${this._escape(detDate || "Unknown date")}</div>
       </div>`);
     }
-    const lastPtr = stateAttr(this._hass, e.program_peak_time_rebates, "peak_time_events");
-    if (lastPtr && Array.isArray(lastPtr) && lastPtr.length > 0) {
-      const newest = lastPtr[lastPtr.length - 1];
-      sections.push(`<div class="program">
-        <div class="name">Last Recorded PTR Event</div>
-        <div class="state">${this._escape(newest.event_date || "")}${newest.event_earned_credit != null ? ` · $${this._escape(String(newest.event_earned_credit))}` : ""}</div>
-      </div>`);
-    }
-    if (sections.length === 0) {
-      return `<p class="muted stats-meta" style="margin-top:8px">No PTR events — schedule one when PGE sends the day-before notice.</p>`;
-    }
+    if (sections.length === 0) return "";
     return `<div class="programs ptr-events">${sections.join("")}</div>`;
   }
 
@@ -4381,8 +4371,25 @@ class PgeEnergyPanel extends HTMLElement {
         <div class="entity-row"><span>Consumption statistic</span><strong>${this._escape(
           this._account.statistic_ids.consumption
         )}</strong></div>
+        <div class="entity-row"><span>Last Recorded PTR Event</span><strong>${this._escape(
+          this._lastRecordedPtrLabel(e)
+        )}</strong></div>
       </div>
     `;
+  }
+
+  _lastRecordedPtrLabel(e) {
+    const events = stateAttr(this._hass, e?.program_peak_time_rebates, "peak_time_events");
+    if (!Array.isArray(events) || events.length === 0) return "—";
+    const newest = events[events.length - 1];
+    if (!newest || typeof newest !== "object") return "—";
+    const date = newest.event_date ? String(newest.event_date) : "";
+    const credit =
+      newest.event_earned_credit != null && newest.event_earned_credit !== ""
+        ? ` · $${newest.event_earned_credit}`
+        : "";
+    const label = `${date}${credit}`.trim();
+    return label || "—";
   }
 
   _fmt(value, suffix = "", money = false) {

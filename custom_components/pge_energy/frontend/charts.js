@@ -9,13 +9,13 @@ import {
   formatSignedUsd,
   projectDirectionalUsage,
   symmetricExtent,
-} from "./data.js?v=0.12.1";
+} from "./data.js?v=0.12.2";
 import {
   chromeColors,
   seriesColors,
   tooltipTheme,
   withAlpha,
-} from "./theme.js?v=0.12.1";
+} from "./theme.js?v=0.12.2";
 
 export { seriesColors };
 

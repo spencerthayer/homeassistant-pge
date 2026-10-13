@@ -10,7 +10,7 @@ import {
   pacificYmd,
   publishedDataEnd,
   todPeriodForPacific,
-} from "./data.js?v=0.12.1";
+} from "./data.js?v=0.12.2";
 
 function finite(value) {
   if (value == null || value === "") return null;
