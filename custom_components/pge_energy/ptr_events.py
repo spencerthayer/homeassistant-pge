@@ -204,13 +204,9 @@ class PtrEventCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             warn_minutes=PTR_EVENT_STARTING_WARN_MINUTES,
         )
         if start_at is not None:
-            self._start_timer = async_track_point_in_utc_time(
-                self.hass, self._on_start, start_at
-            )
+            self._start_timer = async_track_point_in_utc_time(self.hass, self._on_start, start_at)
         if warn_at is not None:
-            self._starting_warn_timer = async_track_point_in_utc_time(
-                self.hass, self._on_starting_warn, warn_at
-            )
+            self._starting_warn_timer = async_track_point_in_utc_time(self.hass, self._on_starting_warn, warn_at)
         if end_at is not None:
             self._end_timer = async_track_point_in_utc_time(self.hass, self._on_end, end_at)
 
