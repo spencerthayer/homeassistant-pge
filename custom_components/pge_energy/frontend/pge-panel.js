@@ -231,7 +231,7 @@ dialog.drawer[open] { animation: pge-slide-in var(--pge-dur) var(--pge-ease); }
 }
 .toolbar .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; }
 .toolbar img { height: 28px; width: auto; }
-.content { padding: 16px; max-width: 1200px; margin: 0 auto; }
+.content { padding: 16px; max-width: 2400px; margin: 0 auto; }
 .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .tabs button {
   border: 1px solid var(--divider-color); background: var(--card-background-color);
@@ -409,8 +409,14 @@ details.sync-gaps-panel {
 }
 .filters .range-custom { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .chart-host { width: 100%; min-height: 140px; }
-.chart-gallery { margin-top: 12px; }
-.chart-gallery figure { margin: 16px 0 0; }
+.chart-gallery {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 1fr));
+  gap: var(--pge-space-4, 16px);
+}
+.chart-gallery figure { margin: 0; }
+.fig-wide { grid-column: 1 / -1; }
 .chart-gallery h3 { margin: 0 0 4px; font-size: 1rem; }
 .chart-host.usage-combo { min-height: 380px; }
 .chart-host.scatter-wide { min-height: 300px; }
@@ -2288,8 +2294,9 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   _loadShapeGalleryHtml() {
+    const wide = new Set(["chart-spread", "chart-baseload-history"]);
     const figure = (id, title, caption) =>
-      `<figure data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
+      `<figure class="${wide.has(id) ? "fig-wide" : ""}" data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
         caption
       )}</p><div class="chart-host" id="${id}"></div></figure>`;
     return `
@@ -2308,7 +2315,7 @@ class PgeEnergyPanel extends HTMLElement {
         ${figure("chart-fingerprint", "Day fingerprint", "Axes: kWh, peak hour, mean °F, on-peak share, portal cents per kWh. Source: imported hourly consumption, cost, and temperature.")}
         ${figure("chart-duck", "Duck curve", "Horizontal: Pacific hour. Vertical: kWh. Import and export. Shown only when the account has returned energy.")}
         ${figure("chart-duck-months", "Duck curve by month", "Horizontal: month. Vertical: kWh and dollars. Import, export, PGE usage estimate, and export compensation.")}
-        <figure data-chart="chart-baseload-history"><h3>Always-on load history</h3><p class="muted">Horizontal: date. Vertical: minimum kWh in Pacific hours 0 through 5. Markers are steps. Yearly cost uses the trailing 365-day PGE usage estimate.</p><p class="fig-note muted"></p><div class="chart-host" id="chart-baseload-history"></div></figure>
+        <figure class="fig-wide" data-chart="chart-baseload-history"><h3>Always-on load history</h3><p class="muted">Horizontal: date. Vertical: minimum kWh in Pacific hours 0 through 5. Markers are steps. Yearly cost uses the trailing 365-day PGE usage estimate.</p><p class="fig-note muted"></p><div class="chart-host" id="chart-baseload-history"></div></figure>
         ${figure("chart-daypart-stream", "Daypart stream", "Horizontal: date. Bands: overnight, morning, afternoon, evening. Source: imported hourly consumption.")}
       </details>`;
   }
@@ -2330,8 +2337,9 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   _todGalleryHtml() {
+    const wide = new Set(["chart-tod-stacked"]);
     const figure = (id, title, caption) =>
-      `<figure data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
+      `<figure class="${wide.has(id) ? "fig-wide" : ""}" data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
         caption
       )}</p><div class="chart-host" id="${id}"></div></figure>`;
     return `
@@ -2377,8 +2385,9 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   _weatherGalleryHtml() {
+    const wide = new Set(["chart-degree-days", "chart-weather-counterfactual"]);
     const figure = (id, title, caption) =>
-      `<figure data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
+      `<figure class="${wide.has(id) ? "fig-wide" : ""}" data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
         caption
       )}</p><div class="chart-host" id="${id}"></div></figure>`;
     return `
@@ -2389,8 +2398,9 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   _billingGalleryHtml() {
+    const wide = new Set(["chart-statement-portal", "chart-bill-imported", "chart-balance-due"]);
     const figure = (id, title, caption) =>
-      `<figure data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
+      `<figure class="${wide.has(id) ? "fig-wide" : ""}" data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
         caption
       )}</p><div class="chart-host" id="${id}"></div></figure>`;
     return `

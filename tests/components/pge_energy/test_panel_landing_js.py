@@ -20,6 +20,13 @@ def test_panel_section_anchors_and_resolver_present():
     assert "this._landingApplied" in source
 
 
+def test_content_is_full_width_with_wide_figures():
+    source = FRONTEND.read_text(encoding="utf-8")
+    assert "max-width: 1200px" not in source
+    assert "max-width: 2400px" in source
+    assert ".fig-wide" in source
+
+
 def test_tab_panels_exist():
     source = FRONTEND.read_text(encoding="utf-8")
     for tab in ("glance", "usage", "analytics", "billing", "tod", "programs"):
