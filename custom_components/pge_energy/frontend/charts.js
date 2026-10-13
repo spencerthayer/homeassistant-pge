@@ -7,6 +7,7 @@
 
 import {
   formatSignedUsd,
+  formatTooltipRow,
   projectDirectionalUsage,
   symmetricExtent,
 } from "./data.js?v=0.12.2";
@@ -92,6 +93,7 @@ function chartMotion() {
     animationEasing: "cubicOut",
     animationDurationUpdate: 280,
     animationEasingUpdate: "cubicOut",
+    animationDelay: (idx) => Math.min(idx * 12, 360),
   };
 }
 
@@ -1628,8 +1630,27 @@ export async function createGalleryChart(host, {
       stack: row.stack,
       showSymbol: false,
       connectNulls: row.connectNulls === true,
-      areaStyle: row.area ? { opacity: 0.35 } : undefined,
-      itemStyle: { color },
+      barMaxWidth: row.type === "bar" ? 28 : undefined,
+      itemStyle:
+        row.type === "bar" && !horizontal
+          ? { color, borderRadius: [4, 4, 0, 0] }
+          : { color },
+      emphasis: series.length > 1 ? { focus: "series" } : undefined,
+      areaStyle: row.area
+        ? {
+            color: {
+              type: "linear",
+              x: 0,
+              y: 0,
+              x2: 0,
+              y2: 1,
+              colorStops: [
+                { offset: 0, color: withAlpha(color, 0.28) },
+                { offset: 1, color: withAlpha(color, 0) },
+              ],
+            },
+          }
+        : undefined,
       lineStyle: { color, type: row.dashed ? "dashed" : "solid" },
       markLine:
         index === 0 && markLines.length
@@ -1657,7 +1678,8 @@ export async function createGalleryChart(host, {
       color: theme.muted,
       formatter: percent ? "{value}%" : undefined,
     },
-    splitLine: { lineStyle: { color: theme.grid } },
+    axisLine: { show: false },
+    splitLine: { lineStyle: { color: theme.grid, type: "dashed", opacity: 0.6 } },
   };
   const timeAxisOption = {
     type: "time",
@@ -1669,8 +1691,21 @@ export async function createGalleryChart(host, {
     {
       ...chartMotion(),
       backgroundColor: theme.bg,
-      tooltip: { ...tip, trigger: "axis" },
-      legend: series.length > 1 ? { type: "scroll", textStyle: { color: theme.text } } : { show: false },
+      tooltip: {
+        ...tip,
+        trigger: "axis",
+        formatter: (params) => {
+          const rows = Array.isArray(params) ? params : [params];
+          const lines = rows.map((row) => {
+            const raw = Array.isArray(row.value) ? row.value[1] : row.value;
+            const estimate = /estimate|cost|dollar/i.test(row.seriesName || "");
+            const unit = estimate ? "$" : "kWh";
+            return formatTooltipRow({ name: row.seriesName, value: raw, unit, estimate });
+          });
+          return lines.join("<br>");
+        },
+      },
+      legend: series.length > 1 ? { type: "scroll", icon: "roundRect", textStyle: { color: theme.text } } : { show: false },
       grid: { left: horizontal ? 88 : 48, right: 16, top: series.length > 1 ? 36 : 16, bottom: 28 },
       xAxis: horizontal ? valueAxis : timeAxis ? timeAxisOption : categoryAxis,
       yAxis: horizontal ? categoryAxis : valueAxis,

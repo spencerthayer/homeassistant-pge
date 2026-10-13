@@ -343,6 +343,19 @@ export function formatSignedUsd(value, digits = 2) {
   return `$${abs}`;
 }
 
+/** One tooltip line a homeowner can read. */
+export function formatTooltipRow({ name, value, unit, estimate } = {}) {
+  if (value == null || value === "" || !Number.isFinite(Number(value))) return `${name}: no data`;
+  const n = Number(value);
+  if (unit === "$") {
+    const money = `$${Math.abs(n).toFixed(2)}`;
+    const signed = n < 0 ? `−${money}` : money;
+    return estimate ? `${name}: about ${signed} (PGE estimate)` : `${name}: ${signed}`;
+  }
+  const suffix = unit ? ` ${unit}` : "";
+  return `${name}: ${n.toFixed(2)}${suffix}`;
+}
+
 /** Human kWh label; negative flow shown as positive export magnitude when signed. */
 export function formatSignedKwh(value, { signed = false } = {}) {
   if (value == null || value === "" || value === "-") return "—";

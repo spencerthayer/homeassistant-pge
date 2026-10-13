@@ -217,6 +217,12 @@ def test_heatmaps_use_full_recorded_history():
     assert "heatmap-scroll" not in source
 
 
+def test_gallery_bars_are_rounded_and_focus_series():
+    source = CHARTS_JS.read_text(encoding="utf-8")
+    assert "borderRadius: [4, 4, 0, 0]" in source
+    assert 'focus: "series"' in source
+
+
 def test_bill_charts_use_family_colors():
     gallery = (FRONTEND / "chart-gallery.js").read_text(encoding="utf-8")
     charts = CHARTS_JS.read_text(encoding="utf-8")
