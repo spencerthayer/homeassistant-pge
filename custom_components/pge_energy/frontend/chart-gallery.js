@@ -798,7 +798,7 @@ export async function renderPdfSolar(panel, fns) {
   const latest = statements[statements.length - 1];
   await mount( "chart-waterfall", (host) =>
     createWaterfall(host, {
-      unit: "",
+      unit: "$",
       steps: fns.waterfallSteps(latest).map((step, index, all) => ({
         label: step.label,
         value: step.value,
@@ -976,6 +976,7 @@ export async function renderInsights(panel, fns) {
       const delta = current.amount - previous.amount;
       await mount( "chart-bill-explainer", (host) =>
         createWaterfall(host, {
+          unit: "$",
           steps: [
             { label: "Days", value: bars.days },
             { label: "Weather", value: bars.weather },

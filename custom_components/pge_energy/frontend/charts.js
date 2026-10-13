@@ -1606,12 +1606,30 @@ export async function createWaterfall(host, { steps, unit = "" } = {}) {
       },
       yAxis: {
         type: "value",
-        axisLabel: { color: theme.muted },
+        axisLabel: {
+          color: theme.muted,
+          formatter: (value) => (unit === "$" ? `$${Math.round(Number(value))}` : String(value)),
+        },
         splitLine: { lineStyle: { color: theme.grid } },
       },
       series: [
         { type: "bar", stack: "waterfall", data: helpers, itemStyle: { color: "transparent" }, emphasis: { disabled: true } },
-        { type: "bar", stack: "waterfall", data: deltas },
+        {
+          type: "bar",
+          stack: "waterfall",
+          data: deltas,
+          label: {
+            show: true,
+            formatter: (params) => {
+              const step = ready[params.dataIndex];
+              const value = Number(step?.value);
+              if (!Number.isFinite(value)) return "";
+              if (step.total) return unit === "$" ? `$${Math.abs(value).toFixed(2)}` : String(value);
+              const sign = value > 0 ? "+" : value < 0 ? "−" : "";
+              return unit === "$" ? `${sign}$${Math.abs(value).toFixed(2)}` : `${sign}${value}`;
+            },
+          },
+        },
       ],
     },
     { height: 240 },

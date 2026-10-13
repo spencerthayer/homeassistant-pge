@@ -214,6 +214,16 @@ def test_cost_intelligence_uses_twelve_month_window():
     assert "barMaxWidth: 28" in charts
 
 
+def test_waterfalls_show_signed_dollar_labels():
+    charts = CHARTS_JS.read_text(encoding="utf-8")
+    gallery = (FRONTEND / "chart-gallery.js").read_text(encoding="utf-8")
+    start = charts.index("export async function createWaterfall")
+    body = charts[start : charts.index("export async function createThemeRiver", start)]
+    assert "label: {" in body
+    assert "show: true" in body
+    assert gallery.count('unit: "$"') >= 2
+
+
 def test_heatmap_legend_and_day_click():
     charts = CHARTS_JS.read_text(encoding="utf-8")
     panel = PANEL_JS.read_text(encoding="utf-8")
