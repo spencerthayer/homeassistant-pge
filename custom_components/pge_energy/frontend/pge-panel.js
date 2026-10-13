@@ -1316,6 +1316,9 @@ class PgeEnergyPanel extends HTMLElement {
         <figure data-chart="chart-daypart-stream"><h3>Daypart stream</h3><p class="muted">Horizontal: date. Bands: overnight, morning, afternoon, evening.</p><div class="chart-host" id="chart-daypart-stream"></div></figure>
         <figure data-chart="chart-published-week"><h3>Published week</h3><p class="muted">Horizontal: Pacific hour. Vertical: kWh for the latest closed Pacific week.</p><div class="chart-host" id="chart-published-week"></div></figure>
         <figure data-chart="chart-program-savings"><h3>Program savings</h3><p class="muted">Horizontal: time. Vertical: dollars. Source: YTD program savings mean.</p><div class="chart-host" id="chart-program-savings"></div></figure>
+        <figure data-chart="chart-baseload"><h3>Baseload band</h3><p class="muted">Weekday average by hour with the overnight minimum.</p><div class="chart-host" id="chart-baseload"></div></figure>
+        <figure data-chart="chart-polar"><h3>24-hour clock</h3><p class="muted">Average weekday use around a 24-hour dial.</p><div class="chart-host" id="chart-polar"></div></figure>
+        <figure data-chart="chart-treemap"><h3>Latest statement treemap</h3><p class="muted">Each block is that charge's share of the latest bill.</p><div class="chart-host" id="chart-treemap"></div></figure>
       </details>
       </div>
       <div class="tab-panel" id="panel-billing" data-tab="billing" role="tabpanel" aria-labelledby="tab-billing">
@@ -2358,11 +2361,9 @@ class PgeEnergyPanel extends HTMLElement {
         <summary><span class="rollup-title">Load shape</span></summary>
         ${figure("chart-typical-day", "Typical day", "Horizontal: Pacific hour. Vertical: mean kWh. Source: imported hourly consumption.")}
         ${figure("chart-hour-weekday", "Hour by weekday", "Horizontal: Pacific hour. Vertical: weekday. Color: mean kWh. Source: imported hourly consumption.")}
-        ${figure("chart-polar", "24-hour clock", "Angle: Pacific hour. Radius: weekday mean kWh. Source: imported hourly consumption.")}
         ${figure("chart-histogram", "Daily kWh histogram", "Horizontal: daily kWh bin. Vertical: number of days. Source: imported daily consumption.")}
         ${figure("chart-yoy", "Year over year", "Horizontal: month. Vertical: kWh. Source: imported daily consumption.")}
         ${figure("chart-cycle-race", "Billing-cycle race", "Horizontal: day of statement. Vertical: cumulative kWh. Source: imported hourly consumption.")}
-        ${figure("chart-baseload", "Baseload band", "Horizontal: Pacific hour. Vertical: weekday mean kWh. Line: minimum of hours 0 through 5. Source: imported hourly consumption.")}
         ${figure("chart-spread", "Daily spread", "Horizontal: date. Vertical: daily kWh. Lines: mean and mean plus or minus two standard deviations. Source: imported daily consumption.")}
         ${figure("chart-duck", "Duck curve", "Horizontal: Pacific hour. Vertical: kWh. Import and export. Shown only when the account has returned energy.")}
         ${figure("chart-duck-months", "Duck curve by month", "Horizontal: month. Vertical: kWh and dollars. Import, export, PGE usage estimate, and export compensation.")}
@@ -2524,7 +2525,6 @@ class PgeEnergyPanel extends HTMLElement {
           <button type="button" data-bill-mode="percent" aria-pressed="${this._billAnatomyMode === "percent"}">%</button>
         </div>
         ${figure("chart-bill-anatomy", "Stacked bill anatomy", "Horizontal: statement. Vertical: dollars or percent. Basic, energy use, delivery, taxes, and other.")}
-        ${figure("chart-treemap", "Latest statement treemap", "Area: dollars in the latest PDF statement. Same five families.")}
         ${figure("chart-waterfall", "Statement waterfall", "Previous amount due, payment, new charges, amount due.")}
       </details>`;
   }

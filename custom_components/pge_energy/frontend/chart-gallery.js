@@ -219,10 +219,12 @@ export async function renderLoadShape(panel, fns) {
   ]);
 
   const profiles = fns.typicalDayProfiles(hourly);
+  const floor = fns.baseloadFloor(profiles.weekday);
   await mount( "chart-typical-day", (host) =>
     createGalleryChart(host, {
       categories: HOURS,
       yName: "kWh",
+      markLines: floor == null ? [] : [{ y: floor, name: "Overnight floor" }],
       series: [
         { name: "Weekday", values: profiles.weekday },
         { name: "Weekend", values: profiles.weekend },
@@ -270,7 +272,6 @@ export async function renderLoadShape(panel, fns) {
 
   await mountCycleRace(panel, fns, stamp, end);
 
-  const floor = fns.baseloadFloor(profiles.weekday);
   await mount( "chart-baseload", (host) =>
     createGalleryChart(host, {
       categories: HOURS,

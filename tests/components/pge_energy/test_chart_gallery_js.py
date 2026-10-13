@@ -163,6 +163,16 @@ def test_charts_js_exports_gallery_wrappers():
         assert f"export async function {name}" in source
 
 
+def test_more_charts_hold_load_shape_overlaps():
+    source = PANEL_JS.read_text(encoding="utf-8")
+    start = source.index('data-section="more-charts"')
+    body = source[start : source.index("</details>", start)]
+    for host_id in ("chart-baseload", "chart-polar", "chart-treemap"):
+        assert host_id in body
+    gallery = (FRONTEND / "chart-gallery.js").read_text(encoding="utf-8")
+    assert "Overnight floor" in gallery
+
+
 def test_more_charts_hold_the_cut_hosts():
     source = PANEL_JS.read_text(encoding="utf-8")
     start = source.index('data-section="more-charts"')
