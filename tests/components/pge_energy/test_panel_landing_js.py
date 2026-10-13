@@ -26,6 +26,14 @@ def test_panel_section_anchors_and_resolver_present():
     )
 
 
+def test_design_tokens_present():
+    source = FRONTEND.read_text(encoding="utf-8")
+    assert "--pge-space-4" in source
+    assert "--pge-surface-2" in source
+    assert "--pge-ease" in source
+    assert "font-variant-numeric: tabular-nums" in source
+
+
 def test_glance_kpi_clipboard_wiring_present():
     source = FRONTEND.read_text(encoding="utf-8")
     assert "formatKpiClipboardText" in source
