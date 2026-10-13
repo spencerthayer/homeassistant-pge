@@ -1303,7 +1303,10 @@ class PgeEnergyPanel extends HTMLElement {
         </div>
       </section>
       <section class="card grid-2" id="insights-heat">
+        <div class="heatmap-chips" id="heatmap-chips"></div>
+        <h4>kWh calendar</h4>
         <div id="heatmap-kwh"></div>
+        <h4>Temperature calendar</h4>
         <div id="heatmap-temp"></div>
         <p class="muted" style="grid-column:1/-1;margin:0">Gray cells are days without an imported sample in recorder — not a full calendar year of PGE data.</p>
       </section>
@@ -3407,19 +3410,78 @@ class PgeEnergyPanel extends HTMLElement {
       if (chart) this._charts.push(chart);
     }
 
+    const heatWindow = this._heatmapWindowKey(); // 12mo default, or a year, or all
+    const kwhWindow = this._sliceHeatmap(kwhHistory.xs, kwhHistory.values, heatWindow);
+    const tempWindow = this._sliceHeatmap(tempHistory.xs, tempHistory.means, heatWindow);
+    this._renderHeatmapChips(kwhHistory.xs);
     const hmKwh = await renderHeatmap(this.shadowRoot.getElementById("heatmap-kwh"), {
-      xs: kwhHistory.xs,
-      ys: kwhHistory.values,
+      xs: kwhWindow.xs,
+      ys: kwhWindow.ys,
       title: "Daily kWh (imported history)",
     });
     const hmTemp = await renderHeatmap(this.shadowRoot.getElementById("heatmap-temp"), {
-      xs: tempHistory.xs,
-      ys: tempHistory.means,
+      xs: tempWindow.xs,
+      ys: tempWindow.ys,
       diverging: true,
       title: "Daily avg temperature (imported history)",
     });
     if (hmKwh) this._charts.push(hmKwh);
     if (hmTemp) this._charts.push(hmTemp);
+  }
+
+  _heatmapWindowKey() {
+    try {
+      return localStorage.getItem("pge_heatmap_window") || "12mo";
+    } catch (_err) {
+      return "12mo";
+    }
+  }
+
+  _sliceHeatmap(xs, ys, windowKey) {
+    const pairs = (xs || []).map((ts, index) => ({ ts, value: ys?.[index] }));
+    if (!pairs.length || windowKey === "all") return { xs: xs || [], ys: ys || [] };
+    const end = publishedDataEnd();
+    const endYmd = pacificYmd(new Date(end.getTime() - 1));
+    let startYmd = "0000-01-01";
+    let stopYmd = "9999-12-31";
+    if (windowKey === "12mo") {
+      const [year, month] = endYmd.split("-").map(Number);
+      const start = new Date(Date.UTC(year, month - 12, 1));
+      startYmd = `${start.getUTCFullYear()}-${String(start.getUTCMonth() + 1).padStart(2, "0")}-01`;
+      stopYmd = endYmd;
+    } else if (/^\d{4}$/.test(windowKey)) {
+      startYmd = `${windowKey}-01-01`;
+      stopYmd = `${windowKey}-12-31`;
+    }
+    const kept = pairs.filter((row) => {
+      const ymd = pacificYmd(row.ts);
+      return ymd >= startYmd && ymd <= stopYmd;
+    });
+    return { xs: kept.map((row) => row.ts), ys: kept.map((row) => row.value) };
+  }
+
+  _renderHeatmapChips(xs) {
+    const host = this.shadowRoot.getElementById("heatmap-chips");
+    if (!host) return;
+    const years = [...new Set((xs || []).map((ts) => pacificYmd(ts).slice(0, 4)))].sort();
+    const current = this._heatmapWindowKey();
+    const chips = ["12mo", ...years, "all"];
+    host.innerHTML = chips
+      .map((key) => {
+        const label = key === "12mo" ? "12 months" : key === "all" ? "All years" : key;
+        return `<button type="button" class="chip" data-heat="${key}" aria-pressed="${key === current}">${label}</button>`;
+      })
+      .join("");
+    host.querySelectorAll("[data-heat]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        try {
+          localStorage.setItem("pge_heatmap_window", btn.dataset.heat);
+        } catch (_err) {
+          /* storage can be unavailable */
+        }
+        await this._renderInsights();
+      });
+    });
   }
 
   _renderBillPdfHeader() {

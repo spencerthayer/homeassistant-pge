@@ -214,17 +214,15 @@ def test_cost_intelligence_uses_twelve_month_window():
     assert "barMaxWidth: 28" in charts
 
 
-def test_heatmaps_use_full_recorded_history():
+def test_heatmaps_default_to_trailing_year_with_picker():
     source = PANEL_JS.read_text(encoding="utf-8")
     start = source.index("async _renderInsights()")
     end = source.index("_renderBillPdfHeader", start)
     body = source[start:end]
+    assert "pge_heatmap_window" in source
+    assert '"12mo"' in body or "12mo" in body
+    assert '"all"' in source or "all" in body
     assert "HEATMAP_HISTORY_START" in body
-    assert "xs: kwhHistory.xs" in body
-    assert "ys: kwhHistory.values" in body
-    assert "xs: tempHistory.xs" in body
-    assert "ys: tempHistory.means" in body
-    assert "maxPoints: HEATMAP_MAX_DAYS" in body
     charts = CHARTS_JS.read_text(encoding="utf-8")
     assert "function heatmapYears" in charts
     assert "calendarIndex: index" in charts
