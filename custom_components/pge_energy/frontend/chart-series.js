@@ -485,12 +485,15 @@ export function statementWindows(bills, bounds = null) {
 function sumInside(windows, samples, field) {
   return (windows || []).map((window) => {
     let total = 0;
+    let seen = false;
     for (const sample of samples || []) {
       if (sample.ts == null || sample.ts < window.start || sample.ts >= window.end) continue;
       const value = finite(sample[field]);
-      if (value != null) total += value;
+      if (value == null) continue;
+      seen = true;
+      total += value;
     }
-    return { start: window.start, end: window.end, total };
+    return { start: window.start, end: window.end, total: seen ? total : null };
   });
 }
 

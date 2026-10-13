@@ -1160,7 +1160,7 @@ function galleryBase(host) {
 export async function createPolarBar(host, { values, color } = {}) {
   if (countFinite(values) < 2) return showChartEmpty(host, "Not enough hourly history.");
   const { theme, tip, colors } = galleryBase(host);
-  const data = (values || []).map((value) => (value == null || !Number.isFinite(Number(value)) ? 0 : Number(value)));
+  const data = (values || []).map((value) => (value == null || !Number.isFinite(Number(value)) ? null : Number(value)));
   return mount(
     host,
     {

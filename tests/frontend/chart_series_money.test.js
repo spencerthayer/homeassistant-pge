@@ -77,6 +77,16 @@ describe("weather and money series", () => {
     assert.equal(gaps[0].total, 2);
   });
 
+  it("statementGap returns null when a window has no finite samples", () => {
+    const gaps = statementGap([{ start: 10, end: 20 }], [
+      { ts: 12, cost: null },
+      { ts: 30, cost: 4 },
+    ]);
+    assert.equal(gaps[0].total, null);
+    const zero = statementGap([{ start: 10, end: 20 }], [{ ts: 12, cost: 0 }]);
+    assert.equal(zero[0].total, 0);
+  });
+
   it("openCycleCone keeps tracker guides and running cost samples unchanged", () => {
     const samples = [{ ts: 1, cost: 3 }, { ts: 2, cost: 4 }];
     const cone = openCycleCone({ min: 10, max: 20, samples });

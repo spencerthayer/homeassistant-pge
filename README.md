@@ -374,7 +374,7 @@ Every chart on `/pge` ends at published data (Pacific yesterday). Gallery charts
 #### Temperature calendar
 
 - Where: `#heatmap-temp` in Analytics.
-- Represents: One cell per day of mean outdoor °F. A gray cell is a day with no imported sample.
+- Represents: One cell per day of mean outdoor °F. A gray cell is a day with no temperature sample.
 - Data: Daily `temperature` means.
 - Window: The selected Usage range.
 
