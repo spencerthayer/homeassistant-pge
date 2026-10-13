@@ -764,7 +764,14 @@ export async function renderPdfSolar(panel, fns) {
     return;
   }
   panel._disposeHostCharts(slot);
+  panel._billAnatomyMode = panel._billAnatomyMode || "dollars";
   slot.innerHTML = panel._pdfGalleryHtml();
+  slot.querySelectorAll("[data-bill-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      panel._billAnatomyMode = btn.dataset.billMode === "percent" ? "percent" : "dollars";
+      void renderPdfSolar(panel, fns);
+    });
+  });
   const statements = [...byTs.values()].sort((a, b) => a.ts - b.ts);
   const anatomy = fns.billAnatomyRows(statements);
   const labels = anatomy.map((row) => pacificYmd(new Date(row.ts * 1000)));
@@ -774,10 +781,13 @@ export async function renderPdfSolar(panel, fns) {
     const family = billFamilyColors(host);
     return createGalleryChart(host, {
       categories: labels,
-      yName: "Dollars",
+      yName: panel._billAnatomyMode === "percent" ? "Share" : "Dollars",
+      percent: panel._billAnatomyMode === "percent",
       series: familyKeys.map((key, index) => ({
         name: familyLabels[index],
-        values: anatomy.map((row) => row[key]),
+        values: panel._billAnatomyMode === "percent"
+          ? statements.map((row) => fns.lineItemShares(row).find((share) => share.key === key)?.share ?? null)
+          : anatomy.map((row) => row[key]),
         type: "bar",
         stack: "bill",
         color: family[key],

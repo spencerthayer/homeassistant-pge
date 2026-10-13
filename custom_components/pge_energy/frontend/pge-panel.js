@@ -1299,7 +1299,6 @@ class PgeEnergyPanel extends HTMLElement {
         <p class="muted" style="margin:0 0 8px">Monthly average rate and statement billed vs payments, last 12 months.</p>
         <div class="insights-cost-grid">
           <div class="chart-host" id="cost-per-kwh"></div>
-          <div class="chart-host" id="billed-paid"></div>
         </div>
       </section>
       <section class="card grid-2" id="insights-heat">
@@ -2266,7 +2265,6 @@ class PgeEnergyPanel extends HTMLElement {
       this.shadowRoot.getElementById("chart-usage"),
       this.shadowRoot.getElementById("scatter"),
       this.shadowRoot.getElementById("cost-per-kwh"),
-      this.shadowRoot.getElementById("billed-paid"),
       this.shadowRoot.getElementById("heatmap-kwh"),
       this.shadowRoot.getElementById("heatmap-temp"),
       this.shadowRoot.getElementById("ledger-bill"),
@@ -2521,11 +2519,13 @@ class PgeEnergyPanel extends HTMLElement {
     return `
       <details class="chart-gallery" data-persist="chart_gallery_pdf"${this._detailsOpenAttr("chart_gallery_pdf")}>
         <summary><span class="rollup-title">Bill PDF</span></summary>
-        ${figure("chart-bill-anatomy", "Stacked bill anatomy", "Horizontal: statement. Vertical: dollars. Basic, energy use, delivery, taxes, and other. Other is the residual so the column totals new charges. Delivery subtotal is not stacked again.")}
+        <div class="metric-toggle" role="group" aria-label="Bill mix">
+          <button type="button" data-bill-mode="dollars" aria-pressed="${this._billAnatomyMode !== "percent"}">$</button>
+          <button type="button" data-bill-mode="percent" aria-pressed="${this._billAnatomyMode === "percent"}">%</button>
+        </div>
+        ${figure("chart-bill-anatomy", "Stacked bill anatomy", "Horizontal: statement. Vertical: dollars or percent. Basic, energy use, delivery, taxes, and other.")}
         ${figure("chart-treemap", "Latest statement treemap", "Area: dollars in the latest PDF statement. Same five families.")}
         ${figure("chart-waterfall", "Statement waterfall", "Previous amount due, payment, new charges, amount due.")}
-        ${figure("chart-fixed-variable", "Fixed vs variable", "Horizontal: statement. Vertical: dollars. Same five families.")}
-        ${figure("chart-line-mix", "Line-item mix", "Horizontal: statement. Vertical: share of new charges. Same five families.")}
       </details>`;
   }
 
@@ -3294,7 +3294,6 @@ class PgeEnergyPanel extends HTMLElement {
     this._disposeHostCharts(
       this.shadowRoot.getElementById("scatter"),
       this.shadowRoot.getElementById("cost-per-kwh"),
-      this.shadowRoot.getElementById("billed-paid"),
       this.shadowRoot.getElementById("heatmap-kwh"),
       this.shadowRoot.getElementById("heatmap-temp")
     );
@@ -3393,19 +3392,6 @@ class PgeEnergyPanel extends HTMLElement {
         color: colors.cost,
         unit: "",
         monthly: true,
-      });
-      if (chart) this._charts.push(chart);
-    }
-
-    const bpHost = this.shadowRoot.getElementById("billed-paid");
-    if (bpHost) {
-      bpHost.replaceChildren();
-      const chart = await createMonthCompareChart(bpHost, {
-        billedXs: billAmt.xs,
-        billedYs: billAmt.values,
-        payXs: payAmt.xs,
-        payYs: payAmt.values,
-        colors,
       });
       if (chart) this._charts.push(chart);
     }

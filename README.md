@@ -357,12 +357,7 @@ Every chart on `/pge` ends at published data (Pacific yesterday). Gallery charts
 - Data: Daily `consumption` and `cost`, summed by Pacific month.
 - Window: The `12mo` preset. Independent of the Usage range chip.
 
-#### Billed vs payments
-
-- Where: `#billed-paid` in Analytics.
-- Represents: Statement billed dollars against payments.
-- Data: `bill_amount` and `payment_amount`, `period: "month"`.
-- Window: The `12mo` preset. Independent of the Usage range chip.
+Ledger dollars in Billing is the billed-versus-paid chart. Cost intelligence keeps the monthly average rate.
 
 #### kWh calendar
 
@@ -609,19 +604,7 @@ Every chart on `/pge` ends at published data (Pacific yesterday). Gallery charts
 - Data: `waterfallSteps` on `previous_amount_due`, `payment_received`, `balance_forward`, and `amount_due`.
 - Window: The latest PDF statement. Hidden when the PDF block is omitted.
 
-#### Fixed vs variable
-
-- Where: Billing Bill PDF details, `#chart-fixed-variable`.
-- Represents: Basic, energy use, delivery, taxes, and other across statements.
-- Data: `fixedVariableRows` on the PDF families.
-- Window: PDF statement rows. Hidden when the PDF block is omitted or fewer than two points remain.
-
-#### Line-item mix
-
-- Where: Billing Bill PDF details, `#chart-line-mix`.
-- Represents: Those five families as a 100% stack.
-- Data: `lineItemShares` on the PDF families.
-- Window: PDF statement rows. Hidden when the PDF block is omitted or fewer than two points remain.
+Stacked bill anatomy has a dollars or percent toggle. Percent mode is the former line-item mix.
 
 #### Why this bill changed
 
