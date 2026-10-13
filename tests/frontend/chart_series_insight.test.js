@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { pacificMidnightUtc } from "../../custom_components/pge_energy/frontend/data.js";
+import { pacificMidnightUtc, todPeriodForPacific } from "../../custom_components/pge_energy/frontend/data.js";
 import {
   anomalyDays,
   baseloadSteps,
@@ -129,6 +129,28 @@ describe("insight series", () => {
       basicRate: 1,
     });
     assert.equal(wrap[20].tod, 11);
+  });
+
+  it("shiftCostByStartHour prices a later calendar day on that date", () => {
+    const ymd = "2026-11-23";
+    const hours = 85;
+    const rates = { off_peak: 1, mid_peak: 2, on_peak: 3 };
+    let expected = 0;
+    for (let cursor = 0; cursor < hours; cursor++) {
+      const [year, month, day] = ymd.split("-").map(Number);
+      const date = new Date(Date.UTC(year, month - 1, day + Math.floor(cursor / 24)));
+      const key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+      expected += rates[todPeriodForPacific(key, cursor % 24)];
+    }
+    const rows = shiftCostByStartHour({
+      kw: 1,
+      hours,
+      runsPerMonth: 1,
+      rates,
+      basicRate: 1,
+      ymd,
+    });
+    assert.equal(rows[0].tod, expected);
   });
 
   it("spiralCells maps the third day at 13:00 to angle 13 and radius 2", () => {

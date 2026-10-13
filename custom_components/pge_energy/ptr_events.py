@@ -170,7 +170,8 @@ class PtrEventCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         end = _parse_iso(str(event.get("end", "")))
         if start is None or end is None:
             return False
-        return start <= now < end
+        now_utc = now.astimezone(UTC)
+        return start.astimezone(UTC) <= now_utc < end.astimezone(UTC)
 
     @property
     def event_detected(self) -> bool:

@@ -153,6 +153,26 @@ class TestPtrEventCoordinator:
         }
         assert coord.event_active is False
 
+    def test_event_active_uses_utc_across_the_fall_back_fold(self):
+        coord = _make_coordinator()
+        coord._parent.import_store.ptr_scheduled_event = {
+            "start": "2026-11-01T01:30:00-08:00",
+            "end": "2026-11-01T03:30:00-08:00",
+            "label": "fold",
+        }
+        holder = {"now": datetime.fromisoformat("2026-11-01T01:45:00-07:00")}
+
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                current = holder["now"]
+                return current if tz is None else current.astimezone(tz)
+
+        with patch("custom_components.pge_energy.ptr_events.datetime", FrozenDateTime):
+            assert coord.event_active is False
+            holder["now"] = datetime.fromisoformat("2026-11-01T02:00:00-08:00")
+            assert coord.event_active is True
+
     @pytest.mark.asyncio
     async def test_event_active_no_window(self):
         coord = _make_coordinator()

@@ -803,7 +803,6 @@ export function shiftCostByStartHour({
   basicRate,
   ymd = "2026-01-07",
 } = {}) {
-  const nextDay = addDays(ymd, 1);
   const rows = [];
   for (let startHour = 0; startHour < 24; startHour++) {
     let energyCost = 0;
@@ -811,7 +810,7 @@ export function shiftCostByStartHour({
     let cursor = startHour;
     while (left > 1e-9) {
       const slice = Math.min(1, left);
-      const day = cursor < 24 ? ymd : nextDay;
+      const day = addDays(ymd, Math.floor(cursor / 24));
       const period = todPeriodForPacific(day, cursor % 24);
       energyCost += kw * slice * (finite(rates?.[period]) || 0);
       left -= slice;
