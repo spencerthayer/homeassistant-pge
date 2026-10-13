@@ -909,16 +909,17 @@ export async function renderInsights(panel, fns) {
         createGalleryChart(host, {
           categories: counter.rows.map((row) => row.ts),
           yName: "kWh",
+          panes: true,
           series: [
             { name: "Actual", values: counter.rows.map((row) => row.actual) },
             { name: "Predicted", values: counter.rows.map((row) => row.predicted) },
-            { name: "Cumulative gap", values: counter.rows.map((row) => row.gap) },
+            { name: "Cumulative gap", values: counter.rows.map((row) => row.gap), pane: 1 },
           ],
         }),
       );
       const figure = panel.shadowRoot.getElementById("chart-weather-counterfactual")?.closest("figure");
       const note = figure?.querySelector("p");
-      if (note) note.textContent = `r2 ${counter.model.r2.toFixed(2)}. Fit on an earlier baseline, not the days drawn.`;
+      if (note) note.textContent = `R² ${counter.model.r2.toFixed(2)}. Model fit on an earlier baseline, not the days drawn.`;
     }
 
     const cents = fns.centsPerKwh(trailing);

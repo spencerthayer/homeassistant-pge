@@ -1714,6 +1714,7 @@ export async function createGalleryChart(host, {
   horizontal = false,
   markLines = [],
   percent = false,
+  panes = false,
 } = {}) {
   const finite = series.reduce((count, row) => count + countFinite(row?.values), 0);
   if (finite < 2) return showChartEmpty(host, "Not enough history.");
@@ -1737,6 +1738,8 @@ export async function createGalleryChart(host, {
     return {
       name: row.name,
       type: row.type || "line",
+      xAxisIndex: panes ? row.pane || 0 : 0,
+      yAxisIndex: panes ? row.pane || 0 : 0,
       data,
       stack: row.stack,
       showSymbol: false,
@@ -1821,9 +1824,31 @@ export async function createGalleryChart(host, {
         },
       },
       legend: series.length > 1 ? { type: "scroll", icon: "roundRect", textStyle: { color: theme.text } } : { show: false },
-      grid: { left: horizontal ? 88 : 48, right: 16, top: series.length > 1 ? 36 : 16, bottom: 28 },
-      xAxis: horizontal ? valueAxis : timeAxis ? timeAxisOption : categoryAxis,
-      yAxis: horizontal ? categoryAxis : valueAxis,
+      axisPointer: panes ? { link: [{ xAxisIndex: "all" }] } : undefined,
+      grid: panes
+        ? [
+            { left: 56, right: 16, top: 36, height: "52%" },
+            { left: 56, right: 16, top: "68%", height: "22%" },
+          ]
+        : { left: horizontal ? 88 : 48, right: 16, top: series.length > 1 ? 36 : 16, bottom: 28 },
+      xAxis: panes
+        ? [
+            { ...(timeAxis ? timeAxisOption : categoryAxis), gridIndex: 0 },
+            { ...(timeAxis ? timeAxisOption : categoryAxis), gridIndex: 1, axisLabel: { show: false } },
+          ]
+        : horizontal
+          ? valueAxis
+          : timeAxis
+            ? timeAxisOption
+            : categoryAxis,
+      yAxis: panes
+        ? [
+            { ...valueAxis, gridIndex: 0 },
+            { ...valueAxis, gridIndex: 1, name: "Gap" },
+          ]
+        : horizontal
+          ? categoryAxis
+          : valueAxis,
       series: built,
     },
     { height: 240 },

@@ -214,6 +214,14 @@ def test_cost_intelligence_uses_twelve_month_window():
     assert "barMaxWidth: 28" in charts
 
 
+def test_counterfactual_uses_two_panes():
+    charts = CHARTS_JS.read_text(encoding="utf-8")
+    gallery = (FRONTEND / "chart-gallery.js").read_text(encoding="utf-8")
+    assert "panes = false" in charts
+    assert "pane: 1" in gallery
+    assert "R²" in gallery
+
+
 def test_waterfalls_show_signed_dollar_labels():
     charts = CHARTS_JS.read_text(encoding="utf-8")
     gallery = (FRONTEND / "chart-gallery.js").read_text(encoding="utf-8")
