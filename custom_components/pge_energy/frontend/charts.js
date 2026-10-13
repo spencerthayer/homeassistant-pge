@@ -1356,7 +1356,7 @@ export async function createTreemap(host, { data } = {}) {
   }
   const ready = rows.filter((row) => Number.isFinite(Number(row?.value)) && Number(row.value) !== 0);
   if (ready.length < 2) return showChartEmpty(host, "Not enough bill detail.");
-  const { theme, tip, colors } = galleryBase(host);
+  const { theme, tip } = galleryBase(host);
   return mount(
     host,
     {
@@ -1370,7 +1370,6 @@ export async function createTreemap(host, { data } = {}) {
           breadcrumb: { show: false },
           label: { color: theme.text },
           itemStyle: { borderColor: theme.bg },
-          color: [colors.kwh, colors.cost, colors.payment, colors.export, colors.warn],
         },
       ],
     },

@@ -217,6 +217,15 @@ def test_heatmaps_use_full_recorded_history():
     assert "heatmap-scroll" not in source
 
 
+def test_bill_charts_use_family_colors():
+    gallery = (FRONTEND / "chart-gallery.js").read_text(encoding="utf-8")
+    charts = CHARTS_JS.read_text(encoding="utf-8")
+    assert "billFamilyColors(" in gallery
+    start = charts.index("export async function createTreemap")
+    body = charts[start : charts.index("export async function createParallel", start)]
+    assert "color: [colors.kwh" not in body
+
+
 def test_tod_charts_use_period_colors():
     gallery = (FRONTEND / "chart-gallery.js").read_text(encoding="utf-8")
     assert "todColors(" in gallery

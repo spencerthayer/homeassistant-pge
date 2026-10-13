@@ -15,7 +15,7 @@ import {
   createTreemap,
   createWaterfall,
 } from "./charts.js?v=0.12.2";
-import { todColors } from "./theme.js?v=0.12.2";
+import { billFamilyColors, todColors } from "./theme.js?v=0.12.2";
 import {
   estimatePlanCostSeries,
   fetchStatisticSeries,
@@ -767,8 +767,9 @@ export async function renderPdfSolar(panel, fns) {
   const labels = anatomy.map((row) => pacificYmd(new Date(row.ts * 1000)));
   const familyKeys = ["basic", "energyUse", "delivery", "taxes", "other"];
   const familyLabels = ["Basic", "Energy use", "Delivery", "Taxes", "Other"];
-  await mount( "chart-bill-anatomy", (host) =>
-    createGalleryChart(host, {
+  await mount( "chart-bill-anatomy", (host) => {
+    const family = billFamilyColors(host);
+    return createGalleryChart(host, {
       categories: labels,
       yName: "Dollars",
       series: familyKeys.map((key, index) => ({
@@ -776,15 +777,21 @@ export async function renderPdfSolar(panel, fns) {
         values: anatomy.map((row) => row[key]),
         type: "bar",
         stack: "bill",
+        color: family[key],
       })),
-    }),
-  );
+    });
+  });
   const slices = fns.treemapSlices(statements);
-  await mount( "chart-treemap", (host) =>
-    createTreemap(host, {
-      data: slices.map((slice) => ({ name: slice.label, value: slice.value })),
-    }),
-  );
+  await mount( "chart-treemap", (host) => {
+    const family = billFamilyColors(host);
+    return createTreemap(host, {
+      data: slices.map((slice) => ({
+        name: slice.label,
+        value: slice.value,
+        itemStyle: { color: family[slice.key] },
+      })),
+    });
+  });
   const latest = statements[statements.length - 1];
   await mount( "chart-waterfall", (host) =>
     createWaterfall(host, {
@@ -808,8 +815,9 @@ export async function renderPdfSolar(panel, fns) {
       })),
     }),
   );
-  await mount( "chart-line-mix", (host) =>
-    createGalleryChart(host, {
+  await mount( "chart-line-mix", (host) => {
+    const family = billFamilyColors(host);
+    return createGalleryChart(host, {
       categories: labels,
       yName: "Share",
       percent: true,
@@ -818,9 +826,10 @@ export async function renderPdfSolar(panel, fns) {
         values: statements.map((row) => fns.lineItemShares(row).find((share) => share.key === key)?.share ?? null),
         type: "bar",
         stack: "share",
+        color: family[key],
       })),
-    }),
-  );
+    });
+  });
 }
 
 const SHIFT_PRESETS = {
