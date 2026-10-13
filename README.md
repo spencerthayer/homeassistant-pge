@@ -647,7 +647,7 @@ Every chart on `/pge` ends at published data (Pacific yesterday). Gallery charts
 #### Load-shift simulator
 
 - Where: Time of Day Charts details, first host, `#chart-shift-sim`, with preset, kW, hours, and runs-per-month inputs.
-- Represents: What a weekday load costs per month at each start hour. Local TOD imported-energy estimate versus a flat Local Basic estimate. Weekends are all off-peak.
+- Represents: What a weekday load costs per month at each start hour. Local TOD imported-energy estimate versus Schedule 7 base plus Schedule 125. That comparison line is not a full Basic bill. Weekends are all off-peak.
 - Data: `shiftCostByStartHour` using the catalog row `estimatePlanCostSeries` would use at `publishedDataEnd`.
 - Window: A single weekday rate card, not a recorder range. Hidden when the catalog does not cover `publishedDataEnd`.
 

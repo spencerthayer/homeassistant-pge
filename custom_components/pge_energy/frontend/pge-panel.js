@@ -1170,6 +1170,14 @@ class PgeEnergyPanel extends HTMLElement {
     this._bindPersistentDetails(content.querySelector("#hero"));
   }
 
+  async _softGallery(fn) {
+    try {
+      await fn();
+    } catch (err) {
+      console.warn("PGE gallery render failed", err);
+    }
+  }
+
   async _renderAll() {
     const gen = ++this._galleryRenderGen;
     const entryId = this._activeEntryId;
@@ -1187,17 +1195,17 @@ class PgeEnergyPanel extends HTMLElement {
     if (stale()) return;
     await this._renderHero();
     if (stale()) return;
-    await this._renderLoadShapeGallery();
+    await this._softGallery(() => this._renderLoadShapeGallery());
     if (stale()) return;
-    await this._renderInsights();
+    await this._softGallery(() => this._renderInsights());
     if (stale()) return;
     await this._renderTod();
     if (stale()) return;
     this._renderBillingPrograms(true);
     if (stale()) return;
-    await this._renderLedgerCharts();
+    await this._softGallery(() => this._renderLedgerCharts());
     if (stale()) return;
-    await this._renderWeatherMoney();
+    await this._softGallery(() => this._renderWeatherMoney());
     if (stale()) return;
     this._renderDiagnostics();
   }
@@ -1206,9 +1214,9 @@ class PgeEnergyPanel extends HTMLElement {
     const gen = this._galleryRenderGen || 0;
     const entryId = this._activeEntryId;
     const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
-    await this._renderLedgerCharts();
+    await this._softGallery(() => this._renderLedgerCharts());
     if (stale()) return;
-    await this._renderWeatherMoney();
+    await this._softGallery(() => this._renderWeatherMoney());
   }
 
   _normalizeRangeKey(key) {
@@ -2038,15 +2046,15 @@ class PgeEnergyPanel extends HTMLElement {
     );
     await this._renderHero();
     if (stale()) return;
-    await this._renderLoadShapeGallery();
+    await this._softGallery(() => this._renderLoadShapeGallery());
     if (stale()) return;
-    await this._renderInsights();
+    await this._softGallery(() => this._renderInsights());
     if (stale()) return;
-    await this._renderLedgerCharts();
+    await this._softGallery(() => this._renderLedgerCharts());
     if (stale()) return;
-    await this._renderTodGallery();
+    await this._softGallery(() => this._renderTodGallery());
     if (stale()) return;
-    await this._renderWeatherMoney();
+    await this._softGallery(() => this._renderWeatherMoney());
   }
 
   /** One gallery pass after the active entry's sync reaches complete. */
@@ -2054,13 +2062,13 @@ class PgeEnergyPanel extends HTMLElement {
     const gen = ++this._galleryRenderGen;
     const entryId = this._activeEntryId;
     const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
-    await this._renderLoadShapeGallery();
+    await this._softGallery(() => this._renderLoadShapeGallery());
     if (stale()) return;
-    await this._renderTodGallery();
+    await this._softGallery(() => this._renderTodGallery());
     if (stale()) return;
-    await this._renderInsights();
+    await this._softGallery(() => this._renderInsights());
     if (stale()) return;
-    await this._renderWeatherMoney();
+    await this._softGallery(() => this._renderWeatherMoney());
   }
 
   async _renderHero() {
@@ -2160,7 +2168,7 @@ class PgeEnergyPanel extends HTMLElement {
         <summary><span class="rollup-title">Charts</span></summary>
         <figure data-chart="chart-shift-sim">
           <h3>Load-shift simulator</h3>
-          <p class="muted">What a weekday load costs per month at each start hour. Local TOD imported-energy estimate versus a flat Local Basic estimate. Weekends are all off-peak.</p>
+          <p class="muted">What a weekday load costs per month at each start hour. Local TOD imported-energy estimate versus Schedule 7 base plus Schedule 125. That line is not a full Basic bill. Weekends are all off-peak.</p>
           <label>Load <select id="chart-shift-preset">
             <option value="ev">EV 7.2 kW for 4 h</option>
             <option value="dryer">Dryer 3 kW for 1 h</option>
@@ -3747,7 +3755,7 @@ class PgeEnergyPanel extends HTMLElement {
     if (gen !== this._todRenderGen) return;
     this._bindPersistentDetails(el);
     this._bindTodRange(el);
-    await this._renderTodGallery();
+    await this._softGallery(() => this._renderTodGallery());
   }
 
   _tariffStatusHtml(status, todCatalog, basicCatalog) {

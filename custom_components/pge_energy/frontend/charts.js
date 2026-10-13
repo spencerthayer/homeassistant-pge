@@ -245,11 +245,34 @@ function responsiveChartHeight(base) {
   return base;
 }
 
+function chartDescription(host) {
+  const figure = host.closest?.("figure");
+  const title = figure?.querySelector("h3")?.textContent?.trim();
+  const caption = figure?.querySelector("p")?.textContent?.trim();
+  const text = [title, caption].filter(Boolean).join(". ");
+  return text || host.id || "PGE chart";
+}
+
 async function mount(host, option, { height = 160, group = null, onLayout = null } = {}) {
   const echarts = await ensureEcharts();
   host.replaceChildren();
   host.style.width = "100%";
   host.style.maxWidth = "100%";
+  const description = chartDescription(host);
+  host.setAttribute("role", "img");
+  host.setAttribute("aria-label", description);
+  option = {
+    ...option,
+    aria: {
+      enabled: true,
+      decal: { show: false },
+      ...option.aria,
+      label: {
+        description,
+        ...(option.aria?.label || {}),
+      },
+    },
+  };
   const applyHeight = () => {
     host.style.height = `${responsiveChartHeight(height)}px`;
   };

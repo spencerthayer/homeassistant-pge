@@ -859,7 +859,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool
                 hass.services.async_remove(DOMAIN, "reset_import_checkpoint")
             if hass.services.has_service(DOMAIN, "refresh_tariffs"):
                 hass.services.async_remove(DOMAIN, "refresh_tariffs")
-            for service in ("set_ptr_event", "clear_ptr_event", "acknowledge_ptr_event"):
+            for service in (
+                "set_ptr_event",
+                "clear_ptr_event",
+                "acknowledge_ptr_event",
+                "download_bill_pdf",
+                "reparse_bill_pdfs",
+            ):
                 if hass.services.has_service(DOMAIN, service):
                     hass.services.async_remove(DOMAIN, service)
     return unload_ok

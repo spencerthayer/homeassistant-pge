@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.pge_energy.const import ALERT_PTR_EVENT_DETECTED
+from custom_components.pge_energy.const import ALERT_PTR_EVENT_ACTIVE, ALERT_PTR_EVENT_DETECTED
 from custom_components.pge_energy.ptr_events import (
     PtrEventCoordinator,
     diff_new_ptr_event_dates,
+    ptr_wake_instants,
     validate_ptr_event_window,
 )
 from custom_components.pge_energy.time_util import PGE_TZ
@@ -245,3 +246,72 @@ class TestPtrEventCoordinator:
         coord = _make_coordinator()
         await coord.async_acknowledge_detection()
         assert coord._parent.import_store.ptr_detected_event is None
+
+    def test_fall_back_timer_uses_the_later_utc_instant_and_cancels(self):
+        coord = _make_coordinator()
+        coord._parent.import_store.ptr_scheduled_event = {
+            "start": "2026-11-01T01:30:00-08:00",
+            "end": "2026-11-01T03:30:00-08:00",
+            "label": "fold",
+        }
+        frozen = datetime(2026, 11, 1, 0, 30, tzinfo=PGE_TZ)
+        captured: list[datetime] = []
+        unsubs: list[MagicMock] = []
+
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen if tz is None else frozen.astimezone(tz)
+
+        def track(_hass, _action, point):
+            captured.append(point)
+            unsub = MagicMock()
+            unsubs.append(unsub)
+            return unsub
+
+        with (
+            patch("custom_components.pge_energy.ptr_events.datetime", FrozenDateTime),
+            patch(
+                "custom_components.pge_energy.ptr_events.async_track_point_in_utc_time",
+                side_effect=track,
+            ),
+        ):
+            coord._reschedule_timers()
+            assert captured[0] == datetime(2026, 11, 1, 9, 30, tzinfo=UTC)
+            assert captured[0] != datetime(2026, 11, 1, 8, 30, tzinfo=UTC)
+            coord._reschedule_timers()
+
+        assert unsubs[0].call_count == 1
+        assert unsubs[1].call_count == 1
+        assert unsubs[2].call_count == 1
+
+    def test_start_callback_fires_the_active_alert(self):
+        coord = _make_coordinator()
+        coord._parent.import_store.ptr_scheduled_event = {
+            "start": "2026-11-01T01:30:00-08:00",
+            "end": "2026-11-01T03:30:00-08:00",
+            "label": "fold",
+        }
+        coord._start_timer = MagicMock()
+
+        def _close(coro):
+            coro.close()
+
+        coord.hass.async_create_task.side_effect = _close
+        with patch("custom_components.pge_energy.ptr_events.async_fire_pge_alert") as fire:
+            coord._on_start(datetime(2026, 11, 1, 9, 30, tzinfo=UTC))
+        fire.assert_called_once()
+        assert fire.call_args.args[1] == ALERT_PTR_EVENT_ACTIVE
+        coord.hass.async_create_task.assert_called_once()
+        assert coord._start_timer is None
+
+
+class TestPtrWakeInstants:
+    def test_fall_back_keeps_the_pst_occurrence(self):
+        now = datetime(2026, 11, 1, 0, 30, tzinfo=PGE_TZ)
+        start = datetime.fromisoformat("2026-11-01T01:30:00-08:00")
+        end = datetime.fromisoformat("2026-11-01T03:30:00-08:00")
+        start_at, warn_at, end_at = ptr_wake_instants(now, start, end, warn_minutes=15)
+        assert start_at == datetime(2026, 11, 1, 9, 30, tzinfo=UTC)
+        assert warn_at == datetime(2026, 11, 1, 9, 15, tzinfo=UTC)
+        assert end_at == datetime(2026, 11, 1, 11, 30, tzinfo=UTC)

@@ -234,4 +234,6 @@ async def test_unload_tears_down_panel_when_last_entry():
         "set_ptr_event",
         "clear_ptr_event",
         "acknowledge_ptr_event",
+        "download_bill_pdf",
+        "reparse_bill_pdfs",
     ]

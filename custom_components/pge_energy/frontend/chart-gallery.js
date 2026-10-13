@@ -966,7 +966,7 @@ export async function renderInsights(panel, fns) {
         createGalleryChart(host, {
           categories: rows.map((row) => String(row.startHour).padStart(2, "0")),
           yName: "Dollars per month",
-          markLines: [{ y: rows[0]?.basic, name: "Local Basic estimate" }],
+          markLines: [{ y: rows[0]?.basic, name: "Schedule 7 base + Schedule 125" }],
           series: [{ name: "Local TOD imported-energy estimate", values: rows.map((row) => row.tod), type: "bar" }],
         }),
       );
