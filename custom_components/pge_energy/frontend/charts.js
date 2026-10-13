@@ -1259,7 +1259,11 @@ export async function createSankey(host, { nodes, links } = {}) {
 }
 
 export async function createTreemap(host, { data } = {}) {
-  const ready = (data || []).filter((row) => Number.isFinite(Number(row?.value)) && Number(row.value) !== 0);
+  const rows = data || [];
+  if (rows.some((row) => Number.isFinite(Number(row?.value)) && Number(row.value) < 0)) {
+    return showChartEmpty(host, "A bill family is negative, so this chart is hidden.");
+  }
+  const ready = rows.filter((row) => Number.isFinite(Number(row?.value)) && Number(row.value) !== 0);
   if (ready.length < 2) return showChartEmpty(host, "Not enough bill detail.");
   const { theme, tip, colors } = galleryBase(host);
   return mount(

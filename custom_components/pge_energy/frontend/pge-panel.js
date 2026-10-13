@@ -901,6 +901,9 @@ class PgeEnergyPanel extends HTMLElement {
     this._accounts = [];
     this._activeEntryId = null;
     this._syncByEntry = {};
+    this._syncObserved = {};
+    this._bootRendering = false;
+    this._galleryRefreshAfterBoot = false;
     this._unsubSync = null;
     this._charts = [];
     this._rangeKey = "24h";
@@ -984,20 +987,46 @@ class PgeEnergyPanel extends HTMLElement {
       }
       this._unsubSync = await this._hass.connection.subscribeMessage(
         (msg) => {
+          let refreshGalleries = false;
           for (const entry of msg.entries || []) {
+            const prior = this._syncByEntry[entry.entry_id];
+            const seen = !!this._syncObserved[entry.entry_id];
             this._syncByEntry[entry.entry_id] = entry;
+            this._syncObserved[entry.entry_id] = true;
+            const finished =
+              entry.status === "complete" &&
+              (prior?.status !== "complete" ||
+                entry.last_successful_update !== prior?.last_successful_update);
+            if (seen && entry.entry_id === this._activeEntryId && finished) {
+              refreshGalleries = true;
+            }
           }
           invalidateStatsCache();
           this._renderSync();
           this._renderDiagnostics();
           void this._renderDataGaps();
+          if (!refreshGalleries) return;
+          if (this._bootRendering) {
+            this._galleryRefreshAfterBoot = true;
+            return;
+          }
+          void this._refreshGalleriesAfterSync();
         },
         { type: "pge_energy/sync/subscribe" }
       );
       this._loading = false;
       this._error = null;
       this._renderShell();
-      await this._renderAll();
+      this._bootRendering = true;
+      try {
+        await this._renderAll();
+      } finally {
+        this._bootRendering = false;
+      }
+      if (this._galleryRefreshAfterBoot) {
+        this._galleryRefreshAfterBoot = false;
+        await this._refreshGalleriesAfterSync();
+      }
       this._scheduleDefaultLandingScroll();
     } catch (err) {
       this._loading = false;
@@ -2020,6 +2049,20 @@ class PgeEnergyPanel extends HTMLElement {
     await this._renderWeatherMoney();
   }
 
+  /** One gallery pass after the active entry's sync reaches complete. */
+  async _refreshGalleriesAfterSync() {
+    const gen = ++this._galleryRenderGen;
+    const entryId = this._activeEntryId;
+    const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
+    await this._renderLoadShapeGallery();
+    if (stale()) return;
+    await this._renderTodGallery();
+    if (stale()) return;
+    await this._renderInsights();
+    if (stale()) return;
+    await this._renderWeatherMoney();
+  }
+
   async _renderHero() {
     const account = this._account;
     if (!account) return;
@@ -2133,7 +2176,7 @@ class PgeEnergyPanel extends HTMLElement {
         ${figure("chart-period-mix", "Monthly period mix", "Horizontal: month. Vertical: share of kWh. Source: imported hourly consumption.")}
         ${figure("chart-money-pareto", "Money-hours Pareto", "Horizontal: dollars. Vertical: Pacific hour. Source: hourly kWh times the local catalog rate. Local TOD imported-energy estimate.")}
         ${figure("chart-period-box", "kWh by period", "Horizontal: period. Vertical: hourly kWh. Source: imported hourly consumption.")}
-        ${figure("chart-tod-delta", "Local TOD minus local Basic", "Horizontal: month. Vertical: dollars, positive means the local TOD estimate is lower. Source: local catalog prices on hourly kWh.")}
+        ${figure("chart-tod-delta", "Local Basic minus local TOD", "Horizontal: month. Vertical: dollars, positive means the local TOD estimate is lower. Source: local catalog prices on hourly kWh.")}
         ${figure("chart-forward-ribbon", "Forward 48-hour ribbon", "Horizontal: next Pacific hour. Vertical: historical mean kWh. Bars follow the offline schedule. No recorder data past the published end.")}
         ${figure("chart-sankey", "Sankey", "Period kWh into local estimate dollars. Source: hourly consumption and the local catalog. Not portal hourly amount.")}
       </details>`;

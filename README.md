@@ -525,7 +525,7 @@ Every chart on `/pge` ends at published data (Pacific yesterday). Gallery charts
 - Data: `periodBox` on hourly `consumption`.
 - Window: Last 28 published days. Hidden with fewer than two finite points.
 
-#### Local TOD minus local Basic
+#### Local Basic minus local TOD
 
 - Where: Time of Day Charts details, `#chart-tod-delta`.
 - Represents: Monthly local Basic minus monthly local TOD. Positive means the local TOD estimate is lower.
@@ -535,7 +535,7 @@ Every chart on `/pge` ends at published data (Pacific yesterday). Gallery charts
 #### Forward 48-hour ribbon
 
 - Where: Time of Day Charts details, `#chart-forward-ribbon`.
-- Represents: The next 48 Pacific hours of the offline schedule. Bar height is the historical mean kWh for that weekday and hour. No recorder point is plotted after `publishedDataEnd`.
+- Represents: The next 48 Pacific hours of the offline schedule, starting at the current hour. Bar height is the historical mean kWh for that weekday and hour. No recorder point is plotted after `publishedDataEnd`.
 - Data: `forwardRibbon` using `todPeriodForPacific` and hourly `consumption` means.
 - Window: Schedule for the next 48 hours. History is the last 28 published days. Hidden with fewer than two finite points.
 

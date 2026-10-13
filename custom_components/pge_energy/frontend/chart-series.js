@@ -348,11 +348,13 @@ export function periodBox(values) {
     return count % 2 ? list[index] : (list[index - 1] + list[index]) / 2;
   };
   const median = middle(nums);
+  const lower = middle(nums.slice(0, Math.floor(nums.length / 2)));
+  const upper = middle(nums.slice(Math.ceil(nums.length / 2)));
   return {
     min: nums[0],
-    q1: middle(nums.slice(0, Math.floor(nums.length / 2))),
+    q1: lower == null ? median : lower,
     median,
-    q3: middle(nums.slice(Math.ceil(nums.length / 2))),
+    q3: upper == null ? median : upper,
     max: nums[nums.length - 1],
   };
 }

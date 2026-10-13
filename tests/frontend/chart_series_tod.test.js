@@ -76,6 +76,11 @@ describe("time of day series", () => {
     assert.ok(box.median >= box.q1 && box.median <= box.q3);
   });
 
+  it("periodBox on a single value uses that value for both quartiles", () => {
+    const box = periodBox([5]);
+    assert.deepEqual(box, { min: 5, q1: 5, median: 5, q3: 5, max: 5 });
+  });
+
   it("todMinusBasicByMonth returns basicSum - todSum", () => {
     const rows = todMinusBasicByMonth([
       { ts: atHour("2026-01-05", 12), tod: 4, basic: 10 },

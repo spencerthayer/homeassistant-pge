@@ -132,7 +132,7 @@ CHART_NAMES = (
     "Monthly period mix",
     "Money-hours Pareto",
     "kWh by period",
-    "Local TOD minus local Basic",
+    "Local Basic minus local TOD",
     "Forward 48-hour ribbon",
     "Sankey",
     "Degree days vs kWh",

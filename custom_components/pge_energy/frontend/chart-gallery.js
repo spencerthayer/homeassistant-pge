@@ -343,7 +343,7 @@ export async function renderTodCharts(panel, fns) {
   );
 
   const matrix = fns.hourWeekdayMatrix(recent);
-  const ribbonStart = Math.floor(end.getTime() / 1000);
+  const ribbonStart = Math.floor(Date.now() / 3600000) * 3600;
   const ribbon = fns.forwardRibbon({ startTs: ribbonStart, means: matrix.values });
   await mount( "chart-forward-ribbon", (host) =>
     createGalleryChart(host, {
@@ -418,7 +418,7 @@ export async function renderTodCharts(panel, fns) {
     createGalleryChart(host, {
       categories: monthly.map((row) => row.month),
       yName: "Dollars, positive means the local TOD estimate is lower",
-      series: [{ name: "Local TOD minus local Basic", values: monthly.map((row) => row.delta), type: "bar" }],
+      series: [{ name: "Local Basic minus local TOD", values: monthly.map((row) => row.delta), type: "bar" }],
     }),
   );
   const dollars = { off_peak: 0, mid_peak: 0, on_peak: 0 };
