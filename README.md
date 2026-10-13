@@ -332,6 +332,10 @@ The integration registers `/pge` and (for admin users, by default) a sidebar ite
 - **Time of Day** — current E-TOU period/rate KPIs with a next-transition countdown, an enrollment badge, and the week schedule grid (Sun–Sat × 24h Pacific) highlighting the current hour. Usage is bucketed by period (energy, imported cost, TOD-priced, share, avg billed ¢/kWh). The local comparison **hero** is TOD-priced kWh vs **billed imported energy** for a window chosen **in the Time of Day section** (24h / This cycle / Last cycle / 7 days / Month / More… / custom; default Last cycle; independent of the Usage chart range). A collapsed **How this was calculated** table also shows the offline/portal **rate-card** TOD vs Basic model (kWh × published/default ¢ — not billed). Official PGE `getRateCompare` savings stay a separate card when the portal returns them. Holiday/off-peak days for the current year are listed in a collapsed note.
 - Configure → **Panel** customizes the sidebar link (show/hide, title, icon), the admin gate, and the default landing section (including **Time of Day**). Hiding the link does **not** unregister `/pge` — it stays reachable by URL.
 
+## Panel
+
+`/pge` opens on a sticky header: the account when more than one is configured, six icon tabs (Overview, Usage, Analytics, Billing, Time of Day, Programs), the shared range on the first three tabs, and a sync pill that opens Sync status, publication gaps, and Diagnostics. Overview groups Yesterday, the current cycle, and the account. Time of Day keeps its own range picker.
+
 ## Panel charts
 
 Every chart on `/pge` ends at published data (Pacific yesterday). Gallery charts do not follow the Usage range chip. A chart with fewer than two finite points is omitted. Portal `_cost` is the PGE usage estimate. Catalog prices are the local TOD imported-energy estimate.
