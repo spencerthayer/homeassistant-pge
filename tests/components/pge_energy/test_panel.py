@@ -224,4 +224,14 @@ async def test_unload_tears_down_panel_when_last_entry():
     assert ok is True
     assert DOMAIN not in hass.data
     remove.assert_called_once_with(hass, PANEL_URL_PATH)
-    assert hass.services.async_remove.call_count == 5
+    removed = [call.args[1] for call in hass.services.async_remove.call_args_list]
+    assert removed == [
+        "refresh",
+        "backfill",
+        "retry_failed_ranges",
+        "reset_import_checkpoint",
+        "refresh_tariffs",
+        "set_ptr_event",
+        "clear_ptr_event",
+        "acknowledge_ptr_event",
+    ]
