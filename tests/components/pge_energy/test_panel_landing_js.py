@@ -20,6 +20,12 @@ def test_panel_section_anchors_and_resolver_present():
     assert "this._landingApplied" in source
 
 
+def test_native_controls_match_panel_chips():
+    source = FRONTEND.read_text(encoding="utf-8")
+    assert 'input[type="datetime-local"]' in source
+    assert "aria-pressed" in source
+
+
 def test_content_is_full_width_with_wide_figures():
     source = FRONTEND.read_text(encoding="utf-8")
     assert "max-width: 1200px" not in source

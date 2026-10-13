@@ -218,6 +218,27 @@ const STYLE = `
 .sync-pill.good { color: var(--pge-status-good); }
 .sync-pill.warn { color: var(--pge-status-warn); }
 .sync-pill.critical { color: var(--pge-status-critical); }
+input[type="number"], input[type="text"], input[type="datetime-local"], select {
+  border: 1px solid var(--pge-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: var(--pge-surface);
+  color: var(--primary-text-color);
+  font: inherit;
+  transition: border-color var(--pge-dur-fast) var(--pge-ease);
+}
+input:focus-visible, select:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 1px; }
+.chip, .metric-toggle button {
+  border-radius: 999px;
+  border: 1px solid var(--pge-border);
+  background: var(--pge-surface);
+  color: var(--primary-text-color);
+  padding: 6px 12px;
+}
+.chip[aria-pressed="true"], .metric-toggle button[aria-pressed="true"] {
+  background: var(--primary-color);
+  color: var(--text-primary-color, #fff);
+}
 dialog.drawer {
   margin: 0 0 0 auto; height: 100%; max-height: none; width: min(480px, 100vw);
   border: 0; padding: var(--pge-space-4); background: var(--pge-surface);
