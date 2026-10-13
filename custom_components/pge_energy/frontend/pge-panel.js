@@ -110,7 +110,7 @@ import {
   seriesColors,
 } from "./charts.js?v=0.12.2";
 import { sparklineSvg } from "./svg-helpers.js?v=0.12.2";
-import { applyPanelTheme } from "./theme.js?v=0.12.2";
+import { applyPanelTheme, todColors } from "./theme.js?v=0.12.2";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -2303,6 +2303,7 @@ class PgeEnergyPanel extends HTMLElement {
         temp: { xs: raw.temp?.xs || [], ys: raw.temp?.means || [] },
         colors,
         projection: chartProjection,
+        periodColors: this._period === "hour" ? todColors(usageHost) : null,
       });
       if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) {
         try {

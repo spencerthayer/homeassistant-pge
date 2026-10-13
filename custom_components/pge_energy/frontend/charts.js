@@ -8,8 +8,10 @@
 import {
   formatSignedUsd,
   formatTooltipRow,
+  pacificParts,
   projectDirectionalUsage,
   symmetricExtent,
+  todPeriodForPacific,
 } from "./data.js?v=0.12.2";
 import {
   chromeColors,
@@ -668,7 +670,7 @@ function _categoryLabel(ms) {
 /** Single Usage chart: signed grid-flow bars + amount + outdoor temperature. */
 export async function createUsageComboChart(
   host,
-  { kwh, returned, cost, compensation, temp, colors, projection = null }
+  { kwh, returned, cost, compensation, temp, colors, projection = null, periodColors = null }
 ) {
   const root = resolveRoot(host);
   const theme = themeColors(root);
@@ -721,26 +723,33 @@ export async function createUsageComboChart(
 
   const flowName = signedFlow ? "Grid flow" : "kWh";
   const amountName = netAmount ? "Net interval amount" : "Import cost";
-  const legendData = [flowName, amountName, "°F"];
+  const legendData = periodColors
+    ? [flowName, amountName, "°F", "Off-peak", "Mid-peak", "On-peak"]
+    : [flowName, amountName, "°F"];
   const flowExtent = signedFlow ? symmetricExtent(projected.flow.values) : null;
   const amountNums = projected.amount.values.filter((v) => v != null && Number.isFinite(Number(v)));
   const amountHasNegative = amountNums.some((v) => Number(v) < 0);
   // Credits-only windows still need a zero baseline so direction stays readable.
   const amountExtent = amountHasNegative ? _paddedExtent([...amountNums, 0]) : null;
 
+  const colorForHour = (ts, n) => {
+    if (signedFlow && n < 0) return c.export;
+    if (!periodColors || ts == null) return c.kwh;
+    const parts = pacificParts(ts);
+    return periodColors[todPeriodForPacific(parts.ymd, parts.hour)] || c.kwh;
+  };
   const barData = useCategory
-    ? flowVals.map((v) => {
+    ? flowVals.map((v, index) => {
         if (v == null || !Number.isFinite(Number(v))) return null;
         const n = Number(v);
         const exportBar = signedFlow && n < 0;
-        const barColor = exportBar ? c.export : c.kwh;
+        const barColor = colorForHour(starts[index], n);
         return {
           value: n,
           itemStyle: {
             color: barColor,
             borderRadius: exportBar ? [0, 0, 5, 5] : [5, 5, 0, 0],
           },
-          // Per-bar emphasis so export hover glow matches export color.
           emphasis: barEmphasis(barColor),
         };
       })
@@ -748,7 +757,8 @@ export async function createUsageComboChart(
         if (v == null || !Number.isFinite(Number(v))) return [t, null];
         const n = Number(v);
         const exportBar = signedFlow && n < 0;
-        const barColor = exportBar ? c.export : c.kwh;
+        const ts = typeof t === "number" && t > 1e12 ? t / 1000 : t;
+        const barColor = colorForHour(ts, n);
         return {
           value: [t, n],
           itemStyle: {
@@ -932,6 +942,13 @@ export async function createUsageComboChart(
         emphasis: linePointEmphasis(c.tempHot, theme),
         z: 5,
       },
+      ...(periodColors
+        ? [
+            { name: "Off-peak", type: "bar", data: [], itemStyle: { color: periodColors.off_peak } },
+            { name: "Mid-peak", type: "bar", data: [], itemStyle: { color: periodColors.mid_peak } },
+            { name: "On-peak", type: "bar", data: [], itemStyle: { color: periodColors.on_peak } },
+          ]
+        : []),
     ],
   };
   return mount(host, option, { height: 380 });

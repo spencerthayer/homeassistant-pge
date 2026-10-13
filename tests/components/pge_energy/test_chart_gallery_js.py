@@ -231,6 +231,13 @@ def test_heatmaps_use_full_recorded_history():
     assert "heatmap-scroll" not in source
 
 
+def test_usage_combo_accepts_period_colors():
+    charts = CHARTS_JS.read_text(encoding="utf-8")
+    panel = PANEL_JS.read_text(encoding="utf-8")
+    assert "periodColors" in charts
+    assert "periodColors" in panel
+
+
 def test_gallery_bars_are_rounded_and_focus_series():
     source = CHARTS_JS.read_text(encoding="utf-8")
     assert "borderRadius: [4, 4, 0, 0]" in source
