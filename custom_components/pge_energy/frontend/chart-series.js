@@ -512,13 +512,23 @@ function component(row, key) {
   return finite(row?.[key]) || 0;
 }
 
+/**
+ * Signed payment credit.
+ * Bill PDFs store a credit as a negative amount. A positive value is a magnitude.
+ */
+function paymentCredit(row) {
+  const payment = finite(row?.payment_received);
+  if (payment == null || payment === 0) return 0;
+  return payment < 0 ? payment : -payment;
+}
+
 /** New charges from balance forward, or from previous due and payment. */
 export function newCharges(row) {
   const due = finite(row?.amount_due);
   if (due == null) return null;
   const forward = finite(row?.balance_forward);
   if (forward != null) return due - forward;
-  return due - component(row, "previous_amount_due") + component(row, "payment_received");
+  return due - component(row, "previous_amount_due") - paymentCredit(row);
 }
 
 /** Five bill families. Delivery and taxes are sums. Other is the residual. */
@@ -554,12 +564,11 @@ export function treemapSlices(statements) {
 
 export function waterfallSteps(statement) {
   const previous = component(statement, "previous_amount_due");
-  const payment = component(statement, "payment_received");
   const fresh = newCharges(statement) || 0;
   const due = component(statement, "amount_due");
   return [
     { key: "previous_amount_due", label: "Previous amount due", value: previous },
-    { key: "payment_received", label: "Payment", value: -payment },
+    { key: "payment_received", label: "Payment", value: paymentCredit(statement) },
     { key: "new_charges", label: "New charges", value: fresh },
     { key: "amount_due", label: "Amount due", value: due },
   ];

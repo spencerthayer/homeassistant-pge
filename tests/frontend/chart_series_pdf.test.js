@@ -85,6 +85,15 @@ describe("pdf and solar series", () => {
     });
     assert.equal(fallback[2].value, 30);
     assert.equal(fallback[3].value, 90);
+    const credit = waterfallSteps({
+      previous_amount_due: 100,
+      payment_received: -40,
+      amount_due: 90,
+    });
+    assert.deepEqual(
+      credit.map((step) => step.value),
+      [100, -40, 30, 90],
+    );
   });
 
   it("fixedVariableRows and lineItemShares use the same five families", () => {

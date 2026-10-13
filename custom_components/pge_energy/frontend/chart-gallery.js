@@ -63,7 +63,10 @@ function hoursOfDay(samples, ymd) {
   const hours = Array(24).fill(null);
   for (const sample of samples) {
     if (pacificYmd(sample.ts) !== ymd || sample.kwh == null) continue;
-    hours[pacificParts(sample.ts).hour] = sample.kwh;
+    const hour = pacificParts(sample.ts).hour;
+    const prior = hours[hour];
+    // Fall back repeats clock hour 1. Add both intervals instead of keeping only the second.
+    hours[hour] = prior == null ? sample.kwh : prior + sample.kwh;
   }
   return hours;
 }
@@ -476,6 +479,8 @@ function billBoundsSeconds(panel) {
 export async function renderWeatherMoney(panel, fns) {
   const stamp = galleryStamp(panel);
   const mount = (id, factory) => mountHost(panel, id, factory, stamp);
+  panel._galleryDays = null;
+  panel._galleryBillAmount = null;
   if (!panel._account) return;
   const end = publishedDataEnd();
   const start5 = new Date(end.getTime() - 5 * 365 * 86400000);
@@ -524,6 +529,10 @@ export async function renderWeatherMoney(panel, fns) {
       series: [{ name: "Mean kWh", values: bins.map((row) => row.meanKwh), type: "bar" }],
     }),
   );
+
+  if (galleryStale(panel, stamp)) return;
+  panel._galleryDays = days;
+  panel._galleryBillAmount = billAmount;
 
   if (!panel.shadowRoot?.getElementById("chart-statement-portal")) return;
   const bounds = billBoundsSeconds(panel);
@@ -576,8 +585,6 @@ export async function renderWeatherMoney(panel, fns) {
   );
 
   if (galleryStale(panel, stamp)) return;
-  panel._galleryDays = days;
-  panel._galleryBillAmount = billAmount;
 }
 
 function hideFigure(panel, id, hidden) {

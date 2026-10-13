@@ -2184,6 +2184,9 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   async _renderWeatherMoney() {
+    const stamp = { entryId: this._activeEntryId, gen: this._galleryRenderGen || 0 };
+    const stale = () =>
+      stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0);
     await renderWeatherMoney(this, {
       billVsImported,
       degreeDayPoint,
@@ -2191,7 +2194,9 @@ class PgeEnergyPanel extends HTMLElement {
       statementWindows,
       tempBins,
     });
+    if (stale()) return;
     await this._renderPdfSolar();
+    if (stale()) return;
     await this._renderInsightCharts();
   }
 
