@@ -1287,6 +1287,14 @@ class PgeEnergyPanel extends HTMLElement {
         <div id="heatmap-temp"></div>
         <p class="muted" style="grid-column:1/-1;margin:0">Gray cells are days without an imported sample in recorder — not a full calendar year of PGE data.</p>
       </section>
+      <details class="chart-gallery" data-section="more-charts" data-persist="chart_gallery_more"${this._detailsOpenAttr("chart_gallery_more")}>
+        <summary><span class="rollup-title">More charts</span></summary>
+        <figure data-chart="chart-fingerprint"><h3>Day fingerprint</h3><p class="muted">Axes: kWh, peak hour, mean °F, on-peak share, portal cents per kWh.</p><div class="chart-host" id="chart-fingerprint"></div></figure>
+        <figure data-chart="chart-ridgelines"><h3>Monthly ridgelines</h3><p class="muted">Horizontal: Pacific hour. Vertical: mean kWh, offset by month.</p><div class="chart-host" id="chart-ridgelines"></div></figure>
+        <figure data-chart="chart-daypart-stream"><h3>Daypart stream</h3><p class="muted">Horizontal: date. Bands: overnight, morning, afternoon, evening.</p><div class="chart-host" id="chart-daypart-stream"></div></figure>
+        <figure data-chart="chart-published-week"><h3>Published week</h3><p class="muted">Horizontal: Pacific hour. Vertical: kWh for the latest closed Pacific week.</p><div class="chart-host" id="chart-published-week"></div></figure>
+        <figure data-chart="chart-program-savings"><h3>Program savings</h3><p class="muted">Horizontal: time. Vertical: dollars. Source: YTD program savings mean.</p><div class="chart-host" id="chart-program-savings"></div></figure>
+      </details>
       </div>
       <div class="tab-panel" id="panel-billing" data-tab="billing" role="tabpanel" aria-labelledby="tab-billing">
       <section class="card" id="billing"></section>
@@ -1321,6 +1329,7 @@ class PgeEnergyPanel extends HTMLElement {
       this.shadowRoot.getElementById("sync-drawer")?.close();
     });
     this._bindPersistentDetails(content.querySelector("#hero"));
+    this._bindPersistentDetails(content.querySelector("#panel-analytics"));
   }
 
   async _softGallery(fn) {
@@ -2304,19 +2313,15 @@ class PgeEnergyPanel extends HTMLElement {
         <summary><span class="rollup-title">Load shape</span></summary>
         ${figure("chart-typical-day", "Typical day", "Horizontal: Pacific hour. Vertical: mean kWh. Source: imported hourly consumption.")}
         ${figure("chart-hour-weekday", "Hour by weekday", "Horizontal: Pacific hour. Vertical: weekday. Color: mean kWh. Source: imported hourly consumption.")}
-        ${figure("chart-ridgelines", "Monthly ridgelines", "Horizontal: Pacific hour. Vertical: mean kWh, offset by month. Source: imported hourly consumption.")}
         ${figure("chart-polar", "24-hour clock", "Angle: Pacific hour. Radius: weekday mean kWh. Source: imported hourly consumption.")}
         ${figure("chart-histogram", "Daily kWh histogram", "Horizontal: daily kWh bin. Vertical: number of days. Source: imported daily consumption.")}
         ${figure("chart-yoy", "Year over year", "Horizontal: month. Vertical: kWh. Source: imported daily consumption.")}
         ${figure("chart-cycle-race", "Billing-cycle race", "Horizontal: day of statement. Vertical: cumulative kWh. Source: imported hourly consumption.")}
         ${figure("chart-baseload", "Baseload band", "Horizontal: Pacific hour. Vertical: weekday mean kWh. Line: minimum of hours 0 through 5. Source: imported hourly consumption.")}
         ${figure("chart-spread", "Daily spread", "Horizontal: date. Vertical: daily kWh. Lines: mean and mean plus or minus two standard deviations. Source: imported daily consumption.")}
-        ${figure("chart-published-week", "Published week", "Horizontal: Pacific hour. Vertical: kWh. Source: imported hourly consumption for the latest closed Pacific week.")}
-        ${figure("chart-fingerprint", "Day fingerprint", "Axes: kWh, peak hour, mean °F, on-peak share, portal cents per kWh. Source: imported hourly consumption, cost, and temperature.")}
         ${figure("chart-duck", "Duck curve", "Horizontal: Pacific hour. Vertical: kWh. Import and export. Shown only when the account has returned energy.")}
         ${figure("chart-duck-months", "Duck curve by month", "Horizontal: month. Vertical: kWh and dollars. Import, export, PGE usage estimate, and export compensation.")}
         <figure class="fig-wide" data-chart="chart-baseload-history"><h3>Always-on load history</h3><p class="muted">Horizontal: date. Vertical: minimum kWh in Pacific hours 0 through 5. Markers are steps. Yearly cost uses the trailing 365-day PGE usage estimate.</p><p class="fig-note muted"></p><div class="chart-host" id="chart-baseload-history"></div></figure>
-        ${figure("chart-daypart-stream", "Daypart stream", "Horizontal: date. Bands: overnight, morning, afternoon, evening. Source: imported hourly consumption.")}
       </details>`;
   }
 
@@ -2409,7 +2414,6 @@ class PgeEnergyPanel extends HTMLElement {
         ${figure("chart-bill-explainer", "Why this bill changed", "Approximate statement windows. Bars sum to the change in amount due.")}
         ${figure("chart-statement-portal", "Statement vs portal estimate", "Approximate statement window. Billed amount against summed PGE usage estimate.")}
         ${figure("chart-bill-imported", "Bill kWh vs imported kWh", "Approximate statement window. Billed kWh against summed imported kWh.")}
-        ${figure("chart-program-savings", "Program savings", "Horizontal: time. Vertical: dollars. Source: YTD program savings mean. Not a cumulative sum.")}
         ${figure("chart-balance-due", "Balance and amount due", "Horizontal: time. Vertical: dollars. Source: account balance and amount due means. Not a cumulative sum.")}
       </details>
       <div id="chart-pdf-slot"></div>`;

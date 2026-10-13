@@ -192,7 +192,7 @@ async function mountHost(panel, id, factory, stamp) {
 export async function renderLoadShape(panel, fns) {
   const stamp = galleryStamp(panel);
   const mount = (id, factory) => mountHost(panel, id, factory, stamp);
-  if (!panel._account || !panel.shadowRoot?.getElementById("chart-typical-day")) return;
+  if (!panel._account || !panel.shadowRoot) return;
   const end = publishedDataEnd();
   const start28 = pacificRangeStart(end, { days: -28 });
   const start12 = pacificRangeStart(end, { months: -12 });

@@ -168,6 +168,20 @@ def test_charts_js_exports_gallery_wrappers():
         assert f"export async function {name}" in source
 
 
+def test_more_charts_hold_the_cut_hosts():
+    source = PANEL_JS.read_text(encoding="utf-8")
+    start = source.index('data-section="more-charts"')
+    body = source[start : source.index("</details>", start)]
+    for host_id in (
+        "chart-fingerprint",
+        "chart-ridgelines",
+        "chart-daypart-stream",
+        "chart-published-week",
+        "chart-program-savings",
+    ):
+        assert host_id in body
+
+
 def test_panel_hosts_and_gallery_persist_keys():
     source = PANEL_JS.read_text(encoding="utf-8")
     for host_id in HOST_IDS:
