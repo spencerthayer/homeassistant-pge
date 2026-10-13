@@ -1782,3 +1782,34 @@ export function detectFlatPortalRates({ hourlyKwh, hourlyCost, todCatalog } = {}
     diagnostics: { observedSpread, expectedSpread, medians, bands },
   };
 }
+
+export const PANEL_TABS = ["glance", "usage", "analytics", "billing", "tod", "programs"];
+export const PANEL_TAB_LABELS = {
+  glance: "Overview",
+  usage: "Usage",
+  analytics: "Analytics",
+  billing: "Billing",
+  tod: "Time of Day",
+  programs: "Programs",
+};
+export const PANEL_TAB_ICONS = {
+  glance: "mdi:view-dashboard-outline",
+  usage: "mdi:lightning-bolt-outline",
+  analytics: "mdi:chart-scatter-plot",
+  billing: "mdi:receipt-text-outline",
+  tod: "mdi:clock-time-four-outline",
+  programs: "mdi:leaf",
+};
+
+export function panelTabHash(tab) {
+  return tab === "glance" ? "#overview" : `#${tab}`;
+}
+
+export function resolvePanelTab(hash, defaultSection) {
+  const key = String(hash || "").replace(/^#/, "");
+  if (key === "overview" || key === "kpis") return "glance";
+  if (key === "hero") return "usage";
+  if (key === "insights-weather") return "analytics";
+  if (PANEL_TABS.includes(key)) return key;
+  return PANEL_TABS.includes(defaultSection) ? defaultSection : "glance";
+}

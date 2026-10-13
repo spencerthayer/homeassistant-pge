@@ -35,7 +35,12 @@ import {
   pacificParts,
   pacificWeekStartUtc,
   pacificYmd,
+  PANEL_TAB_ICONS,
+  PANEL_TAB_LABELS,
+  PANEL_TABS,
+  panelTabHash,
   priorPacificYmd,
+  resolvePanelTab,
   projectDirectionalUsage,
   projectUsageSeries,
   publishedDataEnd,
@@ -188,7 +193,25 @@ const STYLE = `
   padding: 8px 16px; min-height: 56px;
   background: var(--app-header-background-color, var(--primary-color));
   color: var(--app-header-text-color, var(--text-primary-color, #fff));
-  position: sticky; top: 0; z-index: 2;
+}
+.pge-header {
+  position: sticky; top: 0; z-index: 3;
+  background: color-mix(in srgb, var(--primary-background-color) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(8px);
+  border-bottom: 1px solid var(--pge-border);
+  padding: var(--pge-space-2) var(--pge-space-4) 0;
+}
+.hdr-row { display: flex; align-items: center; gap: var(--pge-space-3); }
+.section-tabs { display: flex; gap: var(--pge-space-1); overflow-x: auto; }
+.section-tabs [role="tab"] {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 0; background: transparent; color: var(--primary-text-color);
+  padding: 8px 10px; cursor: pointer; border-bottom: 2px solid transparent;
+}
+.section-tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--primary-color); }
+.sync-pill {
+  margin-left: auto; border: 1px solid var(--pge-border); border-radius: 999px;
+  background: var(--pge-surface); color: var(--primary-text-color); padding: 6px 12px; cursor: pointer;
 }
 .toolbar button.menu {
   background: none; border: 0; color: inherit; cursor: pointer;
@@ -936,6 +959,7 @@ class PgeEnergyPanel extends HTMLElement {
     this._hass = null;
     this._accounts = [];
     this._activeEntryId = null;
+    this._activeTab = "glance";
     this._syncByEntry = {};
     this._syncObserved = {};
     this._bootRendering = false;
@@ -1071,6 +1095,47 @@ class PgeEnergyPanel extends HTMLElement {
     }
   }
 
+  _bindPanelNavigation() {
+    const nav = this.shadowRoot.querySelector(".section-tabs");
+    if (!nav || nav.dataset.bound === "1") return;
+    nav.dataset.bound = "1";
+    nav.addEventListener("click", (ev) => {
+      const button = ev.target.closest("[role=tab]");
+      if (button) this._selectPanelTab(button.dataset.tab, { writeHistory: true });
+    });
+    nav.addEventListener("keydown", (ev) => {
+      const button = ev.target.closest("[role=tab]");
+      if (!button) return;
+      const index = PANEL_TABS.indexOf(button.dataset.tab);
+      const keyIndex = {
+        ArrowLeft: (index + PANEL_TABS.length - 1) % PANEL_TABS.length,
+        ArrowRight: (index + 1) % PANEL_TABS.length,
+        Home: 0,
+        End: PANEL_TABS.length - 1,
+      }[ev.key];
+      if (keyIndex == null) return;
+      ev.preventDefault();
+      this._selectPanelTab(PANEL_TABS[keyIndex], { writeHistory: true, focus: true });
+    });
+    if (this._onPanelHashChange) window.removeEventListener("hashchange", this._onPanelHashChange);
+    this._onPanelHashChange = () => this._selectPanelTab(resolvePanelTab(location.hash, this._defaultSection));
+    window.addEventListener("hashchange", this._onPanelHashChange);
+  }
+
+  _selectPanelTab(tab, { writeHistory = false, focus = false } = {}) {
+    if (!PANEL_TABS.includes(tab)) return;
+    this._activeTab = tab;
+    for (const button of this.shadowRoot.querySelectorAll(".section-tabs [role=tab]")) {
+      const active = button.dataset.tab === tab;
+      button.setAttribute("aria-selected", String(active));
+      button.tabIndex = active ? 0 : -1;
+      if (active && focus) button.focus();
+    }
+    const range = this.shadowRoot.querySelector(".hdr-range");
+    if (range) range.hidden = !["glance", "usage", "analytics"].includes(tab);
+    if (writeHistory && location.hash !== panelTabHash(tab)) history.pushState(null, "", panelTabHash(tab));
+  }
+
   _scheduleDefaultLandingScroll() {
     if (this._landingApplied || this._error || !this._accounts.length) {
       return;
@@ -1132,24 +1197,35 @@ class PgeEnergyPanel extends HTMLElement {
       return;
     }
 
-    const tabs =
+    const accountControl =
       this._accounts.length > 1
-        ? `<div class="tabs">${this._accounts
+        ? `<label>Account <select id="account-select">${this._accounts
             .map(
-              (a) =>
-                `<button type="button" data-entry="${a.entry_id}" class="${
-                  a.entry_id === this._activeEntryId ? "active" : ""
-                }">${this._escape(a.title || a.account_id)}</button>`
+              (account) =>
+                `<option value="${this._escape(account.entry_id)}" ${
+                  account.entry_id === this._activeEntryId ? "selected" : ""
+                }>${this._escape(account.title || account.account_id)}</option>`,
             )
-            .join("")}</div>`
+            .join("")}</select></label>`
         : "";
+    const tabButtons = PANEL_TABS.map(
+      (tab) => `<button type="button" role="tab" id="tab-${tab}" data-tab="${tab}" aria-controls="panel-${tab}"
+        aria-selected="${tab === this._activeTab}" tabindex="${tab === this._activeTab ? 0 : -1}"
+        aria-label="${PANEL_TAB_LABELS[tab]}"><ha-icon icon="${PANEL_TAB_ICONS[tab]}"></ha-icon>
+        <span>${PANEL_TAB_LABELS[tab]}</span></button>`,
+    ).join("");
 
     content.innerHTML = `
-      ${tabs}
+      <header class="pge-header">
+        <div class="hdr-row">${accountControl}
+          <button type="button" class="sync-pill" id="sync-pill" aria-haspopup="dialog" aria-controls="sync-drawer">Sync status</button>
+        </div>
+        <nav class="section-tabs" role="tablist" aria-label="PGE sections">${tabButtons}</nav>
+        <div class="hdr-range" id="filters"></div>
+      </header>
       <section class="card" id="kpis"></section>
       <section class="card" id="hero">
         <h2>Usage</h2>
-        <div class="filters" id="filters"></div>
         <div class="chart-host usage-combo" id="chart-usage"></div>
         <div class="usage-stats" id="usage-stats"></div>
         ${this._loadShapeGalleryHtml()}
@@ -1195,13 +1271,12 @@ class PgeEnergyPanel extends HTMLElement {
       </section>
     `;
 
-    content.querySelectorAll(".tabs button").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        this._activeEntryId = btn.dataset.entry;
-        this._renderShell();
-        await this._renderAll();
-      });
+    content.querySelector("#account-select")?.addEventListener("change", async (ev) => {
+      this._activeEntryId = ev.target.value;
+      this._renderShell();
+      await this._renderAll();
     });
+    this._bindPanelNavigation();
     this._bindPersistentDetails(content.querySelector("#sync-gaps"));
     this._bindPersistentDetails(content.querySelector("#hero"));
   }

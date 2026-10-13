@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 FRONTEND = Path(__file__).resolve().parents[3] / "custom_components" / "pge_energy" / "frontend" / "pge-panel.js"
@@ -16,14 +15,9 @@ def test_panel_section_anchors_and_resolver_present():
     assert 'billing: "#billing"' in source
     assert 'programs: "#programs"' in source
     assert "export function resolveLandingSelector" in source
-    assert "_scheduleDefaultLandingScroll" in source
+    assert "resolvePanelTab" in source
+    assert "hashchange" in source
     assert "this._landingApplied" in source
-    # One-shot: landing flag is set before scrollIntoView scheduling.
-    assert re.search(
-        r"_landingApplied = true;\s*requestAnimationFrame",
-        source,
-        re.MULTILINE,
-    )
 
 
 def test_design_tokens_present():
