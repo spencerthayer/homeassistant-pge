@@ -7,6 +7,7 @@ import { pacificMidnightUtc } from "../../custom_components/pge_energy/frontend/
 import {
   baseloadFloor,
   cycleCumulative,
+  overnightFloorDays,
   dayFingerprints,
   hourWeekdayMatrix,
   loadDuration,
@@ -118,5 +119,28 @@ describe("load-shape series", () => {
 
   it("baseloadFloor returns the minimum of hours 0 through 5", () => {
     assert.equal(baseloadFloor([3, 1.5, 2, 4, 0.4, 5, 9]), 0.4);
+  });
+
+  it("overnight floor requires all real DST slots and keeps large loads", () => {
+    const slots = (iso, count) =>
+      Array.from({ length: count }, (_, i) => ({
+        ts: Date.parse(iso) / 1000 + i * 3600,
+        kwh: i === 0 ? 12 : 13,
+      }));
+    assert.deepEqual(overnightFloorDays([{ ts: atHour("2019-11-01", 0), kwh: 1300 }]), []);
+    assert.deepEqual(overnightFloorDays(slots("2026-03-08T08:00:00Z", 5)), [
+      { ymd: "2026-03-08", kwh: 12 },
+    ]);
+    assert.deepEqual(overnightFloorDays(slots("2026-11-01T07:00:00Z", 7)), [
+      { ymd: "2026-11-01", kwh: 12 },
+    ]);
+    assert.deepEqual(overnightFloorDays(slots("2026-11-01T07:00:00Z", 6)), []);
+    const normal = slots("2026-06-15T07:00:00Z", 6);
+    normal.push({ ts: normal[0].ts, kwh: 1 });
+    assert.deepEqual(overnightFloorDays(normal), [{ ymd: "2026-06-15", kwh: 1 }]);
+    assert.deepEqual(
+      overnightFloorDays([{ ts: atHour("2026-06-15", 1), kwh: null }, ...slots("2026-06-15T07:00:00Z", 5)]),
+      [],
+    );
   });
 });

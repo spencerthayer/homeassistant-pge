@@ -61,6 +61,7 @@ import {
   publishedWeekDays,
   spreadBand,
   typicalDayProfiles,
+  overnightFloorDays,
   baseloadSteps,
   billExplainer,
   counterfactual,
@@ -2145,7 +2146,7 @@ class PgeEnergyPanel extends HTMLElement {
         ${figure("chart-fingerprint", "Day fingerprint", "Axes: kWh, peak hour, mean °F, on-peak share, portal cents per kWh. Source: imported hourly consumption, cost, and temperature.")}
         ${figure("chart-duck", "Duck curve", "Horizontal: Pacific hour. Vertical: kWh. Import and export. Shown only when the account has returned energy.")}
         ${figure("chart-duck-months", "Duck curve by month", "Horizontal: month. Vertical: kWh and dollars. Import, export, PGE usage estimate, and export compensation.")}
-        ${figure("chart-baseload-history", "Always-on load history", "Horizontal: date. Vertical: minimum kWh in Pacific hours 0 through 5. Markers are steps. Yearly cost uses the trailing 365-day PGE usage estimate.")}
+        <figure data-chart="chart-baseload-history"><h3>Always-on load history</h3><p class="muted">Horizontal: date. Vertical: minimum kWh in Pacific hours 0 through 5. Markers are steps. Yearly cost uses the trailing 365-day PGE usage estimate.</p><p class="fig-note muted"></p><div class="chart-host" id="chart-baseload-history"></div></figure>
         ${figure("chart-daypart-stream", "Daypart stream", "Horizontal: date. Bands: overnight, morning, afternoon, evening. Source: imported hourly consumption.")}
       </details>`;
   }
@@ -2269,6 +2270,7 @@ class PgeEnergyPanel extends HTMLElement {
       shiftCostByStartHour,
       statementWindows,
       weatherModel,
+      overnightFloorDays,
     });
   }
 

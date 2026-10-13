@@ -841,7 +841,6 @@ export async function renderInsights(panel, fns) {
   const modelHosts = [
     "chart-bill-explainer",
     "chart-weather-counterfactual",
-    "chart-baseload-history",
     "chart-daypart-stream",
   ];
   let centsValue = null;
@@ -935,44 +934,50 @@ export async function renderInsights(panel, fns) {
       );
     }
 
-    const overnight = [];
-    const byDay = new Map();
-    for (const sample of allHourly) {
-      if (sample.kwh == null) continue;
-      const { ymd, hour } = pacificParts(sample.ts);
-      if (hour > 5) continue;
-      const prior = byDay.get(ymd);
-      byDay.set(ymd, prior == null ? sample.kwh : Math.min(prior, sample.kwh));
-    }
-    for (const ymd of [...byDay.keys()].sort()) overnight.push({ ymd, kwh: byDay.get(ymd) });
-    const steps = fns.baseloadSteps(overnight.map((row) => row.kwh));
-    const dollarsPerKwh = centsValue == null ? null : centsValue / 100;
-    await mount( "chart-baseload-history", (host) =>
-      createGalleryChart(host, {
-        categories: overnight.map((row) => row.ymd),
-        yName: "kWh/h",
-        series: [{ name: "Hours 0-5 minimum", values: overnight.map((row) => row.kwh) }],
-      }),
-    );
-    const historyFigure = panel.shadowRoot.getElementById("chart-baseload-history")?.closest("figure");
-    const historyNote = historyFigure?.querySelector("p");
-    if (historyNote && steps.length) {
-      const text = steps
-        .map((step) => {
-          const kwhSign = step.delta > 0 ? "+" : "";
-          const yearlyDollars = dollarsPerKwh == null ? null : step.delta * 24 * 365 * dollarsPerKwh;
-          const yearly =
-            yearlyDollars == null
-              ? ""
-              : `, ${yearlyDollars > 0 ? "+" : yearlyDollars < 0 ? "-" : ""}$${Math.abs(yearlyDollars).toFixed(0)}/year`;
-          return `${kwhSign}${step.delta.toFixed(2)} kWh/h since ${overnight[step.index]?.ymd || "that day"}${yearly}, PGE usage estimate`;
-        })
-        .join(". ");
-      historyNote.textContent = text;
-    }
     await mount( "chart-daypart-stream", (host) =>
       createThemeRiver(host, { data: fns.daypartDays(hourly) }),
     );
+  }
+
+  const overnight = typeof fns.overnightFloorDays === "function" ? fns.overnightFloorDays(allHourly) : [];
+  const overnightByDay = new Map(overnight.map((row) => [row.ymd, row.kwh]));
+  const overnightCategories = [];
+  const overnightValues = [];
+  if (overnight.length) {
+    for (
+      let cursor = overnight[0].ymd;
+      cursor <= overnight[overnight.length - 1].ymd;
+      cursor = nextPacificYmd(cursor)
+    ) {
+      overnightCategories.push(cursor);
+      overnightValues.push(overnightByDay.has(cursor) ? overnightByDay.get(cursor) : null);
+    }
+  }
+  const steps = (fns.baseloadSteps?.(overnight.map((row) => row.kwh)) || []).slice(-3);
+  const dollarsPerKwh = centsValue == null ? null : centsValue / 100;
+  await mount("chart-baseload-history", (host) =>
+    createGalleryChart(host, {
+      categories: overnightCategories,
+      yName: "kWh/h",
+      series: [{ name: "Overnight minimum", values: overnightValues, connectNulls: false }],
+    }),
+  );
+  const historyFigure = panel.shadowRoot.getElementById("chart-baseload-history")?.closest("figure");
+  const historyNote = historyFigure?.querySelector(".fig-note");
+  if (historyNote) {
+    historyNote.textContent = steps.length
+      ? steps
+          .map((step) => {
+            const signed = step.delta > 0 ? "+" : "";
+            const yearlyDollars = dollarsPerKwh == null ? null : step.delta * 24 * 365 * dollarsPerKwh;
+            const yearly =
+              yearlyDollars == null
+                ? ""
+                : `, ${yearlyDollars > 0 ? "+" : yearlyDollars < 0 ? "-" : ""}$${Math.abs(yearlyDollars).toFixed(0)}/year`;
+            return `${signed}${step.delta.toFixed(2)} kWh/h since ${overnight[step.index]?.ymd || "that day"}${yearly}, PGE usage estimate`;
+          })
+          .join(". ")
+      : "";
   }
 
   if (galleryStale(panel, stamp)) return;

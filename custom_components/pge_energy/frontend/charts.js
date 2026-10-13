@@ -1612,6 +1612,7 @@ export async function createGalleryChart(host, {
       data,
       stack: row.stack,
       showSymbol: false,
+      connectNulls: row.connectNulls === true,
       areaStyle: row.area ? { opacity: 0.35 } : undefined,
       itemStyle: { color },
       lineStyle: { color, type: row.dashed ? "dashed" : "solid" },

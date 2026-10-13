@@ -6,6 +6,7 @@
 
 import {
   isTodOffPeakDay,
+  pacificMidnightUtc,
   pacificParts,
   pacificYmd,
   publishedDataEnd,
@@ -112,6 +113,32 @@ export function monthRidges(samples) {
       key,
       hours: hours.map((values) => (values.length ? mean(values) : null)),
     }));
+}
+
+/**
+ * Minimum kWh on nights that have every real Pacific 00:00–06:00 hourly slot.
+ * Spring-forward nights need 5 slots, ordinary nights 6, fall-back nights 7.
+ * Sparse coarse rows and incomplete nights are left out. Large loads are kept.
+ * @returns {{ ymd: string, kwh: number }[]}
+ */
+export function overnightFloorDays(samples) {
+  const byDay = new Map();
+  for (const sample of samples || []) {
+    const kwh = finite(sample.kwh);
+    if (!Number.isFinite(sample.ts) || kwh == null || kwh < 0) continue;
+    const ymd = pacificYmd(sample.ts);
+    const start = pacificMidnightUtc(ymd).getTime() / 1000;
+    const probe = Date.parse(`${ymd}T12:00:00Z`) / 1000;
+    const end = probe + (6 - pacificParts(probe).hour) * 3600;
+    if (sample.ts < start || sample.ts >= end || (sample.ts - start) % 3600) continue;
+    if (!byDay.has(ymd)) byDay.set(ymd, { start, end, slots: new Map() });
+    byDay.get(ymd).slots.set(sample.ts, kwh);
+  }
+  return [...byDay.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .flatMap(([ymd, { start, end, slots }]) =>
+      slots.size === (end - start) / 3600 ? [{ ymd, kwh: Math.min(...slots.values()) }] : [],
+    );
 }
 
 /**
