@@ -1652,7 +1652,9 @@ class PgeEnergyPanel extends HTMLElement {
         <button class="btn" type="button" id="btn-refresh">Refresh</button>
         <button class="btn secondary" type="button" id="btn-backfill">Backfill</button>
         <span class="muted">Latest interval: ${this._escape(
-          sync.newest_interval || stateDisplay(this._hass, this._account.entity_ids.latest_interval)
+          this._fmtPacificDateTime(sync.newest_interval) ||
+            this._fmtPacificDateTime(stateDisplay(this._hass, this._account.entity_ids.latest_interval)) ||
+            stateDisplay(this._hass, this._account.entity_ids.latest_interval)
         )}</span>
       </div>
     `;
@@ -3573,18 +3575,26 @@ class PgeEnergyPanel extends HTMLElement {
       ? ` · updated ${this._fmtDate(tod.portal_fetched_at)}`
       : "";
     const nextAt = tod.next_transition_at;
-    let nextLabel = "—";
+    let nextValue = "—";
+    let nextDelta = "—";
     if (nextAt) {
+      const when = new Date(nextAt);
       const parts = pacificParts(new Date(nextAt));
       const nextPeriod = todPeriodForPacific(parts.ymd, parts.hour);
-      nextLabel = `${this._todCountdown(nextAt)} → ${TOD_PERIOD_LABELS[nextPeriod] || nextPeriod}`;
+      const clock = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Los_Angeles",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(when);
+      nextValue = `${TOD_PERIOD_LABELS[nextPeriod] || nextPeriod} at ${clock}`;
+      nextDelta = `in ${this._todCountdown(nextAt)}`;
     }
     const dayNote = tod.is_holiday
       ? "Holiday — off-peak all day"
       : tod.is_weekend
         ? "Weekend — off-peak all day"
         : "Weekday schedule";
-    const sourceHint = `Rates: ${sourceLabel}${fetched}`;
+    const sourceHint = `Live rate: ${sourceLabel}${fetched}`;
     this._ensureTodRangeKey();
 
     // Catalog data from the domain tariff updater (effective-dated).
@@ -3626,11 +3636,11 @@ class PgeEnergyPanel extends HTMLElement {
           <p class="muted" style="margin:0 0 8px">${windowNote}</p>
           ${this._todShareBar(kwh)}
           <table class="tod-table">
-            <thead><tr><th>Period</th><th class="num">Energy</th><th class="num">Cost</th><th class="num">Share</th><th class="num">Avg billed</th></tr></thead>
+            <thead><tr><th>Period</th><th class="num">Energy</th><th class="num">Cost</th><th class="num">Share</th><th class="num">Avg portal ¢/kWh</th></tr></thead>
             <tbody>${rows}</tbody>
             <tfoot><tr><td>Total</td><td class="num">${this._fmt(totalKwh, " kWh")}</td><td class="num">${this._fmt(importedCost, "", true)}</td><td class="num">100%</td><td class="num">—</td></tr></tfoot>
           </table>
-          <p class="muted" style="margin:8px 0 0">Cost and avg billed are imported hourly amounts; share uses energy.</p>
+          <p class="muted" style="margin:8px 0 0">Cost is PGE's hourly usage estimate (portal amount), not billed Time of Day.</p>
         `;
 
         // Dual-source plan comparison using effective-dated catalogs.
@@ -3767,7 +3777,7 @@ class PgeEnergyPanel extends HTMLElement {
       <div class="kpi-row">
         <div class="kpi tod-${period}"><div class="label">Period now</div><div class="value">${TOD_PERIOD_LABELS[period]}</div><div class="delta">${this._escape(dayNote)}</div></div>
         <div class="kpi"><div class="label">Current rate</div><div class="value">${rateCents != null ? this._fmt(rateCents, " ¢/kWh") : "—"}</div><div class="delta">${this._escape(sourceLabel)}</div></div>
-        <div class="kpi"><div class="label">Next transition</div><div class="value">${this._escape(this._todCountdown(nextAt))}</div><div class="delta">${this._escape(nextLabel)}</div></div>
+        <div class="kpi"><div class="label">Next transition</div><div class="value">${this._escape(nextValue)}</div><div class="delta">${this._escape(nextDelta)}</div></div>
       </div>
       <div class="tod-schedule">
         <h3>Week schedule (Pacific)</h3>
@@ -3799,13 +3809,17 @@ class PgeEnergyPanel extends HTMLElement {
     const isStale = status.is_stale;
     const hasStatus = status.last_attempt || status.last_success || status.is_stale !== undefined;
     const lastError = status.last_error || null;
+    const catalogState = !hasStatus ? "unknown" : isStale ? "stale" : "current";
     const statusBadge = !hasStatus ? `<span class="badge unknown">unknown</span>` : isStale ? `<span class="badge off">stale</span>` : `<span class="badge on">current</span>`;
     const effectiveRow = todCatalog.length > 0 ? todCatalog[todCatalog.length - 1] : null;
     const effectiveFrom = effectiveRow?.effective_from || null;
     const periodLabel = effectiveFrom ? ` effective ${this._escape(effectiveFrom)}` : "";
+    const catalogTitle = effectiveFrom
+      ? `Catalog: ${catalogState} (effective ${effectiveFrom})`
+      : `Catalog: ${catalogState}`;
     return `
       <details class="tariff-status-block" data-persist="tariff_status"${this._detailsOpenAttr("tariff_status")}>
-        <summary><span class="rollup-title">Tariff sources ${statusBadge}</span></summary>
+        <summary><span class="rollup-title">${this._escape(catalogTitle)} ${statusBadge}</span></summary>
         <div class="tod-table-wrap">
           <table class="tod-table">
             <thead><tr><th>Source</th><th>Last check</th><th>Last success</th><th>TOD rows</th><th>Basic rows</th><th>Note</th></tr></thead>
@@ -3937,7 +3951,11 @@ class PgeEnergyPanel extends HTMLElement {
         </div>
       `;
     } else if (reconciled && reconciled.status === "not_comparable") {
-      const reason = reconciled.diagnostics?.reason || "unavailable";
+      const reasonCode = reconciled.diagnostics?.reason || "";
+      const reason =
+        reasonCode === "no_official_data"
+          ? "PGE has no official comparison for this account"
+          : "Comparison unavailable";
       reconHtml = `<div class="reconciliation"><span class="badge">Not comparable</span> <span class="muted">${this._escape(reason)}</span></div>`;
     }
 
@@ -4389,7 +4407,9 @@ class PgeEnergyPanel extends HTMLElement {
     body.innerHTML = `
       <div class="entities">
         <div class="entity-row"><span>Auth expiration</span><strong>${this._escape(
-          sync.auth_expiration || stateDisplay(this._hass, e.auth_expiration)
+          this._fmtPacificDateTime(sync.auth_expiration) ||
+            this._fmtPacificDateTime(stateDisplay(this._hass, e.auth_expiration)) ||
+            stateDisplay(this._hass, e.auth_expiration)
         )}</strong></div>
         <div class="entity-row"><span>Last API error</span><strong>${this._escape(
           sync.last_api_error || stateDisplay(this._hass, e.last_api_error)
@@ -4433,6 +4453,23 @@ class PgeEnergyPanel extends HTMLElement {
       }).format(value);
     }
     return `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}${suffix}`;
+  }
+
+  /** Pacific clock time, for example "Oct 13, 1:00 AM PT". */
+  _fmtPacificDateTime(value) {
+    if (value == null || value === "" || value === "—" || value === "unknown" || value === "unavailable") {
+      return "";
+    }
+    const d = value instanceof Date ? value : new Date(value);
+    if (!Number.isFinite(d.getTime())) return "";
+    const formatted = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(d);
+    return `${formatted} PT`;
   }
 
   /** PGE calendar day as YYYY-MM-DD. */
