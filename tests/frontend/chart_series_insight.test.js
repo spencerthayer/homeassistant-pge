@@ -60,6 +60,17 @@ describe("insight series", () => {
     assert.ok(Math.abs(model.bH - 0.5) < 1e-6);
   });
 
+  it("weatherModel drops heating when no day is below 65 F", () => {
+    const warm = [];
+    for (let i = 0; i < 80; i++) {
+      warm.push(syntheticDay(i, { tempF: 80 + (i % 10), offPeakDay: i % 3 === 0 ? 1 : 0 }));
+    }
+    const model = weatherModel(warm);
+    assert.ok(model);
+    assert.equal(model.bH, 0);
+    assert.ok(Math.abs(model.bC - 0.3) < 1e-6);
+  });
+
   it("billExplainer bars sum to the change in amount", () => {
     const bars = billExplainer({
       amount0: 100,

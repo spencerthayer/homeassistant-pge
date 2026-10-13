@@ -471,10 +471,11 @@ export function statementWindows(bills, bounds = null) {
     .sort((a, b) => a - b);
   const windows = [];
   for (let i = 1; i < times.length; i++) {
-    windows.push({ start: times[i - 1], end: times[i] });
+    windows.push({ start: times[i - 1], end: times[i], ledgerTs: times[i] });
   }
   if (bounds && bounds.start != null && bounds.end != null && bounds.end > bounds.start) {
-    const current = { start: bounds.start, end: bounds.end };
+    const ledgerTs = windows.length ? windows[windows.length - 1].ledgerTs : times.at(-1) ?? null;
+    const current = { start: bounds.start, end: bounds.end, ledgerTs };
     if (windows.length) windows[windows.length - 1] = current;
     else windows.push(current);
   }
@@ -693,35 +694,44 @@ function offPeakFlag(day) {
 export function weatherModel(days) {
   const usable = (days || []).filter((day) => finite(day.kwh) != null && finite(day.tempF) != null);
   if (usable.length < 60) return null;
+  const includeHeating = usable.some((day) => day.tempF < 65);
   const includeCooling = usable.some((day) => day.tempF > 65);
   const rows = [];
   const targets = [];
   for (const day of usable) {
     const temp = finite(day.tempF);
-    const hdd = Math.max(0, 65 - temp);
-    const cdd = Math.max(0, temp - 65);
-    const off = offPeakFlag(day);
-    rows.push(includeCooling ? [1, hdd, cdd, off] : [1, hdd, off]);
+    const cols = [1];
+    if (includeHeating) cols.push(Math.max(0, 65 - temp));
+    if (includeCooling) cols.push(Math.max(0, temp - 65));
+    cols.push(offPeakFlag(day));
+    rows.push(cols);
     targets.push(finite(day.kwh));
   }
   const solved = solveNormal(rows, targets);
   if (!solved) return null;
+  let index = 1;
   const b0 = solved[0];
-  const bH = solved[1];
-  const bC = includeCooling ? solved[2] : 0;
-  const bW = includeCooling ? solved[3] : solved[2];
+  const bH = includeHeating ? solved[index++] : 0;
+  const bC = includeCooling ? solved[index++] : 0;
+  const bW = solved[index];
+  const coeffs = [b0];
+  if (includeHeating) coeffs.push(bH);
+  if (includeCooling) coeffs.push(bC);
+  coeffs.push(bW);
   const predict = (day) => {
     const temp = finite(day.tempF);
     if (temp == null) return null;
-    const hdd = Math.max(0, 65 - temp);
-    const cdd = Math.max(0, temp - 65);
-    return b0 + bH * hdd + bC * cdd + bW * offPeakFlag(day);
+    const cols = [1];
+    if (includeHeating) cols.push(Math.max(0, 65 - temp));
+    if (includeCooling) cols.push(Math.max(0, temp - 65));
+    cols.push(offPeakFlag(day));
+    return dot(coeffs, cols);
   };
   const center = mean(targets);
   let ssRes = 0;
   let ssTot = 0;
   for (let i = 0; i < targets.length; i++) {
-    const predicted = dot(includeCooling ? [b0, bH, bC, bW] : [b0, bH, bW], rows[i]);
+    const predicted = dot(coeffs, rows[i]);
     ssRes += (targets[i] - predicted) ** 2;
     ssTot += (targets[i] - center) ** 2;
   }

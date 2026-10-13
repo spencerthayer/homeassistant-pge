@@ -43,6 +43,26 @@ class TestValidatePtrEventWindow:
         assert e is not None
         assert e > s
 
+    def test_fall_back_one_hour_window_is_accepted(self):
+        now = datetime(2026, 11, 1, 0, 30, tzinfo=PGE_TZ)
+        start, end = validate_ptr_event_window(
+            "2026-11-01T01:30:00-07:00",
+            "2026-11-01T01:30:00-08:00",
+            now=now,
+        )
+        assert start is not None
+        assert end is not None
+
+    def test_fall_back_sub_hour_window_is_rejected(self):
+        now = datetime(2026, 11, 1, 0, 30, tzinfo=PGE_TZ)
+        start, end = validate_ptr_event_window(
+            "2026-11-01T01:45:00-07:00",
+            "2026-11-01T01:30:00-08:00",
+            now=now,
+        )
+        assert start is None
+        assert end is None
+
     def test_end_before_start(self):
         now = datetime(2026, 8, 19, 12, 0, tzinfo=PGE_TZ)
         start = "2026-08-19T21:00:00-07:00"

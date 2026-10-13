@@ -19,6 +19,7 @@ import {
   estimatePlanCostSeries,
   fetchStatisticSeries,
   pacificParts,
+  pacificMidnightUtc,
   pacificYmd,
   publishedDataEnd,
   TOD_PERIOD_LABELS,
@@ -69,6 +70,34 @@ function hoursOfDay(samples, ymd) {
     hours[hour] = prior == null ? sample.kwh : prior + sample.kwh;
   }
   return hours;
+}
+
+function nextPacificYmd(ymd) {
+  const [year, month, day] = ymd.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + 1);
+  const yy = date.getUTCFullYear();
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
+function expectedHourlySamples(ymd) {
+  const start = pacificMidnightUtc(ymd).getTime();
+  const end = pacificMidnightUtc(nextPacificYmd(ymd)).getTime();
+  return Math.round((end - start) / 3600000);
+}
+
+function publishedWeekComplete(samples, keys) {
+  if (!keys || keys.length !== 7) return false;
+  for (const ymd of keys) {
+    let count = 0;
+    for (const sample of samples) {
+      if (pacificYmd(sample.ts) === ymd && sample.kwh != null) count += 1;
+    }
+    if (count < expectedHourlySamples(ymd)) return false;
+  }
+  return true;
 }
 
 function galleryStamp(panel) {
@@ -202,7 +231,8 @@ export async function renderLoadShape(panel, fns) {
       cycleSamples.filter((row) => row.ts >= previousStart && row.ts < currentStart),
       previousStart,
     );
-    const length = Math.max(current.dayIndex.length, previous.dayIndex.length);
+    const maxDay = (race) => (race.dayIndex.length ? Math.max(...race.dayIndex) : -1);
+    const length = Math.max(maxDay(current), maxDay(previous)) + 1;
     const categories = Array.from({ length }, (_, index) => String(index + 1));
     const align = (race) => categories.map((_, index) => race.cumulative[race.dayIndex.indexOf(index)] ?? null);
     return createGalleryChart(host, {
@@ -242,13 +272,14 @@ export async function renderLoadShape(panel, fns) {
   );
 
   const weekKeys = fns.publishedWeekDays(new Date());
-  await mount( "chart-published-week", (host) =>
-    createGalleryChart(host, {
+  await mount( "chart-published-week", (host) => {
+    if (!publishedWeekComplete(hourly, weekKeys)) return null;
+    return createGalleryChart(host, {
       categories: HOURS,
       yName: "kWh",
       series: weekKeys.map((ymd) => ({ name: ymd.slice(5), values: hoursOfDay(hourly, ymd) })),
-    }),
-  );
+    });
+  });
 
   const prints = fns.dayFingerprints(hourly);
   await mount( "chart-fingerprint", (host) =>
@@ -551,7 +582,7 @@ export async function renderWeatherMoney(panel, fns) {
       categories: labels,
       yName: "Dollars",
       series: [
-        { name: "Billed amount", values: windows.map((window) => amountByTs.get(window.end) ?? null), type: "bar" },
+        { name: "Billed amount", values: windows.map((window) => amountByTs.get(window.ledgerTs ?? window.end) ?? null), type: "bar" },
         { name: "PGE usage estimate", values: costGaps.map((row) => row.total), type: "bar" },
       ],
     }),
@@ -561,7 +592,7 @@ export async function renderWeatherMoney(panel, fns) {
       categories: labels,
       yName: "kWh",
       series: [
-        { name: "Billed kWh", values: windows.map((window) => kwhByTs.get(window.end) ?? null), type: "bar" },
+        { name: "Billed kWh", values: windows.map((window) => kwhByTs.get(window.ledgerTs ?? window.end) ?? null), type: "bar" },
         { name: "Imported kWh", values: kwhGaps.map((row) => row.total), type: "bar" },
       ],
     }),

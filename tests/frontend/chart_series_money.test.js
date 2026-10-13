@@ -39,14 +39,17 @@ describe("weather and money series", () => {
   it("statementWindows builds consecutive spans and replaces the last with bill bounds", () => {
     const bills = [{ ts: 10 }, { ts: 20 }, { ts: 30 }];
     assert.deepEqual(statementWindows(bills), [
-      { start: 10, end: 20 },
-      { start: 20, end: 30 },
+      { start: 10, end: 20, ledgerTs: 20 },
+      { start: 20, end: 30, ledgerTs: 30 },
     ]);
     assert.deepEqual(statementWindows(bills, { start: 18, end: 40 }), [
-      { start: 10, end: 20 },
-      { start: 18, end: 40 },
+      { start: 10, end: 20, ledgerTs: 20 },
+      { start: 18, end: 40, ledgerTs: 30 },
     ]);
     assert.deepEqual(statementWindows([{ ts: 10 }]), []);
+    assert.deepEqual(statementWindows([{ ts: 10 }], { start: 1, end: 12 }), [
+      { start: 1, end: 12, ledgerTs: 10 },
+    ]);
   });
 
   it("statementGap sums cost samples inside each window", () => {

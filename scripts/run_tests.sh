@@ -10,12 +10,12 @@ fi
 "$PY" -m pytest tests/components -q
 "$PY" -m pytest tests/recorder -p homeassistant -o addopts= -q
 if ! command -v node >/dev/null 2>&1; then
-  echo "error: node is required for frontend tests (install Node.js 18.19+)" >&2
+  echo "error: node is required for frontend tests (install Node.js 18.19+, 20.6+, or 21+)" >&2
   exit 1
 fi
-node_ok="$(node -p "const p=process.versions.node.split('.').map(Number); p[0]>18||(p[0]===18&&p[1]>=19)")"
+node_ok="$(node -p "const [major,minor]=process.versions.node.split('.').map(Number); (major===18&&minor>=19)||(major===20&&minor>=6)||major>=21")"
 if [[ "$node_ok" != "true" ]]; then
-  echo "error: frontend tests require Node.js 18.19+ (found $(node -v))" >&2
+  echo "error: frontend tests require Node.js 18.19+, 20.6+, or 21+ (found $(node -v))" >&2
   exit 1
 fi
 node --import ./tests/frontend/register-hooks.mjs --test tests/frontend/*.test.js

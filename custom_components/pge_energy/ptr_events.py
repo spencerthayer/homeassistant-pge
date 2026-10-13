@@ -74,14 +74,19 @@ def validate_ptr_event_window(
     end = _parse_iso(end_raw)
     if start is None or end is None:
         return (None, None)
-    if end <= start:
+    # Compare in UTC. Aware subtraction inside America/Los_Angeles treats the
+    # fall-back fold's two 01:30 occurrences as equal and overstates a
+    # spring-forward span.
+    start_utc = start.astimezone(UTC)
+    end_utc = end.astimezone(UTC)
+    if end_utc <= start_utc:
         return (None, None)
-    duration = (end - start).total_seconds() / 3600.0
+    duration = (end_utc - start_utc).total_seconds() / 3600.0
     if duration < PTR_EVENT_MIN_DURATION_HOURS or duration > PTR_EVENT_MAX_DURATION_HOURS:
         return (None, None)
     if now is None:
         now = datetime.now(PGE_TZ)
-    if start < now - timedelta(days=PTR_EVENT_MAX_PAST_DAYS):
+    if start_utc < now.astimezone(UTC) - timedelta(days=PTR_EVENT_MAX_PAST_DAYS):
         return (None, None)
     return (start, end)
 

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=18.19"
+    "node": "^18.19.0 || ^20.6.0 || >=21"
   },
   "description": "Dependency-free Node tests for the PGE panel frontend helpers",
   "scripts": {
