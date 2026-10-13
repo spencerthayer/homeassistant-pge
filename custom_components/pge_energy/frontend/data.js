@@ -1801,6 +1801,20 @@ export const PANEL_TAB_ICONS = {
   programs: "mdi:leaf",
 };
 
+export function syncPillState(status = {}) {
+  const failed = Number(status.failed_days || status.failedDays || 0);
+  const state = String(status.status || "idle");
+  if (failed > 0 || status.error || state === "error" || state === "failed") {
+    return { tone: "critical", text: "Sync issue" };
+  }
+  if (state === "backfilling") {
+    const pct = Math.round(Number(status.percent) || 0);
+    return { tone: "warn", text: `Backfilling ${pct}%` };
+  }
+  if (state === "complete") return { tone: "good", text: "Synced" };
+  return { tone: "warn", text: state === "idle" ? "Sync status" : state };
+}
+
 export function panelTabHash(tab) {
   return tab === "glance" ? "#overview" : `#${tab}`;
 }

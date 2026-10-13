@@ -40,6 +40,7 @@ import {
   PANEL_TABS,
   panelTabHash,
   priorPacificYmd,
+  syncPillState,
   resolvePanelTab,
   projectDirectionalUsage,
   projectUsageSeries,
@@ -213,6 +214,17 @@ const STYLE = `
   margin-left: auto; border: 1px solid var(--pge-border); border-radius: 999px;
   background: var(--pge-surface); color: var(--primary-text-color); padding: 6px 12px; cursor: pointer;
 }
+.sync-pill.good { color: var(--pge-status-good); }
+.sync-pill.warn { color: var(--pge-status-warn); }
+.sync-pill.critical { color: var(--pge-status-critical); }
+dialog.drawer {
+  margin: 0 0 0 auto; height: 100%; max-height: none; width: min(480px, 100vw);
+  border: 0; padding: var(--pge-space-4); background: var(--pge-surface);
+  color: var(--primary-text-color); box-shadow: var(--pge-shadow-2);
+}
+dialog.drawer::backdrop { background: rgb(0 0 0 / 0.35); backdrop-filter: blur(2px); }
+dialog.drawer[open] { animation: pge-slide-in var(--pge-dur) var(--pge-ease); }
+@keyframes pge-slide-in { from { transform: translateX(24px); opacity: 0; } }
 .toolbar button.menu {
   background: none; border: 0; color: inherit; cursor: pointer;
   font-size: 22px; width: 40px; height: 40px;
@@ -1279,23 +1291,14 @@ class PgeEnergyPanel extends HTMLElement {
       <div class="tab-panel" id="panel-programs" data-tab="programs" role="tabpanel" aria-labelledby="tab-programs">
       <section class="card" id="programs"></section>
       </div>
-      <section class="card sync-gaps" id="sync-gaps">
-        <details class="sync-gaps-panel" data-persist="sync_status"${this._detailsOpenAttr(
-          "sync_status"
-        )}>
-          <summary>
-            <span class="rollup-title">Sync status</span>
-            <span class="rollup-caption">Import progress and upstream PGE publication gaps</span>
-          </summary>
-          <div class="sync-gaps-body">
-            <div class="sync-strip" id="sync"></div>
-            <div class="data-gaps" id="data-gaps"></div>
-          </div>
-        </details>
-      </section>
-      <section class="card">
-        <details class="diagnostics" id="diagnostics"><summary><span class="rollup-title">Diagnostics</span></summary><div id="diag-body"></div></details>
-      </section>
+      <dialog id="sync-drawer" class="drawer" aria-labelledby="sync-drawer-title">
+        <div class="drawer-head"><h2 id="sync-drawer-title">Sync and diagnostics</h2>
+          <button type="button" class="drawer-close" aria-label="Close">×</button></div>
+        <div class="sync-strip" id="sync"></div>
+        <div class="data-gaps" id="data-gaps"></div>
+        <h3>Diagnostics</h3>
+        <div id="diag-body"></div>
+      </dialog>
     `;
 
     content.querySelector("#account-select")?.addEventListener("change", async (ev) => {
@@ -1305,7 +1308,12 @@ class PgeEnergyPanel extends HTMLElement {
     });
     this._bindPanelNavigation();
     this._selectPanelTab(resolvePanelTab(location.hash, this._defaultSection));
-    this._bindPersistentDetails(content.querySelector("#sync-gaps"));
+    content.querySelector("#sync-pill")?.addEventListener("click", () => {
+      this.shadowRoot.getElementById("sync-drawer")?.showModal();
+    });
+    content.querySelector(".drawer-close")?.addEventListener("click", () => {
+      this.shadowRoot.getElementById("sync-drawer")?.close();
+    });
     this._bindPersistentDetails(content.querySelector("#hero"));
   }
 
@@ -1774,6 +1782,13 @@ class PgeEnergyPanel extends HTMLElement {
     const el = this.shadowRoot.getElementById("sync");
     if (!el || !this._account) return;
     const sync = this._syncByEntry[this._account.entry_id] || {};
+    const pill = syncPillState(sync);
+    const pillEl = this.shadowRoot.getElementById("sync-pill");
+    if (pillEl) {
+      pillEl.textContent = pill.text;
+      pillEl.classList.remove("good", "warn", "critical");
+      pillEl.classList.add(pill.tone);
+    }
     const pct = sync.percent ?? 0;
     const status = sync.status || "idle";
     const eta =
