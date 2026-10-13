@@ -163,6 +163,25 @@ def test_charts_js_exports_gallery_wrappers():
         assert f"export async function {name}" in source
 
 
+def test_plain_copy_and_glossary():
+    source = PANEL_JS.read_text(encoding="utf-8")
+    for gloss in (
+        "gloss-kwh",
+        "gloss-baseload",
+        "gloss-degree-day",
+        "gloss-tod",
+        "gloss-estimate",
+        "gloss-sd",
+        "gloss-r2",
+        "gloss-normalized",
+        "gloss-statement-window",
+    ):
+        assert f'popovertarget="{gloss}"' in source
+    assert "Your energy, hour by hour" in source
+    assert "A typical weekday vs weekend" in source
+    assert "Why this bill changed" in source
+
+
 def test_figures_have_explainer_and_expand():
     source = PANEL_JS.read_text(encoding="utf-8")
     assert "data-headline-for" in source

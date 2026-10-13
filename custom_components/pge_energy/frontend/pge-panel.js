@@ -1371,6 +1371,26 @@ class PgeEnergyPanel extends HTMLElement {
       <div class="tab-panel" id="panel-programs" data-tab="programs" role="tabpanel" aria-labelledby="tab-programs">
       <section class="card" id="programs"></section>
       </div>
+      <div class="glossary">
+        <button type="button" class="term" popovertarget="gloss-kwh" title="A kilowatt-hour is the energy of using 1,000 watts for one hour.">kWh</button>
+        <button type="button" class="term" popovertarget="gloss-baseload" title="Always-on power is energy your home uses every hour, even when you are asleep or away.">always-on power</button>
+        <button type="button" class="term" popovertarget="gloss-degree-day" title="A degree day measures how much heating or cooling the outdoor temperature called for.">degree day</button>
+        <button type="button" class="term" popovertarget="gloss-tod" title="Time of Day periods are off-peak, mid-peak, and on-peak hours on PGE's clock.">Time of Day periods</button>
+        <button type="button" class="term" popovertarget="gloss-estimate" title="PGE's usage estimate is the portal hourly amount. It is not a billed Time of Day charge.">PGE usage estimate</button>
+        <button type="button" class="term" popovertarget="gloss-sd" title="Standard deviation measures how far days sit from your own average.">standard deviation</button>
+        <button type="button" class="term" popovertarget="gloss-r2" title="R² is how much of the variation in your use the weather model explains.">R²</button>
+        <button type="button" class="term" popovertarget="gloss-normalized" title="Weather-normalized means the estimate of what you would have used from the weather alone.">weather-normalized</button>
+        <button type="button" class="term" popovertarget="gloss-statement-window" title="A statement window is the days from one bill to the next.">statement window</button>
+        <div id="gloss-kwh" popover class="gloss">A kilowatt-hour is the energy of using 1,000 watts for one hour.</div>
+        <div id="gloss-baseload" popover class="gloss">Always-on power (baseload): energy your home uses every hour, even when you are asleep or away. Fridges, routers, and devices on standby add to it.</div>
+        <div id="gloss-degree-day" popover class="gloss">A degree day measures how much heating or cooling the outdoor temperature called for, using a 65°F base.</div>
+        <div id="gloss-tod" popover class="gloss">Time of Day periods are off-peak, mid-peak, and on-peak. The hours change by season and are all off-peak on weekends and holidays.</div>
+        <div id="gloss-estimate" popover class="gloss">PGE usage estimate: the portal hourly amount. It may ignore Time of Day and is not a billed charge.</div>
+        <div id="gloss-sd" popover class="gloss">Standard deviation: how far your days sit from your own average. Days beyond two standard deviations were unusual for you.</div>
+        <div id="gloss-r2" popover class="gloss">R²: how much of the variation in your use the weather model explains. It is a fit score, not a promise.</div>
+        <div id="gloss-normalized" popover class="gloss">Weather-normalized: what the weather alone predicts you would use, next to what you actually used.</div>
+        <div id="gloss-statement-window" popover class="gloss">A statement window is the set of days from one bill's end to the next.</div>
+      </div>
       <dialog id="sync-drawer" class="drawer" aria-labelledby="sync-drawer-title">
         <div class="drawer-head"><h2 id="sync-drawer-title">Sync and diagnostics</h2>
           <button type="button" class="drawer-close" aria-label="Close">×</button></div>
@@ -2401,19 +2421,78 @@ class PgeEnergyPanel extends HTMLElement {
     void this._renderUsageStats();
   }
 
+  _plainChart(technical, source) {
+    const known = {
+      "Usage combo": ["Your energy, hour by hour", "Energy you used in each hour or day of the range, with outdoor temperature below.", "Bars are energy. The strip below is outdoor temperature.", "You can see busy hours and whether they line up with hot or cold weather."],
+      "Typical day": ["A typical weekday vs weekend", "Your average use for each hour, weekdays against weekends, with your overnight floor.", "The higher line is the busier kind of day. The floor line is overnight power.", "It shows when a normal day peaks."],
+      "Hour by weekday": ["Your weekly rhythm", "Darker squares are hours when you usually use more.", "Rows are days of the week and columns are hours.", "A dark column is a habit, not a one-off."],
+      "Daily kWh histogram": ["How big is a normal day?", "How many days fell into each daily usage range.", "Taller bars are ranges that happen more often.", "You can see what a normal day looks like for this home."],
+      "Year over year": ["This year vs past years", "Monthly totals for each year. Months with missing days are left out.", "Each line is a year. A gap means that month was incomplete.", "You can compare seasons without a partial month pretending to be low."],
+      "Billing-cycle race": ["This bill vs last bill, day by day", "Running total for the current bill next to the last bill at the same day.", "Day 1 is the first day of each bill. A gap means a missing day.", "You can see whether this bill is ahead of the last one."],
+      "Daily spread": ["Unusual days", "Days above the top line or below the bottom line were far from normal for you.", "The middle line is your average. The outer lines are unusually high or low.", "Those days are worth a second look."],
+      "Always-on load history": ["Always-on power over time", "Your lowest overnight use each night. A lasting rise often means a device that never turns off.", "Each point is one complete night. Missing nights are gaps.", "A step up that stays up is usually a new always-on device."],
+      "Duck curve": ["Solar export vs use by hour", "When you send energy to the grid and when you pull from it.", "Import and export are separate lines across the day.", "You can see the hours solar covers your use."],
+      "Duck curve by month": ["Solar export and use by month", "Monthly totals of energy used and exported, with PGE's estimates.", "Each month shows use, export, and PGE's estimate.", "It shows how solar and use change through the year."],
+      "Weather vs usage": ["Hotter and colder days vs your use", "Each dot is a day: outdoor temperature against energy used.", "Right is hotter. Up is more energy.", "The slope is how much weather moves your use."],
+      "Degree days vs kWh": ["Heating and cooling demand vs your use", "How much heating or cooling the weather called for, next to what you used.", "One line is energy and one is degree days.", "They rise together when weather is driving the bill."],
+      "Temperature bins": ["How temperature changes your daily use", "Your average day in each outdoor temperature band.", "Each bar is the average day in that temperature band.", "You can see which temperatures cost the most energy."],
+      "Weather-normalized counterfactual": ["Is it the weather, or is it you?", "What the weather alone predicts you would use, next to what you used.", "The top pane is actual and predicted. The lower pane is the running gap.", "A growing gap means your use changed beyond the weather."],
+      "Monthly average rate": ["PGE's estimated cost per kWh each month", "Monthly average cost per kWh from PGE's estimate.", "Each bar is that month's average from PGE's hourly estimate.", "It is an estimate, not the billed rate."],
+      "kWh calendar": ["Your year in usage", "One square per day, darker means more energy.", "Read across a month and down the years.", "Dark days are the ones that used the most."],
+      "Temperature calendar": ["Your year in temperature", "One square per day, colored from cold to hot.", "Read across a month and down the years.", "It sits next to the usage calendar so you can compare."],
+      "Why this bill changed": ["Why this bill changed", "How bill length, weather, rates, and your usage each moved the amount due.", "Bars add up to the change from the previous bill.", "The longest bar is the main reason the amount moved."],
+      "Statement waterfall": ["From last balance to this bill", "Last amount due, minus your payment, plus new charges.", "Each step moves the running total.", "You can see payment and new charges separately."],
+      "Statement vs portal estimate": ["Your bill vs PGE's hourly estimate", "Each statement next to the sum of PGE's hourly estimates for the same days.", "One series is the bill and one is PGE's estimate.", "A gap means the hourly estimate did not match the statement."],
+      "Bill kWh vs imported kWh": ["Billed kWh vs recorded kWh", "Energy on each bill next to the hourly data recorded here.", "Compare the two bars for the same statement.", "They should be close when the hourly history is complete."],
+      "Balance and amount due": ["What you owe over time", "Account balance and amount due as they changed.", "Each point is a recorded balance or amount due.", "You can see whether the balance is rising."],
+      "Stacked bill anatomy": ["What's in each bill", "Each bill split into basic charge, energy, delivery, taxes, and other.", "Switch between dollars and percent. Percent shows the share of the bill.", "You can see which part of the bill grew."],
+      "Ledger dollars": ["Billed vs paid", "Each month's bill next to what you paid.", "One series is billed and one is paid.", "A gap means a month you paid more or less than the bill."],
+      "Ledger kWh": ["Billed energy by statement", "Energy on each statement.", "Each bar is the energy on that statement.", "It is the billed energy, not the hourly recorder series."],
+      "Money-hours Pareto": ["Your most expensive hours", "Hours of the day ranked by estimated cost, with how much of the total they add up to.", "The top bar is the most expensive hour. The label is its share of the total.", "A few hours can hold a large share of the estimated cost."],
+      "Stacked area": ["When your energy lands on the Time of Day clock", "Hourly use colored by off-peak, mid-peak, and on-peak.", "The colors are the Time of Day periods.", "You can see how much use lands in the expensive hours."],
+      "kWh by period": ["Typical hourly use in each period", "The usual range of hourly use in each Time of Day period.", "The box is the usual range. Dots outside it were unusual hours.", "It shows whether on-peak hours are also high-use hours."],
+      "Sankey": ["Where your energy dollars go by period", "Energy in each period flowing into its estimated cost.", "The width is energy. The label on the right is the estimated dollars.", "It is a local estimate, not a billed Time of Day charge."],
+      "Monthly period mix": ["Your Time of Day mix by month", "Share of each month's energy in each period.", "The stack always adds to 100 percent.", "A growing on-peak band means more of the month landed in expensive hours."],
+      "Local Basic minus local TOD": ["Would Time of Day have saved money?", "Estimated monthly difference between Basic and Time of Day pricing.", "Above zero means the local Time of Day estimate was lower.", "It is a local estimate, not PGE's official comparison."],
+      "Forward 48-hour ribbon": ["The next 48 hours on the Time of Day clock", "Your usual use for each coming hour, colored by period.", "Each bar is your historical average for that hour of the week.", "It does not include hours PGE has not published yet."],
+      "Load-shift simulator": ["Try moving a big load", "Monthly cost of a load like an EV charge at each start hour.", "Each bar is the local estimate for starting at that hour.", "The line is Schedule 7 base plus Schedule 125, not a full Basic bill."],
+      "Day fingerprint": ["Comparing days across five measures", "Each line is a day: energy, peak hour, temperature, on-peak share, and price.", "Lines that stand apart were unusual days.", "You can spot odd days without opening each one."],
+      "Monthly ridgelines": ["How your daily pattern shifts by month", "Average hourly use for each month, stacked.", "Each ridge is one month.", "You can see the daily shape change through the year."],
+      "Daypart stream": ["Morning, afternoon, evening, overnight", "How your use splits across parts of the day over time.", "The bands are the parts of the day.", "A band that grows is taking more of your energy."],
+      "Published week": ["Last week, day by day", "Each day of the last full week, hour by hour.", "Compare the seven days side by side.", "It is the latest complete week PGE has published."],
+      "Program savings": ["Program savings this year", "Year-to-date savings reported by PGE programs.", "The value is PGE's reported year-to-date savings.", "It is not calculated from your hourly usage."],
+      "Baseload band": ["Your always-on floor across the day", "Weekday average by hour with your overnight minimum as a line.", "The line is the overnight floor.", "Use above the line is the part that turns on and off."],
+      "24-hour polar clock": ["Your day as a clock", "Average weekday use around a 24-hour dial.", "Longer bars are hours you usually use more.", "The clock makes the daily rhythm easy to scan."],
+      "Latest statement treemap": ["Your latest bill as blocks", "Each block's size is that charge's share of the latest bill.", "Bigger blocks are a larger share.", "You can see what dominated the last bill."],
+    };
+    const row = known[technical];
+    if (!row) {
+      return {
+        title: technical,
+        what: "Your recorded PGE history for this chart.",
+        how: "Compare the marks with the axis labels. A gap means a sample was not published.",
+        why: "It is your own history, not a comparison with another home.",
+        source: source || "PGE history stored in Home Assistant.",
+      };
+    }
+    return { title: row[0], what: row[1], how: row[2], why: row[3], source: source || "PGE history stored in Home Assistant." };
+  }
+
   _figure(id, { eyebrow, title, what, how, why, source, wide = false, extra = "", note = false }) {
+    const plain = this._plainChart(eyebrow, source || what);
     const esc = (value) => this._escape(String(value ?? ""));
     const definition = (term, text) => `<dt>${esc(term)}</dt><dd>${esc(text)}</dd>`;
+    const shownTitle = plain.title || title;
     return `<figure class="chart-card ${wide ? "fig-wide" : ""}" data-figure="${esc(id)}" data-chart="${esc(id)}">
       <div class="fig-head">
         <div class="fig-titles"><span class="eyebrow">${esc(eyebrow)}</span>
-          <h3 class="fig-title" data-headline-for="${esc(id)}">${esc(title)}</h3></div>
+          <h3 class="fig-title" data-headline-for="${esc(id)}">${esc(shownTitle)}</h3></div>
         <details class="fig-info"><summary aria-label="About this chart">
           <ha-icon icon="mdi:information-outline"></ha-icon></summary>
-          <dl>${definition("What this shows", what)}${definition("How to read it", how)}
-            ${definition("Why it matters", why)}${definition("Data source", source)}</dl>
+          <dl>${definition("What this shows", plain.what)}${definition("How to read it", plain.how)}
+            ${definition("Why it matters", plain.why)}${definition("Data source", plain.source)}</dl>
         </details>
-        <button type="button" class="fig-expand" data-expand="${esc(id)}" aria-label="Expand ${esc(title)}" disabled>
+        <button type="button" class="fig-expand" data-expand="${esc(id)}" aria-label="Expand ${esc(shownTitle)}" disabled>
           <ha-icon icon="mdi:arrow-expand"></ha-icon></button>
       </div>
       ${extra}
