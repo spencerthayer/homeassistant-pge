@@ -997,3 +997,128 @@ export function forecastCone({ model, history, publishedEnd, cycleEnd } = {}) {
   }
   return points;
 }
+
+function hourLabel(hour) {
+  const h = ((hour % 24) + 24) % 24;
+  const suffix = h >= 12 ? "PM" : "AM";
+  const clock = h % 12 === 0 ? 12 : h % 12;
+  return `${clock} ${suffix}`;
+}
+
+export function yesterdayHeadline({ kwh, avg7, complete = false } = {}) {
+  const value = finite(kwh);
+  const baseline = finite(avg7);
+  if (!complete || value == null || baseline == null || baseline <= 0) return null;
+  const delta = ((value - baseline) / baseline) * 100;
+  const comparison =
+    Math.abs(delta) <= 5
+      ? "about the same as your usual day"
+      : `${Math.round(Math.abs(delta))}% ${delta > 0 ? "more" : "less"} than your usual day`;
+  return {
+    text: `Yesterday you used ${value.toFixed(1)} kWh, ${comparison}.`,
+    tone: Math.abs(delta) <= 5 ? "neutral" : delta > 0 ? "warn" : "good",
+  };
+}
+
+export function peakHourHeadline(weekdayMeans) {
+  const values = weekdayMeans || [];
+  let peak = -1;
+  let hour = -1;
+  values.forEach((value, index) => {
+    const n = finite(value);
+    if (n != null && n > peak) {
+      peak = n;
+      hour = index;
+    }
+  });
+  if (hour < 0) return null;
+  return { text: `On weekdays your usage peaks around ${hourLabel(hour)}.`, tone: "neutral" };
+}
+
+export function cycleRaceHeadline({ openKwh, lastKwhSameDay, day } = {}) {
+  const current = finite(openKwh);
+  const previous = finite(lastKwhSameDay);
+  if (current == null || previous == null || previous <= 0 || !Number.isInteger(day) || day < 1) return null;
+  const delta = ((current - previous) / previous) * 100;
+  if (Math.abs(delta) <= 5) {
+    return { text: `Your energy use is about even with the last statement at day ${day}.`, tone: "neutral" };
+  }
+  return {
+    text: `Your energy use is ${Math.round(Math.abs(delta))}% ${delta > 0 ? "ahead of" : "behind"} the last statement at day ${day}.`,
+    tone: delta > 0 ? "warn" : "good",
+  };
+}
+
+export function baseloadHeadline({ floorKwh, centsPerKwh } = {}) {
+  const floor = finite(floorKwh);
+  const cents = finite(centsPerKwh);
+  if (floor == null || cents == null || floor < 0 || cents <= 0) return null;
+  const monthly = Math.round(floor * 24 * 30 * (cents / 100));
+  return {
+    text: `About ${floor.toFixed(1)} kWh runs every hour, even overnight. That is roughly $${monthly} a month at PGE's estimated rate.`,
+    tone: "neutral",
+  };
+}
+
+export function weatherHeadline({ colderCents, hotterCents } = {}) {
+  const cold = finite(colderCents);
+  const hot = finite(hotterCents);
+  if (cold == null || hot == null) return null;
+  return {
+    text: `Hot days cost you more than cold ones: about ${Math.round(hot)}¢ per extra degree versus ${Math.round(cold)}¢.`,
+    tone: "neutral",
+  };
+}
+
+export function paretoHeadline(rows) {
+  const share = finite(rows?.share ?? rows);
+  const count = Number(rows?.count ?? 5);
+  if (share == null) return null;
+  return {
+    text: `Your ${count} most expensive hours make up ${Math.round(share)}% of the estimated cost.`,
+    tone: "neutral",
+  };
+}
+
+export function billChangeHeadline(bars) {
+  const delta = finite(bars?.delta);
+  if (delta == null || delta === 0) return null;
+  const driver = bars?.driver || "usage";
+  const phrase =
+    driver === "days"
+      ? "a longer bill period"
+      : driver === "weather"
+        ? "the weather"
+        : driver === "rate"
+          ? "rate changes"
+          : delta < 0
+            ? "using less energy"
+            : "using more energy";
+  const verb = delta > 0 ? "rose" : "fell";
+  return {
+    text: `This bill ${verb} $${Math.abs(Math.round(delta))}, mostly from ${phrase}.`,
+    tone: delta > 0 ? "warn" : "good",
+  };
+}
+
+export function periodHeadline({ onPeakShare } = {}) {
+  const share = finite(onPeakShare);
+  if (share == null) return null;
+  return {
+    text: `About ${Math.round(share)}% of your imported energy lands in on-peak hours.`,
+    tone: "neutral",
+  };
+}
+
+export function storySummary({ yesterday, cycle, estimate } = {}) {
+  const rows = [yesterdayHeadline(yesterday), cycleRaceHeadline(cycle)].filter(Boolean);
+  const low = finite(estimate?.low);
+  const high = finite(estimate?.high);
+  if (low != null && high != null && low >= 0 && high >= low) {
+    rows.push({
+      text: `PGE estimates your next bill between $${Math.round(low)} and $${Math.round(high)}.`,
+      tone: "neutral",
+    });
+  }
+  return rows;
+}
