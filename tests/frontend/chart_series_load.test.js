@@ -69,7 +69,7 @@ describe("load-shape series", () => {
     ]);
     const year2026 = out.series[out.years.indexOf("2026")];
     assert.equal(year2026[0], 7);
-    assert.equal(year2026[1], 0);
+    assert.equal(year2026[1], null);
   });
 
   it("cycleCumulative sums hourly kWh by day index from a statement start", () => {

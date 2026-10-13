@@ -68,13 +68,34 @@ function hoursOfDay(samples, ymd) {
   return hours;
 }
 
-async function mountHost(panel, id, factory) {
+function galleryStamp(panel) {
+  return {
+    entryId: panel._activeEntryId ?? null,
+    gen: panel._galleryRenderGen ?? 0,
+  };
+}
+
+function galleryStale(panel, stamp) {
+  if (!stamp) return false;
+  return (panel._activeEntryId ?? null) !== stamp.entryId || (panel._galleryRenderGen ?? 0) !== stamp.gen;
+}
+
+async function mountHost(panel, id, factory, stamp) {
+  if (galleryStale(panel, stamp)) return;
   const host = panel.shadowRoot?.getElementById(id);
   const figure = host?.closest("figure");
   if (!host) return;
   panel._disposeHostCharts(host);
   if (figure) figure.hidden = false;
   const chart = await factory(host);
+  if (galleryStale(panel, stamp)) {
+    try {
+      chart?.destroy?.();
+    } catch (_err) {
+      /* account changed while this chart was initializing */
+    }
+    return;
+  }
   if (!chart) {
     if (figure) figure.hidden = true;
     return;
@@ -87,6 +108,8 @@ async function mountHost(panel, id, factory) {
  * @param {object} fns load-shape functions from chart-series.js
  */
 export async function renderLoadShape(panel, fns) {
+  const stamp = galleryStamp(panel);
+  const mount = (id, factory) => mountHost(panel, id, factory, stamp);
   if (!panel._account || !panel.shadowRoot?.getElementById("chart-typical-day")) return;
   const end = publishedDataEnd();
   const start28 = new Date(end.getTime() - 28 * 86400000);
@@ -101,6 +124,7 @@ export async function renderLoadShape(panel, fns) {
     fetchRole(panel, "consumption", { start: start5, end, period: "day" }),
     fetchRole(panel, "temperature", { start: start5, end, period: "day", field: "means" }),
   ]);
+  if (galleryStale(panel, stamp)) return;
   const hourly = joinSamples([
     { key: "kwh", ...kwh28 },
     { key: "cost", ...cost28 },
@@ -113,7 +137,7 @@ export async function renderLoadShape(panel, fns) {
   ]);
 
   const profiles = fns.typicalDayProfiles(hourly);
-  await mountHost(panel, "chart-typical-day", (host) =>
+  await mount( "chart-typical-day", (host) =>
     createGalleryChart(host, {
       categories: HOURS,
       yName: "kWh",
@@ -125,23 +149,23 @@ export async function renderLoadShape(panel, fns) {
   );
 
   const matrix = fns.hourWeekdayMatrix(hourly);
-  await mountHost(panel, "chart-hour-weekday", (host) =>
+  await mount( "chart-hour-weekday", (host) =>
     createHourWeekdayHeatmap(host, { labels: matrix.labels, values: matrix.values }),
   );
 
   const ridges = fns.monthRidges(hourlyYear).filter((row) => row.hours.some((value) => value != null));
-  await mountHost(panel, "chart-ridgelines", (host) =>
+  await mount( "chart-ridgelines", (host) =>
     createRidgeline(host, {
       ridgeGap: 1,
       series: ridges.map((row) => ({ name: row.key, values: row.hours })),
     }),
   );
 
-  await mountHost(panel, "chart-polar", (host) => createPolarBar(host, { values: profiles.weekday }));
+  await mount( "chart-polar", (host) => createPolarBar(host, { values: profiles.weekday }));
 
   const dailyKwh = daily.map((row) => row.kwh).filter((value) => value != null);
   const histogram = fns.histogramBins(dailyKwh);
-  await mountHost(panel, "chart-histogram", (host) =>
+  await mount( "chart-histogram", (host) =>
     createGalleryChart(host, {
       categories: histogram.labels,
       yName: "Days",
@@ -150,7 +174,7 @@ export async function renderLoadShape(panel, fns) {
   );
 
   const byYear = fns.monthlyByYear(daily);
-  await mountHost(panel, "chart-yoy", (host) =>
+  await mount( "chart-yoy", (host) =>
     createGalleryChart(host, {
       categories: MONTHS,
       yName: "kWh",
@@ -158,7 +182,7 @@ export async function renderLoadShape(panel, fns) {
     }),
   );
 
-  await mountHost(panel, "chart-cycle-race", async (host) => {
+  await mount( "chart-cycle-race", async (host) => {
     const bill = panel._billBounds?.();
     if (!bill) return null;
     const durationMs = bill.end.getTime() - bill.start.getTime();
@@ -189,7 +213,7 @@ export async function renderLoadShape(panel, fns) {
   });
 
   const floor = fns.baseloadFloor(profiles.weekday);
-  await mountHost(panel, "chart-baseload", (host) =>
+  await mount( "chart-baseload", (host) =>
     createGalleryChart(host, {
       categories: HOURS,
       yName: "kWh",
@@ -199,7 +223,7 @@ export async function renderLoadShape(panel, fns) {
   );
 
   const band = fns.spreadBand(dailyKwh);
-  await mountHost(panel, "chart-spread", (host) =>
+  await mount( "chart-spread", (host) =>
     createGalleryChart(host, {
       categories: daily.map((row) => row.ts),
       yName: "kWh",
@@ -215,7 +239,7 @@ export async function renderLoadShape(panel, fns) {
   );
 
   const weekKeys = fns.publishedWeekDays(new Date());
-  await mountHost(panel, "chart-published-week", (host) =>
+  await mount( "chart-published-week", (host) =>
     createGalleryChart(host, {
       categories: HOURS,
       yName: "kWh",
@@ -224,7 +248,7 @@ export async function renderLoadShape(panel, fns) {
   );
 
   const prints = fns.dayFingerprints(hourly);
-  await mountHost(panel, "chart-fingerprint", (host) =>
+  await mount( "chart-fingerprint", (host) =>
     createParallel(host, {
       dimensions: ["kWh", "Peak hour", "Mean °F", "On-peak share", "Portal ¢/kWh"],
       rows: prints.map((row) => [row.kwh, row.peakHour, row.tempF, row.onPeakShare, row.centsPerKwh]),
@@ -243,6 +267,8 @@ function catalogBundle(panel) {
 }
 
 export async function renderTodCharts(panel, fns) {
+  const stamp = galleryStamp(panel);
+  const mount = (id, factory) => mountHost(panel, id, factory, stamp);
   if (!panel.shadowRoot?.getElementById("chart-tod-stacked")) return;
   const end = publishedDataEnd();
   const start28 = new Date(end.getTime() - 28 * 86400000);
@@ -251,6 +277,7 @@ export async function renderTodCharts(panel, fns) {
     fetchRole(panel, "consumption", { start: start28, end, period: "hour" }),
     fetchRole(panel, "consumption", { start: start12, end, period: "hour" }),
   ]);
+  if (galleryStale(panel, stamp)) return;
   const recent = joinSamples([{ key: "kwh", ...kwh28 }]);
   const year = joinSamples([{ key: "kwh", ...kwh12 }]);
   const { todCatalog, basicCatalog, overrideRates } = catalogBundle(panel);
@@ -265,7 +292,7 @@ export async function renderTodCharts(panel, fns) {
       stacked[key].push(period === key ? sample.kwh : 0);
     }
   }
-  await mountHost(panel, "chart-tod-stacked", (host) =>
+  await mount( "chart-tod-stacked", (host) =>
     createGalleryChart(host, {
       categories: stacked.categories,
       yName: "kWh",
@@ -280,7 +307,7 @@ export async function renderTodCharts(panel, fns) {
   );
 
   const mix = fns.periodMixByMonth(year);
-  await mountHost(panel, "chart-period-mix", (host) =>
+  await mount( "chart-period-mix", (host) =>
     createGalleryChart(host, {
       categories: mix.map((row) => row.month),
       yName: "Share",
@@ -305,7 +332,7 @@ export async function renderTodCharts(panel, fns) {
       return box ? { label: TOD_PERIOD_LABELS[key], box: [box.min, box.q1, box.median, box.q3, box.max] } : null;
     })
     .filter(Boolean);
-  await mountHost(panel, "chart-period-box", (host) =>
+  await mount( "chart-period-box", (host) =>
     createBoxPlot(host, {
       categories: boxRows.map((row) => row.label),
       boxes: boxRows.map((row) => row.box),
@@ -315,7 +342,7 @@ export async function renderTodCharts(panel, fns) {
   const matrix = fns.hourWeekdayMatrix(recent);
   const ribbonStart = Math.floor(end.getTime() / 1000);
   const ribbon = fns.forwardRibbon({ startTs: ribbonStart, means: matrix.values });
-  await mountHost(panel, "chart-forward-ribbon", (host) =>
+  await mount( "chart-forward-ribbon", (host) =>
     createGalleryChart(host, {
       categories: ribbon.map((row) => row.label),
       yName: "kWh",
@@ -337,46 +364,30 @@ export async function renderTodCharts(panel, fns) {
     start: start28,
     end,
   });
-  const priced = estimate28?.coverage?.complete === true;
-  if (!priced) {
-    for (const id of ["chart-money-pareto", "chart-tod-delta", "chart-sankey"]) {
-      const host = panel.shadowRoot.getElementById(id);
-      const figure = host?.closest("figure");
-      if (figure) figure.hidden = true;
+  const priced28 = estimate28?.coverage?.complete === true;
+  if (!priced28) {
+    const host = panel.shadowRoot.getElementById("chart-money-pareto");
+    const figure = host?.closest("figure");
+    if (figure) figure.hidden = true;
+  } else {
+    const paretoSamples = [];
+    for (let i = 0; i < (estimate28.xs || []).length; i++) {
+      const dollars = estimate28.todValues[i];
+      if (dollars == null || !Number.isFinite(Number(dollars))) continue;
+      paretoSamples.push({ ts: estimate28.xs[i], dollars: Number(dollars) });
     }
-    return;
+    const pareto = fns.moneyHourPareto(paretoSamples);
+    await mount( "chart-money-pareto", (host) =>
+      createGalleryChart(host, {
+        categories: pareto.map((row) => String(row.hour).padStart(2, "0")),
+        xName: "Dollars",
+        horizontal: true,
+        series: [{ name: "Local TOD imported-energy estimate", values: pareto.map((row) => row.dollars), type: "bar" }],
+      }),
+    );
   }
 
-  const rateRow = todCatalog[todCatalog.length - 1] || {};
-  const pareto = fns.moneyHourPareto(recent, {
-    off_peak: rateRow.off_peak,
-    mid_peak: rateRow.mid_peak,
-    on_peak: rateRow.on_peak,
-  });
-  await mountHost(panel, "chart-money-pareto", (host) =>
-    createGalleryChart(host, {
-      categories: pareto.map((row) => String(row.hour).padStart(2, "0")),
-      xName: "Dollars",
-      horizontal: true,
-      series: [{ name: "Local TOD imported-energy estimate", values: pareto.map((row) => row.dollars), type: "bar" }],
-    }),
-  );
-
-  const monthly = fns.todMinusBasicByMonth(
-    (estimate28.xs || []).map((ts, index) => ({
-      ts,
-      tod: estimate28.todValues[index],
-      basic: estimate28.basicValues[index],
-    })),
-  );
-  await mountHost(panel, "chart-tod-delta", (host) =>
-    createGalleryChart(host, {
-      categories: monthly.map((row) => row.month),
-      yName: "Dollars, positive means the local TOD estimate is lower",
-      series: [{ name: "Local TOD minus local Basic", values: monthly.map((row) => row.delta), type: "bar" }],
-    }),
-  );
-
+  if (galleryStale(panel, stamp)) return;
   const estimateYear = estimatePlanCostSeries({
     hourlyKwh: kwh12,
     todCatalog,
@@ -386,11 +397,27 @@ export async function renderTodCharts(panel, fns) {
     end,
   });
   if (estimateYear?.coverage?.complete !== true) {
-    const host = panel.shadowRoot.getElementById("chart-sankey");
-    const figure = host?.closest("figure");
-    if (figure) figure.hidden = true;
+    for (const id of ["chart-tod-delta", "chart-sankey"]) {
+      const host = panel.shadowRoot.getElementById(id);
+      const figure = host?.closest("figure");
+      if (figure) figure.hidden = true;
+    }
     return;
   }
+  const monthly = fns.todMinusBasicByMonth(
+    (estimateYear.xs || []).map((ts, index) => ({
+      ts,
+      tod: estimateYear.todValues[index],
+      basic: estimateYear.basicValues[index],
+    })),
+  );
+  await mount( "chart-tod-delta", (host) =>
+    createGalleryChart(host, {
+      categories: monthly.map((row) => row.month),
+      yName: "Dollars, positive means the local TOD estimate is lower",
+      series: [{ name: "Local TOD minus local Basic", values: monthly.map((row) => row.delta), type: "bar" }],
+    }),
+  );
   const dollars = { off_peak: 0, mid_peak: 0, on_peak: 0 };
   const kwhByPeriod = { off_peak: 0, mid_peak: 0, on_peak: 0 };
   const kwhMap = new Map((kwh12.xs || []).map((ts, index) => [ts, kwh12.values[index]]));
@@ -410,7 +437,7 @@ export async function renderTodCharts(panel, fns) {
     })),
   );
   const target = "Local TOD imported-energy estimate";
-  await mountHost(panel, "chart-sankey", (host) =>
+  await mount( "chart-sankey", (host) =>
     createSankey(host, {
       nodes: [
         ...flows.map((row) => ({
@@ -447,6 +474,8 @@ function billBoundsSeconds(panel) {
 }
 
 export async function renderWeatherMoney(panel, fns) {
+  const stamp = galleryStamp(panel);
+  const mount = (id, factory) => mountHost(panel, id, factory, stamp);
   if (!panel._account) return;
   const end = publishedDataEnd();
   const start5 = new Date(end.getTime() - 5 * 365 * 86400000);
@@ -464,12 +493,13 @@ export async function renderWeatherMoney(panel, fns) {
       fetchRole(panel, "account_balance", { start: start5, end, period: "hour", field: "means" }),
       fetchRole(panel, "amount_due", { start: start5, end, period: "hour", field: "means" }),
     ]);
+  if (galleryStale(panel, stamp)) return;
   const days = joinSamples([
     { key: "kwh", ...kwhDay },
     { key: "cost", ...costDay },
     { key: "tempF", ...tempDay },
   ]);
-  await mountHost(panel, "chart-degree-days", (host) =>
+  await mount( "chart-degree-days", (host) =>
     createGalleryChart(host, {
       categories: days.map((row) => row.ts),
       yName: "kWh or degree days",
@@ -487,7 +517,7 @@ export async function renderWeatherMoney(panel, fns) {
     }),
   );
   const bins = fns.tempBins(days);
-  await mountHost(panel, "chart-temp-bins", (host) =>
+  await mount( "chart-temp-bins", (host) =>
     createGalleryChart(host, {
       categories: bins.map((row) => row.label),
       yName: "Mean kWh",
@@ -507,7 +537,7 @@ export async function renderWeatherMoney(panel, fns) {
   const labels = windows.map((window) => pacificYmd(new Date(window.end * 1000)));
   const amountByTs = new Map(amountRows.map((row) => [row.ts, row.value]));
   const kwhByTs = new Map(kwhRows.map((row) => [row.ts, row.value]));
-  await mountHost(panel, "chart-statement-portal", (host) =>
+  await mount( "chart-statement-portal", (host) =>
     createGalleryChart(host, {
       categories: labels,
       yName: "Dollars",
@@ -517,7 +547,7 @@ export async function renderWeatherMoney(panel, fns) {
       ],
     }),
   );
-  await mountHost(panel, "chart-bill-imported", (host) =>
+  await mount( "chart-bill-imported", (host) =>
     createGalleryChart(host, {
       categories: labels,
       yName: "kWh",
@@ -527,14 +557,14 @@ export async function renderWeatherMoney(panel, fns) {
       ],
     }),
   );
-  await mountHost(panel, "chart-program-savings", (host) =>
+  await mount( "chart-program-savings", (host) =>
     createGalleryChart(host, {
       categories: savings.xs,
       yName: "Dollars",
       series: [{ name: "YTD program savings", values: savings.values }],
     }),
   );
-  await mountHost(panel, "chart-balance-due", (host) =>
+  await mount( "chart-balance-due", (host) =>
     createGalleryChart(host, {
       categories: balance.xs.length ? balance.xs : due.xs,
       yName: "Dollars",
@@ -545,6 +575,7 @@ export async function renderWeatherMoney(panel, fns) {
     }),
   );
 
+  if (galleryStale(panel, stamp)) return;
   panel._galleryDays = days;
   panel._galleryBillAmount = billAmount;
 }
@@ -556,6 +587,8 @@ function hideFigure(panel, id, hidden) {
 }
 
 export async function renderPdfSolar(panel, fns) {
+  const stamp = galleryStamp(panel);
+  const mount = (id, factory) => mountHost(panel, id, factory, stamp);
   if (!panel._account) return;
   const end = publishedDataEnd();
   const start28 = new Date(end.getTime() - 28 * 86400000);
@@ -568,6 +601,7 @@ export async function renderPdfSolar(panel, fns) {
     fetchRole(panel, "cost", { start: start12, end, period: "hour" }),
     fetchRole(panel, "compensation", { start: start12, end, period: "hour" }),
   ]);
+  if (galleryStale(panel, stamp)) return;
   const recent = joinSamples([
     { key: "kwh", ...kwh28 },
     { key: "returned", ...return28 },
@@ -583,7 +617,7 @@ export async function renderPdfSolar(panel, fns) {
   hideFigure(panel, "chart-duck-months", !showDuck);
   if (showDuck) {
     const duck = fns.duckHourProfiles(recent);
-    await mountHost(panel, "chart-duck", (host) =>
+    await mount( "chart-duck", (host) =>
       createGalleryChart(host, {
         categories: HOURS,
         yName: "kWh",
@@ -594,7 +628,7 @@ export async function renderPdfSolar(panel, fns) {
       }),
     );
     const months = fns.duckMonthBars(year);
-    await mountHost(panel, "chart-duck-months", (host) =>
+    await mount( "chart-duck-months", (host) =>
       createGalleryChart(host, {
         categories: months.map((row) => row.month),
         yName: "kWh or dollars",
@@ -623,6 +657,7 @@ export async function renderPdfSolar(panel, fns) {
       return [key, { xs: series.xs || [], values: series.values || [] }];
     }),
   );
+  if (galleryStale(panel, stamp)) return;
   const byTs = new Map();
   let any = false;
   for (const [key, series] of fetched) {
@@ -645,7 +680,7 @@ export async function renderPdfSolar(panel, fns) {
   const labels = anatomy.map((row) => pacificYmd(new Date(row.ts * 1000)));
   const familyKeys = ["basic", "energyUse", "delivery", "taxes", "other"];
   const familyLabels = ["Basic", "Energy use", "Delivery", "Taxes", "Other"];
-  await mountHost(panel, "chart-bill-anatomy", (host) =>
+  await mount( "chart-bill-anatomy", (host) =>
     createGalleryChart(host, {
       categories: labels,
       yName: "Dollars",
@@ -658,13 +693,13 @@ export async function renderPdfSolar(panel, fns) {
     }),
   );
   const slices = fns.treemapSlices(statements);
-  await mountHost(panel, "chart-treemap", (host) =>
+  await mount( "chart-treemap", (host) =>
     createTreemap(host, {
       data: slices.map((slice) => ({ name: slice.label, value: slice.value })),
     }),
   );
   const latest = statements[statements.length - 1];
-  await mountHost(panel, "chart-waterfall", (host) =>
+  await mount( "chart-waterfall", (host) =>
     createWaterfall(host, {
       unit: "",
       steps: fns.waterfallSteps(latest).map((step, index, all) => ({
@@ -674,7 +709,7 @@ export async function renderPdfSolar(panel, fns) {
       })),
     }),
   );
-  await mountHost(panel, "chart-fixed-variable", (host) =>
+  await mount( "chart-fixed-variable", (host) =>
     createGalleryChart(host, {
       categories: labels,
       yName: "Dollars",
@@ -686,7 +721,7 @@ export async function renderPdfSolar(panel, fns) {
       })),
     }),
   );
-  await mountHost(panel, "chart-line-mix", (host) =>
+  await mount( "chart-line-mix", (host) =>
     createGalleryChart(host, {
       categories: labels,
       yName: "Share",
@@ -717,6 +752,8 @@ function finiteNumber(value) {
 }
 
 export async function renderInsights(panel, fns) {
+  const stamp = galleryStamp(panel);
+  const mount = (id, factory) => mountHost(panel, id, factory, stamp);
   if (!panel._account || !panel.shadowRoot) return;
   const end = publishedDataEnd();
   const start366 = new Date(end.getTime() - 366 * 86400000);
@@ -734,6 +771,7 @@ export async function renderInsights(panel, fns) {
     );
   }
   const fetched = await Promise.all(hourlyFetches);
+  if (galleryStale(panel, stamp)) return;
   if (!sourceDays) {
     sourceDays = joinSamples([
       { key: "kwh", ...fetched[0] },
@@ -768,7 +806,7 @@ export async function renderInsights(panel, fns) {
     const counter = fns.counterfactual(usable);
     hideFigure(panel, "chart-weather-counterfactual", !counter);
     if (counter) {
-      await mountHost(panel, "chart-weather-counterfactual", (host) =>
+      await mount( "chart-weather-counterfactual", (host) =>
         createGalleryChart(host, {
           categories: counter.rows.map((row) => row.ts),
           yName: "kWh",
@@ -832,7 +870,7 @@ export async function renderInsights(panel, fns) {
         pred1: current.pred,
       });
       const delta = current.amount - previous.amount;
-      await mountHost(panel, "chart-bill-explainer", (host) =>
+      await mount( "chart-bill-explainer", (host) =>
         createWaterfall(host, {
           steps: [
             { label: "Days", value: bars.days },
@@ -857,7 +895,7 @@ export async function renderInsights(panel, fns) {
     for (const ymd of [...byDay.keys()].sort()) overnight.push({ ymd, kwh: byDay.get(ymd) });
     const steps = fns.baseloadSteps(overnight.map((row) => row.kwh));
     const dollarsPerKwh = centsValue == null ? null : centsValue / 100;
-    await mountHost(panel, "chart-baseload-history", (host) =>
+    await mount( "chart-baseload-history", (host) =>
       createGalleryChart(host, {
         categories: overnight.map((row) => row.ymd),
         yName: "kWh/h",
@@ -869,18 +907,23 @@ export async function renderInsights(panel, fns) {
     if (historyNote && steps.length) {
       const text = steps
         .map((step) => {
-          const sign = step.delta >= 0 ? "+" : "";
-          const yearly = dollarsPerKwh == null ? "" : `, ${sign}$${Math.abs(step.delta * 24 * 365 * dollarsPerKwh).toFixed(0)}/year`;
-          return `${sign}${step.delta.toFixed(2)} kWh/h since ${overnight[step.index]?.ymd || "that day"}${yearly}, PGE usage estimate`;
+          const kwhSign = step.delta > 0 ? "+" : "";
+          const yearlyDollars = dollarsPerKwh == null ? null : step.delta * 24 * 365 * dollarsPerKwh;
+          const yearly =
+            yearlyDollars == null
+              ? ""
+              : `, ${yearlyDollars > 0 ? "+" : yearlyDollars < 0 ? "-" : ""}$${Math.abs(yearlyDollars).toFixed(0)}/year`;
+          return `${kwhSign}${step.delta.toFixed(2)} kWh/h since ${overnight[step.index]?.ymd || "that day"}${yearly}, PGE usage estimate`;
         })
         .join(". ");
       historyNote.textContent = text;
     }
-    await mountHost(panel, "chart-daypart-stream", (host) =>
+    await mount( "chart-daypart-stream", (host) =>
       createThemeRiver(host, { data: fns.daypartDays(hourly) }),
     );
   }
 
+  if (galleryStale(panel, stamp)) return;
   const ymd = pacificYmd(end);
   const { todCatalog, basicCatalog, overrideRates } = catalogBundle(panel);
   let rates = {
@@ -912,7 +955,7 @@ export async function renderInsights(panel, fns) {
       const runs = finiteNumber(panel.shadowRoot.getElementById("chart-shift-runs")?.value);
       if (kw == null || hours == null || runs == null) return;
       const rows = fns.shiftCostByStartHour({ kw, hours, runsPerMonth: runs, rates, basicRate });
-      await mountHost(panel, "chart-shift-sim", (host) =>
+      await mount( "chart-shift-sim", (host) =>
         createGalleryChart(host, {
           categories: rows.map((row) => String(row.startHour).padStart(2, "0")),
           yName: "Dollars per month",

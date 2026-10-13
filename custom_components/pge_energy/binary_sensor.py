@@ -39,27 +39,27 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    if not bool(get_entry_option(entry, CONF_INCLUDE_BILLING, DEFAULT_INCLUDE_BILLING)):
-        return
-
     coordinator: PGECoordinator = hass.data[DOMAIN][entry.entry_id]
     account_key = coordinator.account_key
-
-    async_add_entities(
-        [
-            PGEAutopayBinarySensor(coordinator, account_key),
-            PGEPaperlessBinarySensor(coordinator, account_key),
-            PGEPeakTimeRebatesBinarySensor(coordinator, account_key),
-            PGEGreenFutureBinarySensor(coordinator, account_key),
-            PGETimeOfDayBinarySensor(coordinator, account_key),
-            PGESmartThermostatBinarySensor(coordinator, account_key),
-            PGEHabitatSupportBinarySensor(coordinator, account_key),
-            PGESmartChargingBinarySensor(coordinator, account_key),
-            PGESmartBatteryBinarySensor(coordinator, account_key),
-            PGEPtrEventActiveBinarySensor(coordinator, account_key),
-            PGEPtrEventDetectedBinarySensor(coordinator, account_key),
-        ]
-    )
+    entities: list[BinarySensorEntity] = [
+        PGEPtrEventActiveBinarySensor(coordinator, account_key),
+    ]
+    if bool(get_entry_option(entry, CONF_INCLUDE_BILLING, DEFAULT_INCLUDE_BILLING)):
+        entities.extend(
+            [
+                PGEAutopayBinarySensor(coordinator, account_key),
+                PGEPaperlessBinarySensor(coordinator, account_key),
+                PGEPeakTimeRebatesBinarySensor(coordinator, account_key),
+                PGEGreenFutureBinarySensor(coordinator, account_key),
+                PGETimeOfDayBinarySensor(coordinator, account_key),
+                PGESmartThermostatBinarySensor(coordinator, account_key),
+                PGEHabitatSupportBinarySensor(coordinator, account_key),
+                PGESmartChargingBinarySensor(coordinator, account_key),
+                PGESmartBatteryBinarySensor(coordinator, account_key),
+                PGEPtrEventDetectedBinarySensor(coordinator, account_key),
+            ]
+        )
+    async_add_entities(entities)
 
 
 class _PGEBinarySensor(PGEBaseEntity, BinarySensorEntity):

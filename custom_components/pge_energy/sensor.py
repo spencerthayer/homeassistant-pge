@@ -364,6 +364,8 @@ class PGEReturnSensor(_StatisticLinkedSensor):
     """Lifetime grid-exported energy (kWh). State is lifetime cumulative sum."""
 
     _attr_name = ENTITY_NAME_LIFETIME_EXPORT
+    # Keep documented object-id suffix ``_return`` on fresh installs.
+    _attr_suggested_object_id = "return"
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
@@ -371,6 +373,11 @@ class PGEReturnSensor(_StatisticLinkedSensor):
 
     def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
         super().__init__(coordinator, account_key, ENTITY_UNIQUE_RETURN)
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        """Force ``…_return`` even though the friendly name is Lifetime export."""
+        return "return"
 
     @property
     def native_value(self) -> float | None:
@@ -381,6 +388,8 @@ class PGECostSensor(_StatisticLinkedSensor):
     """Lifetime imported cost (USD). State is lifetime cumulative sum."""
 
     _attr_name = ENTITY_NAME_LIFETIME_COST
+    # Keep documented object-id suffix ``_cost`` on fresh installs.
+    _attr_suggested_object_id = "cost"
     _attr_native_unit_of_measurement = "USD"
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_state_class = SensorStateClass.TOTAL
@@ -388,6 +397,11 @@ class PGECostSensor(_StatisticLinkedSensor):
 
     def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
         super().__init__(coordinator, account_key, ENTITY_UNIQUE_COST)
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        """Force ``…_cost`` even though the friendly name is Lifetime cost."""
+        return "cost"
 
     @property
     def native_value(self) -> float | None:
@@ -398,6 +412,8 @@ class PGECompensationSensor(_StatisticLinkedSensor):
     """Lifetime export compensation (USD). State is lifetime cumulative sum."""
 
     _attr_name = ENTITY_NAME_LIFETIME_COMPENSATION
+    # Keep documented object-id suffix ``_compensation`` on fresh installs.
+    _attr_suggested_object_id = "compensation"
     _attr_native_unit_of_measurement = "USD"
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_state_class = SensorStateClass.TOTAL
@@ -406,6 +422,11 @@ class PGECompensationSensor(_StatisticLinkedSensor):
 
     def __init__(self, coordinator: PGECoordinator, account_key: str) -> None:
         super().__init__(coordinator, account_key, ENTITY_UNIQUE_COMPENSATION)
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        """Force ``…_compensation`` even though the friendly name is Lifetime compensation."""
+        return "compensation"
 
     @property
     def native_value(self) -> float | None:

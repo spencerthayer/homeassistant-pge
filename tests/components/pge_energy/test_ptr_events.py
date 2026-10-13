@@ -26,6 +26,7 @@ def _make_coordinator() -> PtrEventCoordinator:
     parent.import_store.ptr_scheduled_event = None
     parent.import_store.ptr_seen_event_dates = []
     parent.import_store.ptr_detected_event = None
+    parent.import_store.ptr_detection_initialized = False
     parent.async_persist_sensor_snapshots = AsyncMock()
     parent.async_update_listeners = MagicMock()
     return PtrEventCoordinator(hass, entry, parent)
@@ -158,11 +159,13 @@ class TestPtrEventCoordinator:
         await coord.async_check_detection(events)
         assert coord._parent.import_store.ptr_seen_event_dates == ["2026-08-05"]
         assert coord._parent.import_store.ptr_detected_event is None
+        assert coord._parent.import_store.ptr_detection_initialized is True
         coord._parent.async_persist_sensor_snapshots.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_detection_fires_on_new_date(self):
         coord = _make_coordinator()
+        coord._parent.import_store.ptr_detection_initialized = True
         coord._parent.import_store.ptr_seen_event_dates = ["2026-08-05"]
         events = [
             {"event_date": "2026-08-05", "event_earned_credit": 5.0},
@@ -172,6 +175,7 @@ class TestPtrEventCoordinator:
             await coord.async_check_detection(events)
         assert coord._parent.import_store.ptr_detected_event is not None
         assert coord._parent.import_store.ptr_detected_event["event_date"] == "2026-08-18"
+        assert coord._parent.import_store.ptr_seen_event_dates == ["2026-08-05", "2026-08-18"]
         mock_alert.assert_called_once()
         call_kwargs = mock_alert.call_args
         assert call_kwargs[0][1] == ALERT_PTR_EVENT_DETECTED
@@ -179,6 +183,7 @@ class TestPtrEventCoordinator:
     @pytest.mark.asyncio
     async def test_detection_no_new_dates(self):
         coord = _make_coordinator()
+        coord._parent.import_store.ptr_detection_initialized = True
         coord._parent.import_store.ptr_seen_event_dates = ["2026-08-05", "2026-08-18"]
         events = [
             {"event_date": "2026-08-05", "event_earned_credit": 5.0},
@@ -188,6 +193,39 @@ class TestPtrEventCoordinator:
             await coord.async_check_detection(events)
         assert coord._parent.import_store.ptr_detected_event is None
         mock_alert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_baseline_does_not_mute_the_next_event(self):
+        coord = _make_coordinator()
+        with patch("custom_components.pge_energy.ptr_events.async_fire_pge_alert") as mock_alert:
+            await coord.async_check_detection([])
+            assert coord._parent.import_store.ptr_detection_initialized is True
+            assert coord._parent.import_store.ptr_seen_event_dates == []
+            mock_alert.assert_not_called()
+            await coord.async_check_detection([{"event_date": "2026-08-18", "event_earned_credit": 12.0}])
+        assert coord._parent.import_store.ptr_detected_event["event_date"] == "2026-08-18"
+        mock_alert.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_detection_marks_every_new_date_seen(self):
+        coord = _make_coordinator()
+        coord._parent.import_store.ptr_detection_initialized = True
+        coord._parent.import_store.ptr_seen_event_dates = ["2026-08-05"]
+        events = [
+            {"event_date": "2026-08-05", "event_earned_credit": 5.0},
+            {"event_date": "2026-08-12", "event_earned_credit": 8.0},
+            {"event_date": "2026-08-18", "event_earned_credit": 12.0},
+        ]
+        with patch("custom_components.pge_energy.ptr_events.async_fire_pge_alert") as mock_alert:
+            await coord.async_check_detection(events)
+            await coord.async_check_detection(events)
+        assert coord._parent.import_store.ptr_seen_event_dates == [
+            "2026-08-05",
+            "2026-08-12",
+            "2026-08-18",
+        ]
+        assert coord._parent.import_store.ptr_detected_event["event_date"] == "2026-08-18"
+        mock_alert.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_acknowledge_detection(self):

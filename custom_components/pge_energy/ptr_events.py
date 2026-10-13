@@ -270,17 +270,20 @@ class PtrEventCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_check_detection(self, events: list[dict]) -> None:
         """Diff GraphQL events against seen dates; set detected state if new.
 
-        On first boot (empty ``ptr_seen_event_dates``), seeds the seen set
-        from current events without firing a detection alert.
+        The first call seeds ``ptr_seen_event_dates`` without an alert, including
+        when that call's event list is empty. Later new dates alert once.
+        Every newly observed date is marked seen when the newest is recorded,
+        so unacknowledged syncs do not rediscover the same dates.
         """
         store = self._parent.import_store
-        seen = list(store.ptr_seen_event_dates)
-        if not seen and events:
+        if not store.ptr_detection_initialized:
             store.ptr_seen_event_dates = sorted(
                 e["event_date"] for e in events if isinstance(e, dict) and e.get("event_date")
             )
+            store.ptr_detection_initialized = True
             await self._parent.async_persist_sensor_snapshots()
             return
+        seen = list(store.ptr_seen_event_dates)
         new_dates = diff_new_ptr_event_dates(seen, events)
         if not new_dates:
             return
@@ -290,6 +293,7 @@ class PtrEventCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if isinstance(e, dict) and e.get("event_date") == newest:
                 credit = e.get("event_earned_credit")
                 break
+        store.ptr_seen_event_dates = sorted(set(seen).union(new_dates))
         store.ptr_detected_event = {
             "event_date": newest,
             "event_earned_credit": credit,

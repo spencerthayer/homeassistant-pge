@@ -13,6 +13,7 @@ COMPONENT = ROOT / "custom_components" / "pge_energy"
 FRONTEND_MODULES = (
     COMPONENT / "frontend" / "pge-panel.js",
     COMPONENT / "frontend" / "chart-gallery.js",
+    COMPONENT / "frontend" / "chart-series.js",
     COMPONENT / "frontend" / "charts.js",
 )
 

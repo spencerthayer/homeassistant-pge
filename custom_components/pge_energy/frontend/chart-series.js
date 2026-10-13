@@ -10,7 +10,7 @@ import {
   pacificYmd,
   publishedDataEnd,
   todPeriodForPacific,
-} from "./data.js";
+} from "./data.js?v=0.12.1";
 
 function finite(value) {
   if (value == null || value === "") return null;
@@ -116,7 +116,8 @@ export function monthRidges(samples) {
 
 /**
  * Daily kWh summed into calendar months, one series per year.
- * @returns {{ years: string[], series: number[][] }}
+ * Unobserved months stay null so a future month is not drawn as zero.
+ * @returns {{ years: string[], series: (number|null)[][] }}
  */
 export function monthlyByYear(samples) {
   const years = new Map();
@@ -126,8 +127,10 @@ export function monthlyByYear(samples) {
     const ymd = pacificYmd(sample.ts);
     const year = ymd.slice(0, 4);
     const month = Number(ymd.slice(5, 7)) - 1;
-    if (!years.has(year)) years.set(year, Array(12).fill(0));
-    years.get(year)[month] += kwh;
+    if (!years.has(year)) years.set(year, Array(12).fill(null));
+    const buckets = years.get(year);
+    if (buckets[month] == null) buckets[month] = 0;
+    buckets[month] += kwh;
   }
   const keys = [...years.keys()].sort();
   return {
@@ -315,14 +318,20 @@ export function periodMixByMonth(samples) {
 export function moneyHourPareto(samples, rates) {
   const byHour = new Map();
   for (const sample of samples || []) {
-    const kwh = finite(sample.kwh);
-    if (kwh == null || sample.ts == null) continue;
+    if (sample.ts == null) continue;
+    const explicit = finite(sample.dollars);
     const { ymd, hour } = pacificParts(sample.ts);
-    const rate = finite(rates?.[todPeriodForPacific(ymd, hour)]);
-    if (rate == null) continue;
+    let dollars = explicit;
+    let kwh = finite(sample.kwh);
+    if (dollars == null) {
+      if (kwh == null) continue;
+      const rate = finite(rates?.[todPeriodForPacific(ymd, hour)]);
+      if (rate == null) continue;
+      dollars = kwh * rate;
+    }
     const row = byHour.get(hour) || { hour, dollars: 0, kwh: 0 };
-    row.dollars += kwh * rate;
-    row.kwh += kwh;
+    row.dollars += dollars;
+    if (kwh != null) row.kwh += kwh;
     byHour.set(hour, row);
   }
   return [...byHour.values()].sort((a, b) => b.dollars - a.dollars || b.hour - a.hour).slice(0, 8);

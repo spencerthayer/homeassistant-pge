@@ -56,6 +56,19 @@ describe("time of day series", () => {
     assert.equal(rows[0].hour, 9);
   });
 
+  it("moneyHourPareto sums explicit dollars and ignores the flat rate table", () => {
+    const rows = moneyHourPareto(
+      [
+        { ts: atHour("2026-01-07", 18), dollars: 1.5 },
+        { ts: atHour("2026-01-08", 18), dollars: 2.5 },
+        { ts: atHour("2026-01-07", 1), dollars: 0.25 },
+      ],
+      { off_peak: 9, mid_peak: 9, on_peak: 9 },
+    );
+    const hour18 = rows.find((row) => row.hour === 18);
+    assert.equal(hour18.dollars, 4);
+  });
+
   it("periodBox on [1, 2, 3, 4] returns min 1, max 4, and a median inside the middle half", () => {
     const box = periodBox([1, 2, 3, 4]);
     assert.equal(box.min, 1);

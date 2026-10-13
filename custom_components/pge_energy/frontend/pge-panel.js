@@ -911,6 +911,7 @@ class PgeEnergyPanel extends HTMLElement {
     this._todRangeTouched = false;
     this._todBillReady = false;
     this._todRenderGen = 0;
+    this._galleryRenderGen = 0;
     this._availablePresets = null;
     this._period = "hour";
     this._loading = true;
@@ -928,7 +929,7 @@ class PgeEnergyPanel extends HTMLElement {
       this._boot();
     } else if (!this._loading && this._account) {
       void this._renderKpis();
-      this._renderBillingPrograms();
+      const billingRebuilt = this._renderBillingPrograms();
       this._renderSync();
       this._renderDiagnostics();
       // Bill-bound presets (cycle / last_cycle) may appear only after entity states hydrate.
@@ -943,6 +944,8 @@ class PgeEnergyPanel extends HTMLElement {
       // Theme / dark-mode switches require chart option rebuild (canvas colors).
       if (themeChanged) {
         void this._rebuildThemeCharts();
+      } else if (billingRebuilt) {
+        void this._mountAccountGalleries();
       }
     }
   }
@@ -1139,20 +1142,44 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   async _renderAll() {
+    const gen = ++this._galleryRenderGen;
+    const entryId = this._activeEntryId;
+    const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
     destroyCharts(this._charts);
     this._charts = [];
     await this._probeAvailablePresets();
+    if (stale()) return;
     this._todBillReady = !!this._billBounds();
     this._renderFilters();
     this._renderSync();
     await this._renderKpis();
+    if (stale()) return;
     await this._renderDataGaps();
+    if (stale()) return;
     await this._renderHero();
+    if (stale()) return;
     await this._renderLoadShapeGallery();
+    if (stale()) return;
     await this._renderInsights();
+    if (stale()) return;
     await this._renderTod();
+    if (stale()) return;
     this._renderBillingPrograms(true);
+    if (stale()) return;
+    await this._renderLedgerCharts();
+    if (stale()) return;
+    await this._renderWeatherMoney();
+    if (stale()) return;
     this._renderDiagnostics();
+  }
+
+  async _mountAccountGalleries() {
+    const gen = this._galleryRenderGen || 0;
+    const entryId = this._activeEntryId;
+    const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
+    await this._renderLedgerCharts();
+    if (stale()) return;
+    await this._renderWeatherMoney();
   }
 
   _normalizeRangeKey(key) {
@@ -1967,6 +1994,9 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   async _rebuildThemeCharts() {
+    const gen = ++this._galleryRenderGen;
+    const entryId = this._activeEntryId;
+    const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
     this._disposeHostCharts(
       this.shadowRoot.getElementById("chart-usage"),
       this.shadowRoot.getElementById("scatter"),
@@ -1978,16 +2008,22 @@ class PgeEnergyPanel extends HTMLElement {
       this.shadowRoot.getElementById("ledger-kwh")
     );
     await this._renderHero();
+    if (stale()) return;
     await this._renderLoadShapeGallery();
+    if (stale()) return;
     await this._renderInsights();
+    if (stale()) return;
     await this._renderLedgerCharts();
+    if (stale()) return;
     await this._renderTodGallery();
+    if (stale()) return;
     await this._renderWeatherMoney();
   }
 
   async _renderHero() {
     const account = this._account;
     if (!account) return;
+    const stamp = { entryId: this._activeEntryId, gen: this._galleryRenderGen || 0 };
     const range = this._resolveChartRange();
     const period = this._period || range.period;
     const ids = account.statistic_ids;
@@ -1996,6 +2032,7 @@ class PgeEnergyPanel extends HTMLElement {
     const maxPoints = 20000;
 
     const raw = await this._fetchUsageSeries(ids, range.start, range.end, period, maxPoints);
+    if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) return;
     // Chart view uses projectDirectionalUsage shape; accounting uses projectUsageSeries.
     const chartProjection = projectDirectionalUsage(raw);
     const accountingProjection = projectUsageSeries(raw);
@@ -2016,7 +2053,15 @@ class PgeEnergyPanel extends HTMLElement {
         colors,
         projection: chartProjection,
       });
-      if (chart) this._charts.push(chart);
+      if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) {
+        try {
+          chart?.destroy?.();
+        } catch (_err) {
+          /* account changed while the usage chart was initializing */
+        }
+      } else if (chart) {
+        this._charts.push(chart);
+      }
     }
     void this._renderUsageStats();
   }
@@ -2330,8 +2375,26 @@ class PgeEnergyPanel extends HTMLElement {
       if (!key) return;
       el.addEventListener("toggle", () => {
         this._setDetailsOpen(key, el.open);
+        if (!el.open) return;
+        const resize = () => this._resizeChartsUnder(el);
+        resize();
+        requestAnimationFrame(resize);
       });
     });
+  }
+
+  /** ECharts inits at zero width while a gallery `<details>` is closed. */
+  _resizeChartsUnder(root) {
+    if (!root) return;
+    for (const wrapped of this._charts || []) {
+      const dom = wrapped?.chart?.getDom?.();
+      if (!dom || !root.contains(dom)) continue;
+      try {
+        wrapped.chart.resize();
+      } catch (_err) {
+        /* disposed */
+      }
+    }
   }
 
   _rollupTable(title, caption, rows, keyLabel, persistKey, { signed = false, netAmount = false } = {}) {
@@ -2938,6 +3001,7 @@ class PgeEnergyPanel extends HTMLElement {
   async _renderInsights() {
     const account = this._account;
     if (!account) return;
+    const stamp = { entryId: this._activeEntryId, gen: this._galleryRenderGen || 0 };
     this._disposeHostCharts(
       this.shadowRoot.getElementById("scatter"),
       this.shadowRoot.getElementById("cost-per-kwh"),
@@ -2945,7 +3009,7 @@ class PgeEnergyPanel extends HTMLElement {
       this.shadowRoot.getElementById("heatmap-kwh"),
       this.shadowRoot.getElementById("heatmap-temp")
     );
-    const range = rangePresets()["12mo"];
+    const range = this._resolveChartRange();
     const ids = account.statistic_ids;
     const colors = seriesColors(this);
     const [kwhDay, tempDay, billAmt, payAmt, costDay] = await Promise.all([
@@ -2980,6 +3044,7 @@ class PgeEnergyPanel extends HTMLElement {
         maxPoints: 400,
       }),
     ]);
+    if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) return;
 
     const scatterHost = this.shadowRoot.getElementById("scatter");
     if (scatterHost) {
@@ -3972,7 +4037,7 @@ class PgeEnergyPanel extends HTMLElement {
       this._disposeHostCharts(billing);
       billing.innerHTML = `<h2>Billing</h2><p class="muted">Billing import is disabled in Configure → Sync settings.</p>`;
       programs.innerHTML = `<h2>Programs</h2><p class="muted">Enable billing & programs to see enrollment.</p>`;
-      return;
+      return false;
     }
 
     const billingGroups = [
@@ -4042,7 +4107,7 @@ class PgeEnergyPanel extends HTMLElement {
     const summaryHtml = this._renderSummaryPairs(metrics);
     if (!mountGallery && this._patchBillingText(summaryHtml)) {
       this._renderProgramsCard(programs, e);
-      return;
+      return false;
     }
     this._disposeHostCharts(billing);
     billing.innerHTML = `
@@ -4063,10 +4128,9 @@ class PgeEnergyPanel extends HTMLElement {
         ${this._billingGalleryHtml()}
       </div>
     `;
-    void this._renderLedgerCharts();
     this._bindPersistentDetails(billing);
-    void this._renderWeatherMoney();
     this._renderProgramsCard(programs, e);
+    return true;
   }
 
   _patchBillingText(summaryHtml) {
@@ -4172,6 +4236,7 @@ class PgeEnergyPanel extends HTMLElement {
   async _renderLedgerCharts() {
     const account = this._account;
     if (!account) return;
+    const stamp = { entryId: this._activeEntryId, gen: this._galleryRenderGen || 0 };
     const colors = seriesColors(this);
     const range = rangePresets()["12mo"];
     const billHost = this.shadowRoot.getElementById("ledger-bill");
@@ -4198,6 +4263,7 @@ class PgeEnergyPanel extends HTMLElement {
           period: "month",
         }),
       ]);
+      if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) return;
       const money = await createMonthCompareChart(billHost, {
         billedXs: bill.xs,
         billedYs: bill.values,
@@ -4205,6 +4271,14 @@ class PgeEnergyPanel extends HTMLElement {
         payYs: pay.values,
         colors,
       });
+      if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) {
+        try {
+          money?.destroy?.();
+        } catch (_err) {
+          /* account changed while the ledger chart was initializing */
+        }
+        return;
+      }
       if (money) this._charts.push(money);
       const kwhChart = await createBarChart(kwhHost, {
         xs: kwh.xs,
@@ -4213,7 +4287,15 @@ class PgeEnergyPanel extends HTMLElement {
         color: colors.kwh,
         unit: " kWh",
       });
-      if (kwhChart) this._charts.push(kwhChart);
+      if (kwhChart && (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0))) {
+        try {
+          kwhChart.destroy?.();
+        } catch (_err) {
+          /* account changed while the ledger chart was initializing */
+        }
+      } else if (kwhChart) {
+        this._charts.push(kwhChart);
+      }
     } catch (_err) {
       billHost.innerHTML = `<p class="muted">Ledger statistics not available yet.</p>`;
     }

@@ -4,6 +4,6 @@
   "type": "module",
   "description": "Dependency-free Node tests for the PGE panel frontend helpers",
   "scripts": {
-    "test:frontend": "node --test tests/frontend/*.test.js"
+    "test:frontend": "node --import ./tests/frontend/register-hooks.mjs --test tests/frontend/*.test.js"
   }
 }

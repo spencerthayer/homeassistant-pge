@@ -1323,7 +1323,23 @@ export async function createRidgeline(host, { series, ridgeGap = 1 } = {}) {
     {
       ...chartMotion(),
       backgroundColor: theme.bg,
-      tooltip: { ...tip, trigger: "axis" },
+      tooltip: {
+        ...tip,
+        trigger: "axis",
+        formatter: (items) => {
+          const rows = (Array.isArray(items) ? items : [items]).filter(Boolean);
+          if (!rows.length) return "";
+          const hour = rows[0].axisValueLabel ?? rows[0].axisValue ?? "";
+          const lines = rows
+            .map((item) => {
+              const actual = item.data && typeof item.data === "object" ? item.data.actual : null;
+              if (actual == null || !Number.isFinite(Number(actual))) return null;
+              return `${item.marker || ""}${item.seriesName}: ${Number(actual).toFixed(2)} kWh`;
+            })
+            .filter(Boolean);
+          return [`${hour}:00`, ...lines].join("<br/>");
+        },
+      },
       legend: { type: "scroll", textStyle: { color: theme.text } },
       xAxis: { type: "category", data: hours, axisLabel: { color: theme.muted } },
       yAxis: { type: "value", axisLabel: { show: false }, splitLine: { show: false } },
@@ -1333,9 +1349,11 @@ export async function createRidgeline(host, { series, ridgeGap = 1 } = {}) {
           type: "line",
           name: row.name,
           showSymbol: false,
-          data: (row.values || []).map((value) =>
-            value == null || !Number.isFinite(Number(value)) ? null : Number(value) + baseline,
-          ),
+          data: (row.values || []).map((value) => {
+            if (value == null || !Number.isFinite(Number(value))) return null;
+            const actual = Number(value);
+            return { value: actual + baseline, actual };
+          }),
           areaStyle: { origin: baseline, color: colors.kwh, opacity: 0.28 },
           lineStyle: { color: colors.kwh, width: 1.5 },
         };

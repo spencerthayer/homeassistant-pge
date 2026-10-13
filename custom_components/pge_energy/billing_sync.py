@@ -203,7 +203,7 @@ async def _async_check_ptr_detection(coordinator: PGECoordinator, programs: Any)
     if not isinstance(detail, dict):
         return
     events = detail.get("peak_time_events")
-    if not events:
+    if not isinstance(events, list):
         return
     await coordinator.ptr.async_check_detection(events)
 

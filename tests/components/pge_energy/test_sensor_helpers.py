@@ -122,6 +122,9 @@ class TestStatisticLinkedAttributes:
         assert PGEReturnSensor(coordinator, "k").name == ENTITY_NAME_LIFETIME_EXPORT
         assert PGECostSensor(coordinator, "k").name == ENTITY_NAME_LIFETIME_COST
         assert PGECompensationSensor(coordinator, "k").name == ENTITY_NAME_LIFETIME_COMPENSATION
+        assert PGEReturnSensor(coordinator, "k").suggested_object_id == "return"
+        assert PGECostSensor(coordinator, "k").suggested_object_id == "cost"
+        assert PGECompensationSensor(coordinator, "k").suggested_object_id == "compensation"
 
     def test_hourly_energy_is_measurement(self):
         coordinator = MagicMock()
