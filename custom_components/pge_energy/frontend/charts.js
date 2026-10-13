@@ -1729,6 +1729,9 @@ export async function createGalleryChart(host, {
           ? { color, borderRadius: [4, 4, 0, 0] }
           : { color },
       emphasis: series.length > 1 ? { focus: "series" } : undefined,
+      label: row.labels
+        ? { show: true, formatter: (params) => row.labels[params.dataIndex] || "" }
+        : undefined,
       areaStyle: row.area
         ? {
             color: {
@@ -1760,6 +1763,7 @@ export async function createGalleryChart(host, {
     type: "category",
     data: categories,
     name: horizontal ? yName : xName,
+    inverse: horizontal,
     axisLabel: { color: theme.muted },
   };
   const valueAxis = {

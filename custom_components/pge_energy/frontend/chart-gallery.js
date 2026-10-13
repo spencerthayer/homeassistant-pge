@@ -455,6 +455,9 @@ export async function renderTodCharts(panel, fns) {
           name: "Local TOD imported-energy estimate",
           values: pareto.map((row) => row.dollars),
           type: "bar",
+          labels: pareto.map(
+            (row) => `$${row.dollars.toFixed(0)} · ${Math.round(row.cumulativeShare || 0)}% of total`,
+          ),
           colors: pareto.map((row) => {
             const basis = recent.map((sample) => pacificYmd(sample.ts)).find((ymd) => {
               const [year, month, day] = ymd.split("-").map(Number);

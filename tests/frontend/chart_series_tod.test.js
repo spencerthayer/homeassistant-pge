@@ -45,6 +45,22 @@ describe("time of day series", () => {
     assert.equal(mix[0].mid_peak, 0);
   });
 
+  it("moneyHourPareto cumulative share is largest first", () => {
+    const rows = moneyHourPareto(
+      [
+        { ts: atHour("2026-01-07", 1), dollars: 10 },
+        { ts: atHour("2026-01-07", 2), dollars: 30 },
+        { ts: atHour("2026-01-07", 3), dollars: 60 },
+      ],
+      { off_peak: 1, mid_peak: 1, on_peak: 1 },
+    );
+    assert.deepEqual(rows.map((row) => row.dollars), [60, 30, 10]);
+    assert.deepEqual(
+      rows.map((row) => row.cumulativeShare),
+      [60, 90, 100],
+    );
+  });
+
   it("moneyHourPareto orders hours by kwh * rate descending and keeps at most 8", () => {
     const samples = [];
     for (let hour = 0; hour < 10; hour++) {

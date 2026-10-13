@@ -392,7 +392,15 @@ export function moneyHourPareto(samples, rates) {
     if (kwh != null) row.kwh += kwh;
     byHour.set(hour, row);
   }
-  return [...byHour.values()].sort((a, b) => b.dollars - a.dollars || b.hour - a.hour).slice(0, 8);
+  const ordered = [...byHour.values()]
+    .sort((a, b) => b.dollars - a.dollars || b.hour - a.hour)
+    .slice(0, 8);
+  const total = ordered.reduce((sum, row) => sum + row.dollars, 0);
+  let running = 0;
+  return ordered.map((row) => {
+    running += row.dollars;
+    return { ...row, cumulativeShare: total ? (running / total) * 100 : 0 };
+  });
 }
 
 /** Box stats for one period's hourly kWh values. */
