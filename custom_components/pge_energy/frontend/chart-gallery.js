@@ -72,14 +72,21 @@ function hoursOfDay(samples, ymd) {
   return hours;
 }
 
-function nextPacificYmd(ymd) {
+function shiftPacificYmd(ymd, { days = 0, months = 0, years = 0 } = {}) {
   const [year, month, day] = ymd.split("-").map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  date.setUTCDate(date.getUTCDate() + 1);
+  const date = new Date(Date.UTC(year + years, month - 1 + months, day + days));
   const yy = date.getUTCFullYear();
   const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(date.getUTCDate()).padStart(2, "0");
   return `${yy}-${mm}-${dd}`;
+}
+
+function pacificRangeStart(end, offset) {
+  return pacificMidnightUtc(shiftPacificYmd(pacificYmd(end), offset));
+}
+
+function nextPacificYmd(ymd) {
+  return shiftPacificYmd(ymd, { days: 1 });
 }
 
 function expectedHourlySamples(ymd) {
@@ -144,9 +151,9 @@ export async function renderLoadShape(panel, fns) {
   const mount = (id, factory) => mountHost(panel, id, factory, stamp);
   if (!panel._account || !panel.shadowRoot?.getElementById("chart-typical-day")) return;
   const end = publishedDataEnd();
-  const start28 = new Date(end.getTime() - 28 * 86400000);
-  const start12 = new Date(end.getTime() - 370 * 86400000);
-  const start5 = new Date(end.getTime() - 5 * 365 * 86400000);
+  const start28 = pacificRangeStart(end, { days: -28 });
+  const start12 = pacificRangeStart(end, { months: -12 });
+  const start5 = pacificRangeStart(end, { years: -5 });
 
   const [kwh28, cost28, temp28, kwh12, kwhDay, tempDay] = await Promise.all([
     fetchRole(panel, "consumption", { start: start28, end, period: "hour" }),
@@ -305,8 +312,8 @@ export async function renderTodCharts(panel, fns) {
   const mount = (id, factory) => mountHost(panel, id, factory, stamp);
   if (!panel.shadowRoot?.getElementById("chart-tod-stacked")) return;
   const end = publishedDataEnd();
-  const start28 = new Date(end.getTime() - 28 * 86400000);
-  const start12 = new Date(end.getTime() - 370 * 86400000);
+  const start28 = pacificRangeStart(end, { days: -28 });
+  const start12 = pacificRangeStart(end, { months: -12 });
   const [kwh28, kwh12] = await Promise.all([
     fetchRole(panel, "consumption", { start: start28, end, period: "hour" }),
     fetchRole(panel, "consumption", { start: start12, end, period: "hour" }),
@@ -488,11 +495,12 @@ export async function renderTodCharts(panel, fns) {
   );
 }
 
-function sparseChanges(series) {
+function sparseChanges(series, { keepZero = false } = {}) {
   const rows = [];
   for (let i = 0; i < (series.xs || []).length; i++) {
     const value = series.values?.[i];
-    if (value == null || !Number.isFinite(Number(value)) || Number(value) === 0) continue;
+    if (value == null || !Number.isFinite(Number(value))) continue;
+    if (!keepZero && Number(value) === 0) continue;
     rows.push({ ts: series.xs[i], value: Number(value) });
   }
   return rows;
@@ -514,7 +522,7 @@ export async function renderWeatherMoney(panel, fns) {
   panel._galleryBillAmount = null;
   if (!panel._account) return;
   const end = publishedDataEnd();
-  const start5 = new Date(end.getTime() - 5 * 365 * 86400000);
+  const start5 = pacificRangeStart(end, { years: -5 });
   const startBills = new Date("2019-01-01T00:00:00.000Z");
   const [kwhDay, costDay, tempDay, billAmount, billKwh, costHour, kwhHour, savings, balance, due] =
     await Promise.all([
@@ -567,8 +575,8 @@ export async function renderWeatherMoney(panel, fns) {
 
   if (!panel.shadowRoot?.getElementById("chart-statement-portal")) return;
   const bounds = billBoundsSeconds(panel);
-  const amountRows = sparseChanges(billAmount);
-  const kwhRows = sparseChanges(billKwh);
+  const amountRows = sparseChanges(billAmount, { keepZero: true });
+  const kwhRows = sparseChanges(billKwh, { keepZero: true });
   const windows = fns.statementWindows(amountRows, bounds);
   const costSamples = joinSamples([{ key: "cost", ...costHour }]);
   const kwhSamples = joinSamples([{ key: "kwh", ...kwhHour }]);
@@ -629,8 +637,8 @@ export async function renderPdfSolar(panel, fns) {
   const mount = (id, factory) => mountHost(panel, id, factory, stamp);
   if (!panel._account) return;
   const end = publishedDataEnd();
-  const start28 = new Date(end.getTime() - 28 * 86400000);
-  const start12 = new Date(end.getTime() - 370 * 86400000);
+  const start28 = pacificRangeStart(end, { days: -28 });
+  const start12 = pacificRangeStart(end, { months: -12 });
   const [kwh28, return28, kwh12, return12, cost12, comp12] = await Promise.all([
     fetchRole(panel, "consumption", { start: start28, end, period: "hour" }),
     fetchRole(panel, "return", { start: start28, end, period: "hour" }),
@@ -794,14 +802,14 @@ export async function renderInsights(panel, fns) {
   const mount = (id, factory) => mountHost(panel, id, factory, stamp);
   if (!panel._account || !panel.shadowRoot) return;
   const end = publishedDataEnd();
-  const start366 = new Date(end.getTime() - 366 * 86400000);
+  const start366 = pacificRangeStart(end, { days: -366 });
   let sourceDays = panel._galleryDays;
   const hourlyFetches = [
     fetchRole(panel, "consumption", { start: start366, end, period: "hour" }),
     fetchRole(panel, "consumption", { start: new Date("2019-01-01T00:00:00.000Z"), end, period: "hour" }),
   ];
   if (!sourceDays) {
-    const start5 = new Date(end.getTime() - 5 * 365 * 86400000);
+    const start5 = pacificRangeStart(end, { years: -5 });
     hourlyFetches.unshift(
       fetchRole(panel, "consumption", { start: start5, end, period: "day" }),
       fetchRole(panel, "temperature", { start: start5, end, period: "day", field: "means" }),
@@ -876,7 +884,7 @@ export async function renderInsights(panel, fns) {
       end,
       period: "hour",
     }));
-    const ordered = sparseChanges(billAmount).sort((a, b) => a.ts - b.ts);
+    const ordered = sparseChanges(billAmount, { keepZero: true }).sort((a, b) => a.ts - b.ts);
     const windows = fns.statementWindows(ordered, billBoundsSeconds(panel));
     const stats = windows
       .map((window, index) => {
