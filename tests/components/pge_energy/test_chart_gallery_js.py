@@ -296,11 +296,14 @@ def test_heatmaps_default_to_trailing_year_with_picker():
     assert "heatmap-scroll" not in source
 
 
-def test_usage_temp_strip():
+def test_usage_combo_is_one_plot():
     source = CHARTS_JS.read_text(encoding="utf-8")
     start = source.index("export async function createUsageComboChart")
     body = source[start : source.index("export async function", start + 10)]
-    assert "gridIndex: 1" in body
+    assert "yAxisIndex: 2" in body
+    assert 'name: "°F"' in body
+    assert "amountName" in body
+    assert "gridIndex" not in body
 
 
 def test_usage_metric_toggle():

@@ -2487,7 +2487,7 @@ class PgeEnergyPanel extends HTMLElement {
         temp: { xs: raw.temp?.xs || [], ys: raw.temp?.means || [] },
         colors,
         projection: chartProjection,
-        periodColors: this._period === "hour" && this._usageMetric !== "cost" ? todColors(usageHost) : null,
+        periodColors: this._period === "hour" ? todColors(usageHost) : null,
         metric: this._usageMetric,
       });
       if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) {
@@ -2506,7 +2506,7 @@ class PgeEnergyPanel extends HTMLElement {
 
   _plainChart(technical, source) {
     const known = {
-      "Usage combo": ["Your energy, hour by hour", "Energy you used in each hour or day of the range, with outdoor temperature below.", "Bars are energy. The strip below is outdoor temperature.", "You can see busy hours and whether they line up with hot or cold weather."],
+      "Usage combo": ["Your energy, hour by hour", "Energy you used, outdoor temperature, and PGE's usage estimate on one chart.", "Bars are energy, colored by Time of Day when the range is hourly. The lines are temperature and the amount PGE estimated.", "You can see busy hours, the weather, and the estimate together."],
       "Typical day": ["A typical weekday vs weekend", "Your average use for each hour, weekdays against weekends, with your overnight floor.", "The higher line is the busier kind of day. The floor line is overnight power.", "It shows when a normal day peaks."],
       "Hour by weekday": ["Your weekly rhythm", "Darker squares are hours when you usually use more.", "Rows are days of the week and columns are hours.", "A dark column is a habit, not a one-off."],
       "Daily kWh histogram": ["How big is a normal day?", "How many days fell into each daily usage range.", "Taller bars are ranges that happen more often.", "You can see what a normal day looks like for this home."],
