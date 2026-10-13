@@ -1175,7 +1175,7 @@ function heatmapYears(startYmd, endYmd) {
 }
 
 /** Calendar heatmap for daily values (ECharts calendar + heatmap). */
-export async function renderHeatmap(host, { xs, ys, diverging = false, title = "" }) {
+export async function renderHeatmap(host, { xs, ys, diverging = false, title = "", onClick = null }) {
   host.replaceChildren();
   const root = resolveRoot(host);
   const theme = themeColors(root);
@@ -1229,6 +1229,8 @@ export async function renderHeatmap(host, { xs, ys, diverging = false, title = "
       formatter: (p) => `${p.value[0]}: ${Number(p.value[1]).toFixed(diverging ? 0 : 1)}`,
     },
     visualMap: {
+      show: true,
+      text: [String(Math.round(vmax)), String(Math.round(vmin))],
       min: vmin,
       max: vmax === vmin ? vmin + 1 : vmax,
       orient: "horizontal",
@@ -1284,7 +1286,14 @@ export async function renderHeatmap(host, { xs, ys, diverging = false, title = "
     })),
   };
   const height = titleSpace + years.length * HEATMAP_YEAR_PITCH + 36;
-  return mount(host, option, { height, scale: false });
+  const wrapped = await mount(host, option, { height, scale: false });
+  if (wrapped?.chart && typeof onClick === "function") {
+    wrapped.chart.on("click", (params) => {
+      const ymd = Array.isArray(params?.value) ? params.value[0] : null;
+      if (typeof ymd === "string") onClick(ymd);
+    });
+  }
+  return wrapped;
 }
 
 function countFinite(values) {

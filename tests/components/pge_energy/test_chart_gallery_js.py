@@ -214,6 +214,15 @@ def test_cost_intelligence_uses_twelve_month_window():
     assert "barMaxWidth: 28" in charts
 
 
+def test_heatmap_legend_and_day_click():
+    charts = CHARTS_JS.read_text(encoding="utf-8")
+    panel = PANEL_JS.read_text(encoding="utf-8")
+    start = charts.index("export async function renderHeatmap")
+    body = charts[start : charts.index("function countFinite", start)]
+    assert "show: true" in body
+    assert "_openUsageDay" in panel
+
+
 def test_heatmaps_default_to_trailing_year_with_picker():
     source = PANEL_JS.read_text(encoding="utf-8")
     start = source.index("async _renderInsights()")

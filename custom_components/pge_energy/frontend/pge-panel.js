@@ -3418,6 +3418,7 @@ class PgeEnergyPanel extends HTMLElement {
       xs: kwhWindow.xs,
       ys: kwhWindow.ys,
       title: "Daily kWh (imported history)",
+      onClick: (ymd) => this._openUsageDay(ymd),
     });
     const hmTemp = await renderHeatmap(this.shadowRoot.getElementById("heatmap-temp"), {
       xs: tempWindow.xs,
@@ -3427,6 +3428,20 @@ class PgeEnergyPanel extends HTMLElement {
     });
     if (hmKwh) this._charts.push(hmKwh);
     if (hmTemp) this._charts.push(hmTemp);
+  }
+
+  _openUsageDay(ymd) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd || "")) return;
+    const published = pacificYmd(new Date(publishedDataEnd().getTime() - 1));
+    if (ymd > published) return;
+    const [year, month, day] = ymd.split("-").map(Number);
+    const next = new Date(Date.UTC(year, month - 1, day + 1));
+    const nextYmd = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-${String(next.getUTCDate()).padStart(2, "0")}`;
+    this._customRange = { start: pacificMidnightUtc(ymd), end: pacificMidnightUtc(nextYmd) };
+    this._rangeShift = 0;
+    this._period = "hour";
+    this._selectPanelTab("usage", { writeHistory: true });
+    void this._renderRangeScope();
   }
 
   _heatmapWindowKey() {
