@@ -62,15 +62,25 @@ describe("load-shape series", () => {
     assert.equal(jan.hours[18] === jul.hours[18], false);
   });
 
-  it("monthlyByYear sums two January days in the same year into one January bucket", () => {
+  it("monthly totals require all dates and deduplicate daily input", () => {
+    const january = Array.from({ length: 31 }, (_, day) => ({
+      ts: atHour(`2026-01-${String(day + 1).padStart(2, "0")}`, 0),
+      kwh: 1,
+    }));
+    const leap = Array.from({ length: 29 }, (_, day) => ({
+      ts: atHour(`2024-02-${String(day + 1).padStart(2, "0")}`, 0),
+      kwh: day === 0 ? 0 : 2,
+    }));
     const out = monthlyByYear([
-      { ts: atHour("2026-01-05", 12), kwh: 3 },
-      { ts: atHour("2026-01-06", 12), kwh: 4 },
-      { ts: atHour("2025-01-06", 12), kwh: 1 },
+      ...january,
+      january[0],
+      { ts: atHour("2026-02-01", 0), kwh: 4 },
+      { ts: atHour("2026-03-01", 0), kwh: null },
+      ...leap,
     ]);
-    const year2026 = out.series[out.years.indexOf("2026")];
-    assert.equal(year2026[0], 7);
-    assert.equal(year2026[1], null);
+    assert.equal(out.series[out.years.indexOf("2026")][0], 31);
+    assert.equal(out.series[out.years.indexOf("2026")][1], null);
+    assert.equal(out.series[out.years.indexOf("2024")][1], 2 * 28);
   });
 
   it("cycleCumulative sums hourly kWh by day index from a statement start", () => {

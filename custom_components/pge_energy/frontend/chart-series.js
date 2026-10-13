@@ -147,22 +147,30 @@ export function overnightFloorDays(samples) {
  * @returns {{ years: string[], series: (number|null)[][] }}
  */
 export function monthlyByYear(samples) {
-  const years = new Map();
+  const days = new Map();
   for (const sample of samples || []) {
     const kwh = finite(sample.kwh);
-    if (kwh == null || sample.ts == null) continue;
-    const ymd = pacificYmd(sample.ts);
-    const year = ymd.slice(0, 4);
-    const month = Number(ymd.slice(5, 7)) - 1;
-    if (!years.has(year)) years.set(year, Array(12).fill(null));
-    const buckets = years.get(year);
-    if (buckets[month] == null) buckets[month] = 0;
-    buckets[month] += kwh;
+    if (!Number.isFinite(sample.ts) || kwh == null) continue;
+    days.set(pacificYmd(sample.ts), kwh);
   }
-  const keys = [...years.keys()].sort();
+  const months = new Map();
+  for (const [ymd, kwh] of days) {
+    const key = ymd.slice(0, 7);
+    const row = months.get(key) || { count: 0, total: 0 };
+    row.count += 1;
+    row.total += kwh;
+    months.set(key, row);
+  }
+  const years = [...new Set([...months.keys()].map((key) => key.slice(0, 4)))].sort();
   return {
-    years: keys,
-    series: keys.map((year) => years.get(year)),
+    years,
+    series: years.map((year) =>
+      Array.from({ length: 12 }, (_, month) => {
+        const row = months.get(`${year}-${String(month + 1).padStart(2, "0")}`);
+        const expected = new Date(Date.UTC(Number(year), month + 1, 0)).getUTCDate();
+        return row?.count === expected ? row.total : null;
+      }),
+    ),
   };
 }
 
