@@ -217,6 +217,14 @@ def test_heatmaps_use_full_recorded_history():
     assert "heatmap-scroll" not in source
 
 
+def test_tod_charts_use_period_colors():
+    gallery = (FRONTEND / "chart-gallery.js").read_text(encoding="utf-8")
+    assert "todColors(" in gallery
+    start = gallery.index('mount( "chart-period-mix"')
+    body = gallery[start : gallery.index("chart-money-pareto", start)]
+    assert "color:" in body
+
+
 def test_percent_charts_cap_at_one_hundred():
     charts = CHARTS_JS.read_text(encoding="utf-8")
     assert "percent = false" in charts

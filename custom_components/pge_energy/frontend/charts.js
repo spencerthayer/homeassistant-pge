@@ -1296,7 +1296,7 @@ export async function createPolarScatter(host, { points } = {}) {
 }
 
 /** One box per category. Each box is `[min, q1, median, q3, max]`. */
-export async function createBoxPlot(host, { categories, boxes } = {}) {
+export async function createBoxPlot(host, { categories, boxes, colors: boxColors = [] } = {}) {
   const ready = (boxes || []).filter((box) => Array.isArray(box) && box.filter((value) => Number.isFinite(Number(value))).length >= 2);
   if (ready.length < 1 || countFinite(ready.flat()) < 2) return showChartEmpty(host, "Not enough hourly history.");
   const { theme, tip, colors } = galleryBase(host);
@@ -1311,8 +1311,13 @@ export async function createBoxPlot(host, { categories, boxes } = {}) {
       series: [
         {
           type: "boxplot",
-          data: boxes,
-          itemStyle: { color: colors.kwh, borderColor: theme.text },
+          data: boxes.map((box, index) => ({
+            value: box,
+            itemStyle: {
+              color: boxColors[index] || colors.kwh,
+              borderColor: boxColors[index] || theme.text,
+            },
+          })),
         },
       ],
     },
@@ -1605,13 +1610,18 @@ export async function createGalleryChart(host, {
   const timeAxis = categories.length > 0 && typeof categories[0] === "number" && categories[0] > 1e9;
   const built = series.map((row, index) => {
     const color = row.color || palette[index % palette.length];
-    const data = timeAxis
-      ? (row.values || []).map((value, i) => {
-          if (value == null || !Number.isFinite(Number(value))) return null;
-          const ts = categories[i];
-          return [typeof ts === "number" && ts < 1e12 ? ts * 1000 : ts, Number(value)];
-        })
-      : (row.values || []).map((value) => (value == null || !Number.isFinite(Number(value)) ? null : Number(value)));
+    const point = (value, i) => {
+      if (value == null || !Number.isFinite(Number(value))) return null;
+      const n = Number(value);
+      const pointColor = row.colors?.[i];
+      if (timeAxis) {
+        const ts = categories[i];
+        const t = typeof ts === "number" && ts < 1e12 ? ts * 1000 : ts;
+        return pointColor ? { value: [t, n], itemStyle: { color: pointColor } } : [t, n];
+      }
+      return pointColor ? { value: n, itemStyle: { color: pointColor } } : n;
+    };
+    const data = (row.values || []).map((value, i) => point(value, i));
     return {
       name: row.name,
       type: row.type || "line",

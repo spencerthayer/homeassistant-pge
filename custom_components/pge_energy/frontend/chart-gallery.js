@@ -15,6 +15,7 @@ import {
   createTreemap,
   createWaterfall,
 } from "./charts.js?v=0.12.2";
+import { todColors } from "./theme.js?v=0.12.2";
 import {
   estimatePlanCostSeries,
   fetchStatisticSeries,
@@ -350,8 +351,9 @@ export async function renderTodCharts(panel, fns) {
       stacked[key].push(period === key ? sample.kwh : 0);
     }
   }
-  await mount( "chart-tod-stacked", (host) =>
-    createGalleryChart(host, {
+  await mount( "chart-tod-stacked", (host) => {
+    const tod = todColors(host);
+    return createGalleryChart(host, {
       categories: stacked.categories,
       yName: "kWh",
       series: ["off_peak", "mid_peak", "on_peak"].map((key) => ({
@@ -360,13 +362,15 @@ export async function renderTodCharts(panel, fns) {
         type: "line",
         area: true,
         stack: "tod",
+        color: tod[key],
       })),
-    }),
-  );
+    });
+  });
 
   const mix = fns.periodMixByMonth(year);
-  await mount( "chart-period-mix", (host) =>
-    createGalleryChart(host, {
+  await mount( "chart-period-mix", (host) => {
+    const tod = todColors(host);
+    return createGalleryChart(host, {
       categories: mix.map((row) => row.month),
       yName: "Share",
       percent: true,
@@ -375,9 +379,10 @@ export async function renderTodCharts(panel, fns) {
         values: mix.map((row) => row[key]),
         type: "bar",
         stack: "mix",
+        color: tod[key],
       })),
-    }),
-  );
+    });
+  });
 
   const boxRows = ["off_peak", "mid_peak", "on_peak"]
     .map((key) => {
@@ -388,15 +393,19 @@ export async function renderTodCharts(panel, fns) {
         if (todPeriodForPacific(ymd, hour) === key) values.push(sample.kwh);
       }
       const box = fns.periodBox(values);
-      return box ? { label: TOD_PERIOD_LABELS[key], box: [box.min, box.q1, box.median, box.q3, box.max] } : null;
+      return box
+        ? { key, label: TOD_PERIOD_LABELS[key], box: [box.min, box.q1, box.median, box.q3, box.max] }
+        : null;
     })
     .filter(Boolean);
-  await mount( "chart-period-box", (host) =>
-    createBoxPlot(host, {
+  await mount( "chart-period-box", (host) => {
+    const tod = todColors(host);
+    return createBoxPlot(host, {
       categories: boxRows.map((row) => row.label),
       boxes: boxRows.map((row) => row.box),
-    }),
-  );
+      colors: boxRows.map((row) => tod[row.key]),
+    });
+  });
 
   const matrix = fns.hourWeekdayMatrix(recent);
   const ribbonStart = Math.floor(Date.now() / 3600000) * 3600;
@@ -410,6 +419,7 @@ export async function renderTodCharts(panel, fns) {
           name: "Historical mean",
           values: ribbon.map((row) => row.kwh),
           type: "bar",
+          colors: ribbon.map((row) => todColors(host)[row.period]),
         },
       ],
     }),
@@ -441,7 +451,19 @@ export async function renderTodCharts(panel, fns) {
         categories: pareto.map((row) => String(row.hour).padStart(2, "0")),
         xName: "Dollars",
         horizontal: true,
-        series: [{ name: "Local TOD imported-energy estimate", values: pareto.map((row) => row.dollars), type: "bar" }],
+        series: [{
+          name: "Local TOD imported-energy estimate",
+          values: pareto.map((row) => row.dollars),
+          type: "bar",
+          colors: pareto.map((row) => {
+            const basis = recent.map((sample) => pacificYmd(sample.ts)).find((ymd) => {
+              const [year, month, day] = ymd.split("-").map(Number);
+              const dow = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+              return dow !== 0 && dow !== 6;
+            });
+            return todColors(host)[todPeriodForPacific(basis || pacificYmd(), row.hour)];
+          }),
+        }],
       }),
     );
   }
