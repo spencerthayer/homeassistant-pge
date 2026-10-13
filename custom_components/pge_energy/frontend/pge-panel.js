@@ -27,6 +27,7 @@ import {
   countSeriesPoints,
   fetchStatisticSeries,
   formatKpiClipboardText,
+  pctDelta,
   formatRangeLabel,
   formatSignedUsd,
   invalidateStatsCache,
@@ -254,7 +255,15 @@ dialog.drawer[open] { animation: pge-slide-in var(--pge-dur) var(--pge-ease); }
   color: var(--secondary-text-color);
 }
 .card h2, .card h3 { margin: 0 0 12px; font-size: 1.1rem; font-weight: 600; color: var(--primary-text-color); }
+.kpi-groups { display: grid; gap: var(--pge-space-4, 16px); }
+.kpi-group h3 { margin: 0 0 var(--pge-space-2, 8px); font: var(--pge-text-headline); }
 .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.kpi .value.display { font: var(--pge-text-display); }
+.delta-chip { display: inline-block; margin-top: 4px; font-size: 0.75rem; }
+.delta-chip.warn { color: var(--pge-status-warn); }
+.delta-chip.good { color: var(--pge-status-good); }
+.est-range { display: flex; align-items: center; gap: 8px; }
+.est-range progress { flex: 1; }
 .kpi {
   border: 1px solid var(--pge-border); border-radius: var(--pge-radius); padding: var(--pge-space-3);
   background: var(--pge-surface);
@@ -1847,6 +1856,8 @@ class PgeEnergyPanel extends HTMLElement {
   async _renderKpis() {
     const el = this.shadowRoot.getElementById("kpis");
     if (!el || !this._account) return;
+    const kpiEntry = this._activeEntryId;
+    const kpiGen = this._galleryRenderGen || 0;
     const e = this._account.entity_ids;
     // PGE publishes overnight (~24h lag) and the tip interval is often incomplete.
     // KPIs use closed days / billing-period totals only — never "today" or tip samples.
@@ -1895,11 +1906,8 @@ class PgeEnergyPanel extends HTMLElement {
 
     let sparkKwh = [];
     let sparkCost = [];
-    let weekKwh = null;
-    let weekCost = null;
-    let weekRange = "Sun → yesterday";
-    let sparkWeekKwh = [];
-    let sparkWeekCost = [];
+    let usualDelta = null;
+    let usualComplete = false;
     let usageCycleKwh = null;
     let usageCycleCost = null;
     let sinceStatementKwh = null;
@@ -1909,31 +1917,20 @@ class PgeEnergyPanel extends HTMLElement {
     let sparkNetCost = null;
     try {
       const publishedEnd = publishedDataEnd();
-      const weekStart = pacificWeekStartUtc();
-      const sparkStart = new Date(publishedEnd.getTime() - 14 * 24 * 60 * 60 * 1000);
+      const sparkStart = new Date(publishedEnd.getTime() - 31 * 24 * 60 * 60 * 1000);
       const yesterdayStart = pacificMidnightUtc(priorPacificYmd(pacificYmd(publishedEnd)));
-      const [kwhSeries, costSeries, weekKwhSum, weekCostSum, compensationDaySum, compensationSparkSeries] = await Promise.all([
+      const [kwhSeries, costSeries, compensationDaySum, compensationSparkSeries] = await Promise.all([
         fetchStatisticSeries(this._hass, this._account.statistic_ids.consumption, {
           start: sparkStart,
           end: publishedEnd,
           period: "day",
-          maxPoints: 32,
+          maxPoints: 40,
         }),
         fetchStatisticSeries(this._hass, this._account.statistic_ids.cost, {
           start: sparkStart,
           end: publishedEnd,
           period: "day",
-          maxPoints: 32,
-        }),
-        sumStatisticChange(this._hass, this._account.statistic_ids.consumption, {
-          start: weekStart,
-          end: publishedEnd,
-          period: "hour",
-        }),
-        sumStatisticChange(this._hass, this._account.statistic_ids.cost, {
-          start: weekStart,
-          end: publishedEnd,
-          period: "hour",
+          maxPoints: 40,
         }),
         sumStatisticChange(this._hass, this._account.statistic_ids.compensation, {
           start: yesterdayStart,
@@ -1947,11 +1944,26 @@ class PgeEnergyPanel extends HTMLElement {
           maxPoints: 32,
         }),
       ]);
-      sparkKwh = kwhSeries.values || [];
+      sparkKwh = (kwhSeries.values || []).slice(-30);
       sparkCost = costSeries.values || [];
-      weekKwh = weekKwhSum.total;
-      weekCost = weekCostSum.total;
       yesterdayCompensationStat = compensationDaySum.count > 0 ? compensationDaySum.total : null;
+      const yesterdayYmd = pacificYmd(new Date(publishedEnd.getTime() - 1));
+      const byDay = new Map();
+      (kwhSeries.xs || []).forEach((ts, index) => {
+        const value = Number(kwhSeries.values?.[index]);
+        if (Number.isFinite(ts) && Number.isFinite(value)) byDay.set(pacificYmd(ts), value);
+      });
+      const prior = [];
+      let cursor = priorPacificYmd(yesterdayYmd);
+      for (let day = 0; day < 7; day++) {
+        prior.push(byDay.has(cursor) ? byDay.get(cursor) : null);
+        cursor = priorPacificYmd(cursor);
+      }
+      usualComplete = prior.every((value) => value != null) && byDay.has(yesterdayYmd);
+      if (usualComplete) {
+        const avg = prior.reduce((sum, value) => sum + value, 0) / prior.length;
+        usualDelta = pctDelta(byDay.get(yesterdayYmd), avg);
+      }
       {
         const compByX = new Map();
         const compXs = compensationSparkSeries.xs || [];
@@ -1973,18 +1985,6 @@ class PgeEnergyPanel extends HTMLElement {
           });
         }
       }
-      const weekStartDay = pacificYmd(weekStart);
-      const weekEndDay = pacificYmd(new Date(publishedEnd.getTime() - 1));
-      if (weekStartDay && weekEndDay) {
-        weekRange = `${weekStartDay} → ${weekEndDay}`;
-      }
-      const weekStartSec = Math.floor(weekStart.getTime() / 1000);
-      sparkWeekKwh = (kwhSeries.xs || [])
-        .map((t, i) => (t >= weekStartSec ? kwhSeries.values[i] : null))
-        .filter((v) => v != null);
-      sparkWeekCost = (costSeries.xs || [])
-        .map((t, i) => (t >= weekStartSec ? costSeries.values[i] : null))
-        .filter((v) => v != null);
       // Sum imported hourly intervals over the bill period [start, end).
       // Exclusive end matches PGE billingPeriodEndDate (midnight Pacific).
       if (cycleStart && cycleEnd) {
@@ -2070,7 +2070,18 @@ class PgeEnergyPanel extends HTMLElement {
         : "—";
 
 
+    if (this._activeEntryId !== kpiEntry || (this._galleryRenderGen || 0) !== kpiGen) return;
     const spark = (vals, color) => sparklineSvg(vals || [], { stroke: color });
+    const usualChip = !usualComplete || usualDelta == null
+      ? `<div class="delta">Not enough complete days to compare</div>`
+      : Math.abs(usualDelta) <= 5
+        ? `<div class="delta-chip">about usual</div>`
+        : usualDelta > 0
+          ? `<div class="delta-chip warn">▲ ${Math.round(usualDelta)}% vs your usual day</div>`
+          : `<div class="delta-chip good">▼ ${Math.round(Math.abs(usualDelta))}% vs your usual day</div>`;
+    const sinceTitle = `Usage cycle ${this._fmt(usageCycleKwh, " kWh")} / ${this._fmt(usageCycleCost, "", true)}. Statement cycle ${this._fmt(cycleKwh, " kWh")} / ${this._fmt(cycleCost, "", true)}.`;
+    const autopayState = String(stateDisplay(this._hass, e.autopay, "") || "").toLowerCase();
+    const autopayLabel = autopayState === "on" ? "On" : autopayState === "off" ? "Off" : "Unknown";
     const hasYesterdayExport = yesterdayReturn != null && yesterdayReturn > 0;
     // yesterday_compensation is disabled by default; fall back to the imported
     // `_compensation` statistic so export days still show the net interval amount.
@@ -2099,32 +2110,37 @@ class PgeEnergyPanel extends HTMLElement {
     const moneySpark = hasYesterdayCredit && sparkNetCost ? sparkNetCost : sparkCost;
     el.innerHTML = `
       <h2>At a glance</h2>
-      <p class="muted" style="margin:0 0 12px">Yesterday and week use imported intervals through yesterday (Pacific week starts Sunday; no complete today). Statement = PGE billDetails. Usage cycle = imported hourly sum over that period. Since statement = usage after the statement end through yesterday. PGE estimate = PGE's own open-cycle projection, which does not reconcile with the interval sums. Interval net amount is an estimate and does not model PGE monthly/TOD credit buckets or annual true-up.</p>
-      <div class="kpi-row">
-        <div class="kpi"><div class="label">Yesterday import</div><div class="value">${this._fmt(yesterdayKwh, " kWh")}</div>${spark(sparkKwh, "var(--pge-series-kwh)")}</div>
-        ${
-          hasYesterdayExport
-            ? `<div class="kpi"><div class="label">Yesterday export</div><div class="value">${this._fmt(yesterdayReturn, " kWh")}</div></div>`
-            : ""
-        }
-        <div class="kpi"><div class="label">${yesterdayMoneyLabel}</div><div class="value">${yesterdayMoneyValue}</div>${
-          yesterdayMoneyNote
-            ? `<div class="delta">${this._escape(yesterdayMoneyNote)}</div>`
-            : ""
-        }${spark(moneySpark, "var(--pge-series-cost)")}</div>
-        <div class="kpi"><div class="label">Week import</div><div class="value">${this._fmt(weekKwh, " kWh")}</div><div class="delta">${this._escape(weekRange)}</div>${spark(sparkWeekKwh, "var(--pge-series-kwh)")}</div>
-        <div class="kpi"><div class="label">Week import cost</div><div class="value">${this._fmt(weekCost, "", true)}</div><div class="delta">${this._escape(weekRange)}</div>${spark(sparkWeekCost, "var(--pge-series-cost)")}</div>
-        <div class="kpi kpi-statement"><div class="label">Statement cycle cost</div><div class="value">${this._fmt(cycleCost, "", true)}</div><div class="delta">${this._escape(cycleRange)}</div></div>
-        <div class="kpi kpi-statement"><div class="label">Statement cycle kWh</div><div class="value">${this._fmt(cycleKwh, " kWh")}</div><div class="delta">${this._escape(cycleRange)}</div></div>
-        <div class="kpi kpi-usage"><div class="label">Usage cycle import cost</div><div class="value">${this._fmt(usageCycleCost, "", true)}</div><div class="delta">${this._escape(fmtDelta(costDelta, true))}</div></div>
-        <div class="kpi kpi-usage"><div class="label">Usage cycle import kWh</div><div class="value">${this._fmt(usageCycleKwh, " kWh")}</div><div class="delta">${this._escape(fmtDelta(kwhDelta, false))}</div></div>
-        <div class="kpi kpi-usage"><div class="label">Since statement import cost</div><div class="value">${this._fmt(sinceStatementCost, "", true)}</div><div class="delta">${this._escape(sinceStatementRange)}</div></div>
-        <div class="kpi kpi-usage"><div class="label">Since statement import kWh</div><div class="value">${this._fmt(sinceStatementKwh, " kWh")}</div><div class="delta">${this._escape(sinceStatementRange)}</div></div>
-        <div class="kpi kpi-estimate"><div class="label">PGE est. charges so far</div><div class="value">${this._fmt(estCharges, "", true)}</div><div class="delta">${this._escape(cycleProgress)}</div></div>
-        <div class="kpi kpi-estimate kpi-dual"><div class="label">PGE est. next bill</div><div class="value">${this._escape(estRange)}</div><div class="delta">${this._escape(cycleProgress)}</div></div>
-        <div class="kpi status-${dueStatus}"><div class="label">Amount due</div><div class="value">${this._fmt(amountDue, "", true)}</div><div class="delta">Due ${this._escape(this._fmtDate(dueDate) || "—")}</div></div>
-        <div class="kpi"><div class="label">Last payment</div><div class="value">${this._fmt(lastPayment, "", true)}</div><div class="delta">${this._escape(this._fmtDate(lastPaymentDate) || "—")}</div></div>
+      <div class="kpi-groups">
+        <section class="kpi-group">
+          <h3>Yesterday</h3>
+          <div class="kpi-row">
+            <div class="kpi"><div class="label">Import</div><div class="value display">${this._fmt(yesterdayKwh, " kWh")}</div>${usualChip}${spark(sparkKwh, "var(--pge-series-kwh)")}</div>
+            <div class="kpi"><div class="label">${yesterdayMoneyLabel}</div><div class="value">${yesterdayMoneyValue}</div>${yesterdayMoneyNote ? `<div class="delta">${this._escape(yesterdayMoneyNote)}</div>` : ""}${spark(moneySpark, "var(--pge-series-cost)")}</div>
+            ${hasYesterdayExport ? `<div class="kpi"><div class="label">Export</div><div class="value">${this._fmt(yesterdayReturn, " kWh")}</div></div>` : ""}
+          </div>
+        </section>
+        <section class="kpi-group">
+          <h3>Current cycle</h3>
+          <div class="kpi-row">
+            <div class="kpi"><div class="label">Cycle day</div><progress max="${Number(cycleDays) || 1}" value="${Number(cycleDay) || 0}"></progress><div class="delta">${this._escape(cycleProgress)}</div></div>
+            <div class="kpi" title="${this._escape(sinceTitle)}"><div class="label">Since statement import kWh</div><div class="value">${this._fmt(sinceStatementKwh, " kWh")}</div><div class="delta">${this._escape(sinceStatementRange)}</div></div>
+            <div class="kpi" title="${this._escape(sinceTitle)}"><div class="label">Since statement import cost</div><div class="value">${this._fmt(sinceStatementCost, "", true)}</div><div class="delta">${this._escape(sinceStatementRange)}</div></div>
+            <div class="kpi kpi-estimate"><div class="label">PGE est. charges so far</div><div class="value">${this._fmt(estCharges, "", true)}</div></div>
+            <div class="kpi kpi-estimate"><div class="label">PGE est. next bill</div><div class="est-range"><span>${this._fmt(estNextMin, "", true)}</span><progress max="100" value="50"></progress><span>${this._fmt(estNextMax, "", true)}</span></div></div>
+          </div>
+        </section>
+        <section class="kpi-group">
+          <h3>Account</h3>
+          <div class="kpi-row">
+            <div class="kpi status-${dueStatus}"><div class="label">Amount due</div><div class="value">${this._fmt(amountDue, "", true)}</div><div class="delta">Due ${this._escape(this._fmtDate(dueDate) || "—")}</div></div>
+            <div class="kpi"><div class="label">Last payment</div><div class="value">${this._fmt(lastPayment, "", true)}</div><div class="delta">${this._escape(this._fmtDate(lastPaymentDate) || "—")}</div></div>
+            <div class="kpi"><div class="label">AutoPay</div><div class="value">${this._escape(autopayLabel)}</div></div>
+          </div>
+        </section>
       </div>
+      <details class="kpi-help"><summary>How these numbers are calculated</summary>
+        <p class="muted">Yesterday uses closed days through yesterday. The comparison uses the seven closed days before yesterday, and only when each of those days has data. Since statement is imported usage after the statement end through yesterday. PGE estimate is PGE's open-cycle projection. Interval net amount is an estimate and does not model monthly credit buckets or annual true-up.</p>
+      </details>
     `;
     this._bindGlanceKpiClipboard(el);
   }

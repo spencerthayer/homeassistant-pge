@@ -3,7 +3,15 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatKpiClipboardText } from "../../custom_components/pge_energy/frontend/data.js";
+import { formatKpiClipboardText, pctDelta } from "../../custom_components/pge_energy/frontend/data.js";
+
+describe("pctDelta", () => {
+  it("returns the percent change and null for a missing or zero baseline", () => {
+    assert.ok(Math.abs(pctDelta(68.64, 60) - 14.4) < 0.001);
+    assert.equal(pctDelta(5, 0), null);
+    assert.equal(pctDelta(null, 5), null);
+  });
+});
 
 describe("formatKpiClipboardText", () => {
   it("joins label, value, and delta on separate lines", () => {

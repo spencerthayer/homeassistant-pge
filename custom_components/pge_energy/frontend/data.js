@@ -369,6 +369,13 @@ export function formatSignedKwh(value, { signed = false } = {}) {
  * Clipboard payload for an At a glance KPI tile (label / value / optional delta).
  * Omits empty parts and collapses whitespace so sparklines never pollute the copy.
  */
+/** Percent change from a baseline. Zero or missing baselines stay null. */
+export function pctDelta(value, baseline) {
+  return value == null || !baseline || !Number.isFinite(value) || !Number.isFinite(baseline)
+    ? null
+    : ((value - baseline) / baseline) * 100;
+}
+
 export function formatKpiClipboardText({ label, value, delta } = {}) {
   const parts = [label, value, delta]
     .map((part) => (part == null ? "" : String(part).replace(/\s+/g, " ").trim()))
