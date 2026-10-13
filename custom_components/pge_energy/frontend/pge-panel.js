@@ -960,6 +960,7 @@ class PgeEnergyPanel extends HTMLElement {
     this._accounts = [];
     this._activeEntryId = null;
     this._activeTab = "glance";
+    this._rangeRenderGen = 0;
     this._syncByEntry = {};
     this._syncObserved = {};
     this._bootRendering = false;
@@ -1133,7 +1134,19 @@ class PgeEnergyPanel extends HTMLElement {
     }
     const range = this.shadowRoot.querySelector(".hdr-range");
     if (range) range.hidden = !["glance", "usage", "analytics"].includes(tab);
+    for (const panel of this.shadowRoot.querySelectorAll(".tab-panel")) {
+      panel.hidden = panel.dataset.tab !== tab;
+    }
     if (writeHistory && location.hash !== panelTabHash(tab)) history.pushState(null, "", panelTabHash(tab));
+    const panel = this.shadowRoot.getElementById("panel-" + tab);
+    requestAnimationFrame(() => this._resizeChartsUnder(panel));
+  }
+
+  _resizeChartsUnder(root) {
+    for (const wrapper of this._charts || []) {
+      const dom = wrapper.chart?.getDom?.();
+      if (dom && root?.contains(dom)) wrapper.chart.resize();
+    }
   }
 
   _scheduleDefaultLandingScroll() {
@@ -1223,13 +1236,20 @@ class PgeEnergyPanel extends HTMLElement {
         <nav class="section-tabs" role="tablist" aria-label="PGE sections">${tabButtons}</nav>
         <div class="hdr-range" id="filters"></div>
       </header>
-      <section class="card" id="kpis"></section>
+      <div class="tab-panel" id="panel-glance" data-tab="glance" role="tabpanel" aria-labelledby="tab-glance">
+        <section class="card" id="story"></section>
+        <section class="card" id="kpis"></section>
+        <div class="chart-host usage-combo" id="chart-overview-usage"></div>
+      </div>
+      <div class="tab-panel" id="panel-usage" data-tab="usage" role="tabpanel" aria-labelledby="tab-usage">
       <section class="card" id="hero">
         <h2>Usage</h2>
         <div class="chart-host usage-combo" id="chart-usage"></div>
         <div class="usage-stats" id="usage-stats"></div>
         ${this._loadShapeGalleryHtml()}
       </section>
+      </div>
+      <div class="tab-panel" id="panel-analytics" data-tab="analytics" role="tabpanel" aria-labelledby="tab-analytics">
       <section class="card" id="insights-weather">
         <h3>Weather vs usage</h3>
         <p class="muted" style="margin:0 0 8px">Daily kWh vs outdoor °F (days with both samples).</p>
@@ -1249,9 +1269,16 @@ class PgeEnergyPanel extends HTMLElement {
         <div id="heatmap-temp"></div>
         <p class="muted" style="grid-column:1/-1;margin:0">Gray cells are days without an imported sample in recorder — not a full calendar year of PGE data.</p>
       </section>
+      </div>
+      <div class="tab-panel" id="panel-billing" data-tab="billing" role="tabpanel" aria-labelledby="tab-billing">
       <section class="card" id="billing"></section>
+      </div>
+      <div class="tab-panel" id="panel-tod" data-tab="tod" role="tabpanel" aria-labelledby="tab-tod">
       <section class="card" id="tod"></section>
+      </div>
+      <div class="tab-panel" id="panel-programs" data-tab="programs" role="tabpanel" aria-labelledby="tab-programs">
       <section class="card" id="programs"></section>
+      </div>
       <section class="card sync-gaps" id="sync-gaps">
         <details class="sync-gaps-panel" data-persist="sync_status"${this._detailsOpenAttr(
           "sync_status"
@@ -1277,6 +1304,7 @@ class PgeEnergyPanel extends HTMLElement {
       await this._renderAll();
     });
     this._bindPanelNavigation();
+    this._selectPanelTab(resolvePanelTab(location.hash, this._defaultSection));
     this._bindPersistentDetails(content.querySelector("#sync-gaps"));
     this._bindPersistentDetails(content.querySelector("#hero"));
   }
@@ -1567,7 +1595,7 @@ class PgeEnergyPanel extends HTMLElement {
       btn.addEventListener("click", async () => {
         this._selectRangeKey(btn.dataset.range);
         this._renderFilters();
-        await this._renderHero();
+        await this._renderRangeScope();
       });
     });
     el.querySelector("#range-more").addEventListener("change", async (ev) => {
@@ -1575,7 +1603,7 @@ class PgeEnergyPanel extends HTMLElement {
       if (!key) return;
       this._selectRangeKey(key);
       this._renderFilters();
-      await this._renderHero();
+      await this._renderRangeScope();
     });
     el.querySelector("#range-older").addEventListener("click", async () => {
       if (this._customRange) {
@@ -1588,7 +1616,7 @@ class PgeEnergyPanel extends HTMLElement {
         this._rangeShift = (this._rangeShift || 0) + 1;
       }
       this._renderFilters();
-      await this._renderHero();
+      await this._renderRangeScope();
     });
     el.querySelector("#range-newer").addEventListener("click", async () => {
       if (this._customRange) {
@@ -1605,7 +1633,7 @@ class PgeEnergyPanel extends HTMLElement {
         this._rangeShift = Math.max(0, (this._rangeShift || 0) - 1);
       }
       this._renderFilters();
-      await this._renderHero();
+      await this._renderRangeScope();
     });
     el.querySelector("#range-apply").addEventListener("click", async () => {
       const startRaw = el.querySelector("#range-start").value;
@@ -1622,12 +1650,22 @@ class PgeEnergyPanel extends HTMLElement {
       this._customRange = { start, end };
       this._rangeShift = 0;
       this._renderFilters();
-      await this._renderHero();
+      await this._renderRangeScope();
     });
     el.querySelector("#period").addEventListener("change", async (ev) => {
       this._period = ev.target.value;
-      await this._renderHero();
+      await this._renderRangeScope();
     });
+  }
+
+  async _renderRangeScope() {
+    const rangeGen = ++this._rangeRenderGen;
+    const entryId = this._activeEntryId;
+    const gen = this._galleryRenderGen;
+    const stale = () =>
+      this._rangeRenderGen !== rangeGen || this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
+    await this._renderHero();
+    if (stale()) return;
   }
 
   async _renderDataGaps() {
@@ -2204,8 +2242,9 @@ class PgeEnergyPanel extends HTMLElement {
     const accountingProjection = projectUsageSeries(raw);
     this._lastSeries = { ...raw, projection: accountingProjection, range, period };
 
-    const usageHost = this.shadowRoot.getElementById("chart-usage");
-    if (usageHost) {
+    for (const hostId of ["chart-overview-usage", "chart-usage"]) {
+      const usageHost = this.shadowRoot.getElementById(hostId);
+      if (!usageHost) continue;
       this._disposeHostCharts(usageHost);
       const chart = await createUsageComboChart(usageHost, {
         kwh: { xs: raw.kwh?.xs || [], ys: raw.kwh?.values || [] },
@@ -2225,6 +2264,7 @@ class PgeEnergyPanel extends HTMLElement {
         } catch (_err) {
           /* account changed while the usage chart was initializing */
         }
+        return;
       } else if (chart) {
         this._charts.push(chart);
       }

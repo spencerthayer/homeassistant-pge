@@ -20,6 +20,22 @@ def test_panel_section_anchors_and_resolver_present():
     assert "this._landingApplied" in source
 
 
+def test_tab_panels_exist():
+    source = FRONTEND.read_text(encoding="utf-8")
+    for tab in ("glance", "usage", "analytics", "billing", "tod", "programs"):
+        assert f'data-tab="{tab}"' in source
+        assert 'class="tab-panel"' in source
+
+
+def test_range_handlers_use_scoped_render():
+    source = FRONTEND.read_text(encoding="utf-8")
+    start = source.index("_renderFilters() {")
+    body = source[start : source.index("async _renderDataGaps", start)]
+    assert "this._renderRangeScope()" in body
+    assert "this._renderAll()" not in body
+    assert "this._rangeRenderGen" in source
+
+
 def test_design_tokens_present():
     source = FRONTEND.read_text(encoding="utf-8")
     assert "--pge-space-4" in source
