@@ -542,7 +542,7 @@ Every chart on `/pge` ends at published data (Pacific yesterday). Gallery charts
 #### Sankey
 
 - Where: Time of Day Charts details, `#chart-sankey`.
-- Represents: Period kWh flowing into the local TOD imported-energy estimate.
+- Represents: Period kWh flowing into the local TOD imported-energy estimate. Link width is kWh. The target label includes the dollar total.
 - Data: `sankeyFlows` from hourly `consumption` and `estimatePlanCostSeries`. A period with 0 kWh is dropped.
 - Window: Last 12 published months. Hidden when catalog coverage is incomplete.
 

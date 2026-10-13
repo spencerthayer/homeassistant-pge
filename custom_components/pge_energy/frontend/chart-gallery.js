@@ -477,7 +477,8 @@ export async function renderTodCharts(panel, fns) {
       dollars: dollars[period],
     })),
   );
-  const target = "Local TOD imported-energy estimate";
+  const dollarTotal = flows.reduce((sum, row) => sum + (Number(row.dollars) || 0), 0);
+  const target = `Local TOD imported-energy estimate $${dollarTotal.toFixed(0)}`;
   await mount( "chart-sankey", (host) =>
     createSankey(host, {
       nodes: [
@@ -489,7 +490,7 @@ export async function renderTodCharts(panel, fns) {
       links: flows.map((row) => ({
         source: `${TOD_PERIOD_LABELS[row.period]} ${row.kwh.toFixed(0)} kWh`,
         target,
-        value: row.dollars,
+        value: row.kwh,
       })),
     }),
   );
@@ -707,7 +708,7 @@ export async function renderPdfSolar(panel, fns) {
   const byTs = new Map();
   let any = false;
   for (const [key, series] of fetched) {
-    for (const row of sparseChanges(series)) {
+    for (const row of sparseChanges(series, { keepZero: true })) {
       any = true;
       const statement = byTs.get(row.ts) || { ts: row.ts };
       statement[key] = row.value;
@@ -869,7 +870,12 @@ export async function renderInsights(panel, fns) {
     }
 
     const cents = fns.centsPerKwh(trailing);
-    centsValue = cents.length ? cents.reduce((sum, row) => sum + row.cents, 0) / cents.length : null;
+    const kwhSum = cents.reduce((sum, row) => sum + (Number(row.kwh) || 0), 0);
+    const costSum = cents.reduce(
+      (sum, row) => sum + ((Number(row.cents) || 0) / 100) * (Number(row.kwh) || 0),
+      0,
+    );
+    centsValue = kwhSum ? (costSum / kwhSum) * 100 : null;
     const price = centsValue == null ? null : fns.degreePrice(model, centsValue);
     const kpi = panel.shadowRoot.getElementById("kpi-degree-price");
     if (kpi) {
