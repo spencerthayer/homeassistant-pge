@@ -253,6 +253,16 @@ function chartDescription(host) {
   return text || host.id || "PGE chart";
 }
 
+/** Reserve space for tick labels on every grid. Does not mutate the input. */
+export function containAxisLabels(option) {
+  if (!option?.grid) return option;
+  const fix = (grid) => ({ ...grid, containLabel: true });
+  return {
+    ...option,
+    grid: Array.isArray(option.grid) ? option.grid.map(fix) : fix(option.grid),
+  };
+}
+
 async function mount(host, option, { height = 160, group = null, onLayout = null, scale = true, width = null } = {}) {
   const echarts = await ensureEcharts();
   host.replaceChildren();
@@ -278,6 +288,7 @@ async function mount(host, option, { height = 160, group = null, onLayout = null
       },
     },
   };
+  option = containAxisLabels(option); // containLabel: true on every grid
   const applyHeight = () => {
     const next = scale ? responsiveChartHeight(height) : height;
     host.style.height = `${next}px`;
@@ -1609,7 +1620,7 @@ export async function createGalleryChart(host, {
           ? {
               symbol: "none",
               data: markLines.map((line) => ({ yAxis: line.y, name: line.name })),
-              label: { color: theme.muted, formatter: "{b}" },
+              label: { color: theme.muted, formatter: "{b}", position: "insideEndTop" },
               lineStyle: { color: theme.muted, type: "dashed" },
             }
           : undefined,

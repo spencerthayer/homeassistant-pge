@@ -217,6 +217,14 @@ def test_heatmaps_use_full_recorded_history():
     assert "heatmap-scroll" not in source
 
 
+def test_mount_contains_axis_labels():
+    source = CHARTS_JS.read_text(encoding="utf-8")
+    start = source.index("async function mount(")
+    body = source[start : source.index("const applyHeight", start)]
+    assert "containLabel" in body
+    assert 'position: "insideEndTop"' in source
+
+
 def test_readme_names_every_panel_chart():
     readme = README.read_text(encoding="utf-8")
     assert "## Panel charts" in readme
