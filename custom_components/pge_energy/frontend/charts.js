@@ -980,7 +980,11 @@ export async function createScatter(host, { xs, ys, dates = null, color }) {
   }
   const data = [...byCoord.values()];
   if (data.length < 5) {
-    return showChartEmpty(host, "Need more days with both usage and temperature.");
+    const noun = data.length === 1 ? "day" : "days";
+    return showChartEmpty(
+      host,
+      `Only ${data.length} ${noun} in this range have both usage and temperature. Pick 7 days or longer to plot weather vs usage.`,
+    );
   }
   // Drop rare monthly-aggregate / bad-import outliers so axes stay readable.
   const sortedY = data.map((d) => d.value[1]).sort((a, b) => a - b);

@@ -217,6 +217,12 @@ def test_heatmaps_use_full_recorded_history():
     assert "heatmap-scroll" not in source
 
 
+def test_weather_empty_message_is_range_aware():
+    source = CHARTS_JS.read_text(encoding="utf-8")
+    assert "Need more days with both usage and temperature." not in source
+    assert "Pick 7 days or longer" in source
+
+
 def test_mount_contains_axis_labels():
     source = CHARTS_JS.read_text(encoding="utf-8")
     start = source.index("async function mount(")
