@@ -231,6 +231,13 @@ def test_heatmaps_use_full_recorded_history():
     assert "heatmap-scroll" not in source
 
 
+def test_usage_temp_strip():
+    source = CHARTS_JS.read_text(encoding="utf-8")
+    start = source.index("export async function createUsageComboChart")
+    body = source[start : source.index("export async function", start + 10)]
+    assert "gridIndex: 1" in body
+
+
 def test_usage_metric_toggle():
     charts = CHARTS_JS.read_text(encoding="utf-8")
     panel = PANEL_JS.read_text(encoding="utf-8")

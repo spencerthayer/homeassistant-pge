@@ -718,7 +718,7 @@ export async function createUsageComboChart(
     : toMsPairs(projected.amount.xs, projected.amount.values);
   // ECharts breaks category lines on '-' (null can render as a zero dip).
   const tempVals = useCategory
-    ? starts.map((t) => (tempMap.has(t) ? tempMap.get(t) : "-"))
+    ? starts.map((t) => (tempMap.has(t) ? tempMap.get(t) : null))
     : toMsPairs(temp?.xs || [], temp?.ys ?? temp?.values ?? temp?.means ?? []);
 
   const flowName = signedFlow ? "Grid flow" : "kWh";
@@ -973,6 +973,51 @@ export async function createUsageComboChart(
     }
     option.legend.data = (option.legend.data || legendData).filter((name) => name !== amountName);
   }
+  const mainX = Array.isArray(option.xAxis) ? option.xAxis[0] : option.xAxis;
+  option.grid = [
+    { left: 56, right: 16, top: 36, bottom: 96, containLabel: true },
+    { left: 56, right: 16, height: 64, bottom: 28, containLabel: true },
+  ];
+  option.xAxis = [
+    { ...mainX, gridIndex: 0 },
+    {
+      type: mainX.type,
+      data: mainX.data,
+      gridIndex: 1,
+      axisLabel: { show: false },
+      axisTick: { show: false },
+      axisLine: { show: false },
+    },
+  ];
+  option.axisPointer = { link: [{ xAxisIndex: "all" }] };
+  const tempNumbers = (temp?.ys ?? temp?.values ?? temp?.means ?? [])
+    .map(Number)
+    .filter((value) => Number.isFinite(value));
+  const tempExtent = _paddedExtent(tempNumbers);
+  option.yAxis = [
+    { ...option.yAxis[0], gridIndex: 0 },
+    {
+      type: "value",
+      name: "°F",
+      gridIndex: 1,
+      scale: true,
+      ...(tempExtent ? { min: tempExtent[0], max: tempExtent[1] } : {}),
+      axisLabel: { color: theme.muted },
+      splitLine: { show: false },
+    },
+  ];
+  for (const series of option.series) {
+    if (series.name === "°F") {
+      series.xAxisIndex = 1;
+      series.yAxisIndex = 1;
+      series.gridIndex = 1;
+      series.connectNulls = false;
+    } else {
+      series.xAxisIndex = 0;
+      series.yAxisIndex = 0;
+    }
+  }
+  for (const zoom of option.dataZoom || []) zoom.xAxisIndex = [0, 1];
   return mount(host, option, { height: 380 });
 }
 
