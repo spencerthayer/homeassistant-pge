@@ -183,17 +183,20 @@ export function cycleCumulative(samples, startTs) {
   const byDay = new Map();
   for (const sample of samples || []) {
     const kwh = finite(sample.kwh);
-    if (kwh == null || sample.ts == null || sample.ts < startTs) continue;
-    const ymd = pacificYmd(sample.ts);
-    byDay.set(ymd, (byDay.get(ymd) || 0) + kwh);
+    if (!Number.isFinite(sample.ts) || sample.ts < startTs || kwh == null) continue;
+    const index = dayIndexBetween(startYmd, pacificYmd(sample.ts));
+    byDay.set(index, (byDay.get(index) || 0) + kwh);
   }
-  let running = 0;
+  const last = byDay.size ? Math.max(...byDay.keys()) : -1;
   const dayIndex = [];
   const cumulative = [];
-  for (const ymd of [...byDay.keys()].sort()) {
-    running += byDay.get(ymd);
-    dayIndex.push(dayIndexBetween(startYmd, ymd));
-    cumulative.push(running);
+  let total = 0;
+  let complete = true;
+  for (let day = 0; day <= last; day++) {
+    dayIndex.push(day);
+    if (!byDay.has(day)) complete = false;
+    if (complete) total += byDay.get(day);
+    cumulative.push(complete ? total : null);
   }
   return { dayIndex, cumulative };
 }

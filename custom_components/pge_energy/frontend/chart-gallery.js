@@ -107,6 +107,48 @@ function publishedWeekComplete(samples, keys) {
   return true;
 }
 
+async function mountCycleRace(panel, fns, stamp, end) {
+  const mount = (id, factory) => mountHost(panel, id, factory, stamp);
+  const bill = panel._billBounds?.();
+  if (!bill || bill.end >= end) {
+    hideFigure(panel, "chart-cycle-race", true);
+    return;
+  }
+  const fetched = await fetchRole(panel, "consumption", { start: bill.start, end, period: "day" });
+  if (galleryStale(panel, stamp)) return;
+  const rows = joinSamples([{ key: "kwh", ...fetched }]);
+  const startTs = bill.start.getTime() / 1000;
+  const openTs = bill.end.getTime() / 1000;
+  const endTs = end.getTime() / 1000;
+  const open = fns.cycleCumulative(
+    rows.filter((row) => row.ts >= openTs && row.ts < endTs),
+    openTs,
+  );
+  const previous = fns.cycleCumulative(
+    rows.filter((row) => row.ts >= startTs && row.ts < openTs),
+    startTs,
+  );
+  const maxDay = (race) => (race.dayIndex.length ? Math.max(...race.dayIndex) : -1);
+  const categories = Array.from(
+    { length: Math.max(maxDay(open), maxDay(previous)) + 1 },
+    (_, index) => String(index + 1),
+  );
+  const align = (race) => {
+    const values = new Map(race.dayIndex.map((day, index) => [day, race.cumulative[index]]));
+    return categories.map((_, index) => values.get(index) ?? null);
+  };
+  await mount("chart-cycle-race", (host) =>
+    createGalleryChart(host, {
+      categories,
+      yName: "Imported kWh",
+      series: [
+        { name: "Open cycle", values: align(open) },
+        { name: "Last statement", values: align(previous) },
+      ],
+    }),
+  );
+}
+
 function galleryStamp(panel) {
   return {
     entryId: panel._activeEntryId ?? null,
@@ -221,36 +263,7 @@ export async function renderLoadShape(panel, fns) {
     }),
   );
 
-  await mount( "chart-cycle-race", async (host) => {
-    const bill = panel._billBounds?.();
-    if (!bill) return null;
-    const durationMs = bill.end.getTime() - bill.start.getTime();
-    const prevStart = new Date(bill.start.getTime() - durationMs);
-    const cycleKwh = await fetchRole(panel, "consumption", { start: prevStart, end, period: "hour" });
-    const cycleSamples = joinSamples([{ key: "kwh", ...cycleKwh }]);
-    const currentStart = Math.floor(bill.start.getTime() / 1000);
-    const previousStart = Math.floor(prevStart.getTime() / 1000);
-    const current = fns.cycleCumulative(
-      cycleSamples.filter((row) => row.ts >= currentStart),
-      currentStart,
-    );
-    const previous = fns.cycleCumulative(
-      cycleSamples.filter((row) => row.ts >= previousStart && row.ts < currentStart),
-      previousStart,
-    );
-    const maxDay = (race) => (race.dayIndex.length ? Math.max(...race.dayIndex) : -1);
-    const length = Math.max(maxDay(current), maxDay(previous)) + 1;
-    const categories = Array.from({ length }, (_, index) => String(index + 1));
-    const align = (race) => categories.map((_, index) => race.cumulative[race.dayIndex.indexOf(index)] ?? null);
-    return createGalleryChart(host, {
-      categories,
-      yName: "kWh",
-      series: [
-        { name: "This cycle", values: align(current) },
-        { name: "Previous cycle", values: align(previous) },
-      ],
-    });
-  });
+  await mountCycleRace(panel, fns, stamp, end);
 
   const floor = fns.baseloadFloor(profiles.weekday);
   await mount( "chart-baseload", (host) =>

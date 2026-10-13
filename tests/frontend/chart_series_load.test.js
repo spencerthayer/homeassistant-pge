@@ -83,6 +83,21 @@ describe("load-shape series", () => {
     assert.equal(out.series[out.years.indexOf("2024")][1], 2 * 28);
   });
 
+  it("cumulative energy does not resume a complete total after a missing date", () => {
+    const start = atHour("2026-03-07", 0);
+    const out = cycleCumulative(
+      [
+        { ts: start, kwh: 2 },
+        { ts: atHour("2026-03-09", 0), kwh: 4 },
+      ],
+      start,
+    );
+    assert.deepEqual(out.dayIndex, [0, 1, 2]);
+    assert.deepEqual(out.cumulative, [2, null, null]);
+    const zeroKept = cycleCumulative([{ ts: atHour("2026-03-08", 0), kwh: 0 }], atHour("2026-03-08", 0));
+    assert.deepEqual(zeroKept.cumulative, [0]);
+  });
+
   it("cycleCumulative sums hourly kWh by day index from a statement start", () => {
     const start = atHour("2026-01-05", 0);
     const out = cycleCumulative(
