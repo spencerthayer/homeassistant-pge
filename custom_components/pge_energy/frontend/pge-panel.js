@@ -100,7 +100,7 @@ import {
   treemapSlices,
   waterfallSteps,
 } from "./chart-series.js?v=0.13.0";
-import { renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney } from "./chart-gallery.js?v=0.13.0";
+import { FACTORY_RENDERERS, galleryRecordCurrent, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, runGalleryFactory } from "./chart-gallery.js?v=0.13.0";
 import {
   createBarChart,
   createLineChart,
@@ -189,8 +189,10 @@ const STYLE = `
 :host([data-dark]) {
   color-scheme: dark;
 }
+.chart-skeleton { min-height: 160px; }
 @media (prefers-reduced-motion: reduce) {
   :host * { transition: none !important; animation: none !important; }
+  .chart-skeleton { animation: none; }
 }
 .toolbar {
   display: flex; align-items: center; gap: 12px;
@@ -1033,6 +1035,19 @@ class PgeEnergyPanel extends HTMLElement {
     this._syncObserved = {};
     this._bootRendering = false;
     this._galleryRefreshAfterBoot = false;
+    this._chartFactories = new Map();
+    this._pendingMounts = new Map();
+    this._lazyObserver = typeof IntersectionObserver === "function"
+      ? new IntersectionObserver((entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            const record = this._pendingMounts.get(entry.target);
+            this._lazyObserver.unobserve(entry.target);
+            this._pendingMounts.delete(entry.target);
+            if (record) void this._mountDeferred(record);
+          }
+        }, { rootMargin: "200px 0px" })
+      : null;
     this._unsubSync = null;
     this._charts = [];
     this._rangeKey = "24h";
@@ -2358,17 +2373,34 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   /** One gallery pass after the active entry's sync reaches complete. */
+  _mountDeferred(record) {
+    if (record.promise) return record.promise;
+    const host = record.sourceHost;
+    record.promise = (async () => {
+      try {
+        const chart = await runGalleryFactory(this, record, host);
+        if (!galleryRecordCurrent(this, record)) return;
+        if (chart) this._charts.push(chart);
+        else host.closest("figure")?.setAttribute("hidden", "");
+      } catch (err) {
+        if (galleryRecordCurrent(this, record)) {
+          host.textContent = "This chart could not load. Refresh to try again.";
+          console.warn("PGE chart initialization failed", err);
+        }
+      } finally {
+        if (galleryRecordCurrent(this, record)) host.classList.remove("chart-skeleton");
+      }
+    })();
+    return record.promise;
+  }
+
   async _refreshGalleriesAfterSync() {
     const gen = ++this._galleryRenderGen;
     const entryId = this._activeEntryId;
     const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
-    await this._softGallery(() => this._renderLoadShapeGallery());
-    if (stale()) return;
-    await this._softGallery(() => this._renderTodGallery());
-    if (stale()) return;
-    await this._softGallery(() => this._renderInsights());
-    if (stale()) return;
-    await this._softGallery(() => this._renderWeatherMoney());
+    this._pendingMounts = new Map();
+    this._chartFactories = new Map();
+    if (await rerenderFactoryHosts(this, stale)) await this._resumeChartDialog?.();
   }
 
   async _renderHero() {

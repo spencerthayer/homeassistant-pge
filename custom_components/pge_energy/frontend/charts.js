@@ -267,8 +267,16 @@ export function containAxisLabels(option) {
   };
 }
 
-async function mount(host, option, { height = 160, group = null, onLayout = null, scale = true, width = null } = {}) {
+async function prepareChartMount(host) {
+  const mountToken = host._pgeMountToken;
   const echarts = await ensureEcharts();
+  if (!host.isConnected || host._pgeMountToken !== mountToken) return null;
+  return echarts;
+}
+
+async function mount(host, option, { height = 160, group = null, onLayout = null, scale = true, width = null } = {}) {
+  const echarts = await prepareChartMount(host);
+  if (!echarts) return null;
   host.replaceChildren();
   if (width) {
     host.style.width = `${Math.round(width)}px`;

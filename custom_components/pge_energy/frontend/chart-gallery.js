@@ -159,30 +159,74 @@ function galleryStamp(panel) {
 
 function galleryStale(panel, stamp) {
   if (!stamp) return false;
-  return (panel._activeEntryId ?? null) !== stamp.entryId || (panel._galleryRenderGen ?? 0) !== stamp.gen;
+  return (panel._activeEntryId ?? null) !== stamp.entryId
+    || (panel._galleryRenderGen ?? 0) !== stamp.gen
+    || (stamp.rangeGen != null && (panel._rangeRenderGen ?? 0) !== stamp.rangeGen);
 }
 
-async function mountHost(panel, id, factory, stamp) {
+export function galleryRecordCurrent(panel, record) {
+  return !!record && !galleryStale(panel, record.stamp)
+    && panel._chartFactories?.get(record.id) === record
+    && panel.shadowRoot?.getElementById(record.id) === record.sourceHost;
+}
+
+export async function runGalleryFactory(panel, record, host) {
+  if (!galleryRecordCurrent(panel, record) || !host?.isConnected) return null;
+  const chart = await record.factory(host);
+  if (!galleryRecordCurrent(panel, record) || !host.isConnected) {
+    chart?.destroy?.();
+    return null;
+  }
+  return chart;
+}
+
+export const FACTORY_RENDERERS = [
+  "_renderHero",
+  "_renderLoadShapeGallery",
+  "_renderWeatherScatter",
+  "_renderInsights",
+  "_renderLedgerCharts",
+  "_renderTodGallery",
+  "_renderWeatherMoney",
+];
+
+export async function rerenderFactoryHosts(panel, stale) {
+  for (const name of FACTORY_RENDERERS) {
+    if (typeof panel[name] !== "function") continue;
+    await panel._softGallery(() => panel[name]());
+    if (stale()) return false;
+  }
+  return true;
+}
+
+export async function mountHost(panel, id, factory, stamp, { defer = true } = {}) {
   if (galleryStale(panel, stamp)) return;
   const host = panel.shadowRoot?.getElementById(id);
-  const figure = host?.closest("figure");
   if (!host) return;
-  panel._disposeHostCharts(host);
-  if (figure) figure.hidden = false;
-  const chart = await factory(host);
-  if (galleryStale(panel, stamp)) {
-    try {
-      chart?.destroy?.();
-    } catch (_err) {
-      /* account changed while this chart was initializing */
-    }
+  host._pgeMountToken = (host._pgeMountToken || 0) + 1;
+  panel._disposeHostCharts?.(host);
+  panel._chartFactories = panel._chartFactories || new Map();
+  panel._pendingMounts = panel._pendingMounts || new Map();
+  const record = { id, factory, stamp, sourceHost: host, promise: null };
+  panel._chartFactories.set(id, record);
+  host.closest("figure")?.removeAttribute("hidden");
+  for (const button of panel.shadowRoot.querySelectorAll("[data-expand], button.explore-card")) {
+    if ((button.dataset.expand || button.dataset.chart) === id) button.disabled = false;
+  }
+  if (host.closest("[data-explore-hosts]")) return;
+  host.classList.add("chart-skeleton");
+  if (defer && panel._lazyObserver) {
+    panel._pendingMounts.set(host, record);
+    panel._lazyObserver.observe(host);
     return;
   }
-  if (!chart) {
-    if (figure) figure.hidden = true;
-    return;
+  await panel._mountDeferred?.(record);
+  if (typeof panel._mountDeferred !== "function") {
+    const chart = await factory(host);
+    host.classList.remove("chart-skeleton");
+    if (!chart) host.closest("figure")?.setAttribute("hidden", "");
+    else panel._charts?.push(chart);
   }
-  panel._charts.push(chart);
 }
 
 /**
