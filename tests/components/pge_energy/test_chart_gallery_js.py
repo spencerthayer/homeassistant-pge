@@ -217,6 +217,15 @@ def test_heatmaps_use_full_recorded_history():
     assert "heatmap-scroll" not in source
 
 
+def test_percent_charts_cap_at_one_hundred():
+    charts = CHARTS_JS.read_text(encoding="utf-8")
+    assert "percent = false" in charts
+    gallery = (FRONTEND / "chart-gallery.js").read_text(encoding="utf-8")
+    start = gallery.index('mount( "chart-period-mix"')
+    body = gallery[start : gallery.index("chart-money-pareto", start)]
+    assert "percent: true" in body
+
+
 def test_weather_empty_message_is_range_aware():
     source = CHARTS_JS.read_text(encoding="utf-8")
     assert "Need more days with both usage and temperature." not in source

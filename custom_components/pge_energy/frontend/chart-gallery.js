@@ -369,6 +369,7 @@ export async function renderTodCharts(panel, fns) {
     createGalleryChart(host, {
       categories: mix.map((row) => row.month),
       yName: "Share",
+      percent: true,
       series: ["off_peak", "mid_peak", "on_peak"].map((key) => ({
         name: TOD_PERIOD_LABELS[key],
         values: mix.map((row) => row[key]),
@@ -789,6 +790,7 @@ export async function renderPdfSolar(panel, fns) {
     createGalleryChart(host, {
       categories: labels,
       yName: "Share",
+      percent: true,
       series: familyKeys.map((key, index) => ({
         name: familyLabels[index],
         values: statements.map((row) => fns.lineItemShares(row).find((share) => share.key === key)?.share ?? null),

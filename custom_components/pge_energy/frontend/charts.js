@@ -1595,6 +1595,7 @@ export async function createGalleryChart(host, {
   xName = "",
   horizontal = false,
   markLines = [],
+  percent = false,
 } = {}) {
   const finite = series.reduce((count, row) => count + countFinite(row?.values), 0);
   if (finite < 2) return showChartEmpty(host, "Not enough history.");
@@ -1641,7 +1642,11 @@ export async function createGalleryChart(host, {
     type: "value",
     name: horizontal ? xName : yName,
     nameTextStyle: { color: theme.muted },
-    axisLabel: { color: theme.muted },
+    max: percent ? 100 : undefined,
+    axisLabel: {
+      color: theme.muted,
+      formatter: percent ? "{value}%" : undefined,
+    },
     splitLine: { lineStyle: { color: theme.grid } },
   };
   const timeAxisOption = {
