@@ -163,6 +163,13 @@ def test_charts_js_exports_gallery_wrappers():
         assert f"export async function {name}" in source
 
 
+def test_chart_dialog_is_wired():
+    panel = PANEL_JS.read_text(encoding="utf-8")
+    gallery = (FRONTEND / "chart-gallery.js").read_text(encoding="utf-8")
+    assert 'id="chart-dialog"' in panel
+    assert "export async function openChartDialog" in gallery
+
+
 def test_plain_copy_and_glossary():
     source = PANEL_JS.read_text(encoding="utf-8")
     for gloss in (

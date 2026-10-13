@@ -229,6 +229,98 @@ export async function mountHost(panel, id, factory, stamp, { defer = true } = {}
   }
 }
 
+const DIALOG_IDS = {
+  dialog: "chart-dialog",
+  host: "chart-dialog-host",
+  title: "chart-dialog-title",
+  figureTitle: "chart-dialog-figure-title",
+  explainer: "chart-dialog-explainer",
+  close: "chart-dialog-close",
+};
+const FIRST_EMPTY = "Not enough history yet for this chart.";
+const REFRESH_EMPTY = "This chart was refreshed and has no data to show now.";
+
+function dialogParts(panel) {
+  const get = (id) => panel.shadowRoot?.getElementById(id) || null;
+  return Object.fromEntries(Object.entries(DIALOG_IDS).map(([key, id]) => [key, get(id)]));
+}
+
+export function suspendChartDialog(panel, { keepOpen = false } = {}) {
+  panel._dialogRequest = (panel._dialogRequest || 0) + 1;
+  const { dialog, host } = dialogParts(panel);
+  if (host) {
+    host._pgeMountToken = (host._pgeMountToken || 0) + 1;
+    host.replaceChildren?.();
+  }
+  panel._dialogChart?.destroy?.();
+  panel._dialogChart = null;
+  if (keepOpen && dialog?.open && panel._dialogChartId) {
+    panel._pendingDialogReopen = { id: panel._dialogChartId, opener: panel._dialogOpener };
+    host?.classList.add("chart-skeleton");
+    return;
+  }
+  panel._pendingDialogReopen = null;
+  panel._dialogChartId = null;
+  if (dialog?.open) dialog.close();
+  if (panel._dialogOpener?.isConnected) panel._dialogOpener.focus();
+  panel._dialogOpener = null;
+}
+
+export async function resumeChartDialog(panel) {
+  const pending = panel._pendingDialogReopen;
+  panel._pendingDialogReopen = null;
+  const { dialog, host } = dialogParts(panel);
+  if (!pending || !dialog?.open) return;
+  host?.classList.remove("chart-skeleton");
+  if (galleryRecordCurrent(panel, panel._chartFactories?.get(pending.id))) {
+    await openChartDialog(panel, pending.id, pending.opener, { reuseOpen: true });
+  } else if (host) {
+    host.textContent = REFRESH_EMPTY;
+  }
+}
+
+export async function openChartDialog(panel, id, opener, { reuseOpen = false } = {}) {
+  const record = panel._chartFactories?.get(id);
+  if (!galleryRecordCurrent(panel, record)) return;
+  const { dialog, host, title, figureTitle, explainer, close } = dialogParts(panel);
+  const active = panel.shadowRoot.activeElement || null;
+  const focusInExplainer = !!active && !!explainer?.contains(active);
+  const focusKey = reuseOpen && focusInExplainer ? active.getAttribute?.("popovertarget") || null : null;
+  const restoreFocus = reuseOpen && (!active || focusInExplainer);
+  suspendChartDialog(panel, { keepOpen: reuseOpen });
+  panel._pendingDialogReopen = null;
+  panel._dialogChartId = id;
+  host.classList.remove("chart-skeleton");
+  const figure = record.sourceHost.closest?.("figure");
+  const text = figure?.querySelector(".fig-title")?.textContent || "Chart";
+  title.textContent = text;
+  figureTitle.textContent = text;
+  explainer.replaceChildren();
+  const dl = figure?.querySelector("dl");
+  if (dl) explainer.append(dl.cloneNode(true));
+  panel._dialogOpener = opener;
+  if (!dialog.open) dialog.showModal();
+  if (restoreFocus) {
+    const same = focusKey ? explainer.querySelector(`[popovertarget="${focusKey}"]`) : null;
+    (same || close)?.focus();
+  }
+  const request = panel._dialogRequest;
+  try {
+    const chart = await runGalleryFactory(panel, record, host);
+    if (request !== panel._dialogRequest || !dialog.open) {
+      chart?.destroy?.();
+      return;
+    }
+    panel._dialogChart = chart;
+    if (!chart) host.textContent = reuseOpen ? REFRESH_EMPTY : FIRST_EMPTY;
+  } catch (err) {
+    if (request === panel._dialogRequest && dialog.open) {
+      host.textContent = "This chart could not load. Close it and try again.";
+      console.warn("PGE expanded chart failed", err);
+    }
+  }
+}
+
 /**
  * @param {object} panel
  * @param {object} fns load-shape functions from chart-series.js

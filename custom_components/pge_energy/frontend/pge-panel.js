@@ -100,7 +100,7 @@ import {
   treemapSlices,
   waterfallSteps,
 } from "./chart-series.js?v=0.13.0";
-import { FACTORY_RENDERERS, galleryRecordCurrent, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, runGalleryFactory } from "./chart-gallery.js?v=0.13.0";
+import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.13.0";
 import {
   createBarChart,
   createLineChart,
@@ -243,7 +243,14 @@ input:focus-visible, select:focus-visible { outline: 2px solid var(--primary-col
   background: var(--primary-color);
   color: var(--text-primary-color, #fff);
 }
-dialog.drawer {
+dialog.chart-dialog {
+  width: min(1200px, 96vw);
+  max-height: 92vh;
+  overflow: auto;
+  border: 0;
+  background: var(--pge-surface);
+  color: var(--primary-text-color);
+}
   margin: 0 0 0 auto; height: 100%; max-height: none; width: min(480px, 100vw);
   border: 0; padding: var(--pge-space-4); background: var(--pge-surface);
   color: var(--primary-text-color); box-shadow: var(--pge-shadow-2);
@@ -1406,6 +1413,16 @@ class PgeEnergyPanel extends HTMLElement {
         <div id="gloss-normalized" popover class="gloss">Weather-normalized: what the weather alone predicts you would use, next to what you actually used.</div>
         <div id="gloss-statement-window" popover class="gloss">A statement window is the set of days from one bill's end to the next.</div>
       </div>
+      <dialog id="chart-dialog" class="chart-dialog" aria-labelledby="chart-dialog-title">
+        <header><h2 id="chart-dialog-title"></h2>
+          <button type="button" id="chart-dialog-close" aria-label="Close chart">×</button>
+        </header>
+        <figure>
+          <h3 class="fig-title" id="chart-dialog-figure-title"></h3>
+          <div id="chart-dialog-explainer"></div>
+          <div class="chart-host" id="chart-dialog-host" data-chart-height="560"></div>
+        </figure>
+      </dialog>
       <dialog id="sync-drawer" class="drawer" aria-labelledby="sync-drawer-title">
         <div class="drawer-head"><h2 id="sync-drawer-title">Sync and diagnostics</h2>
           <button type="button" class="drawer-close" aria-label="Close">×</button></div>
@@ -1420,6 +1437,20 @@ class PgeEnergyPanel extends HTMLElement {
       this._activeEntryId = ev.target.value;
       this._renderShell();
       await this._renderAll();
+    });
+    content.addEventListener("click", (ev) => {
+      const button = ev.target.closest?.("[data-expand], button.explore-card");
+      if (!button || button.disabled) return;
+      const id = button.dataset.expand || button.dataset.chart;
+      if (!id) return;
+      void openChartDialog(this, id, button);
+    });
+    content.querySelector("#chart-dialog")?.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      suspendChartDialog(this, { keepOpen: false });
+    });
+    content.querySelector("#chart-dialog-close")?.addEventListener("click", () => {
+      suspendChartDialog(this, { keepOpen: false });
     });
     this._bindPanelNavigation();
     this._selectPanelTab(resolvePanelTab(location.hash, this._defaultSection));
