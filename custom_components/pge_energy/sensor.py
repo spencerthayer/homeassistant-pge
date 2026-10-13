@@ -239,6 +239,13 @@ async def async_setup_entry(
             ]
         )
 
+    entities.extend(
+        [
+            PGEPtrEventStartSensor(coordinator, account_key),
+            PGEPtrEventEndSensor(coordinator, account_key),
+        ]
+    )
+
     if bool(get_entry_option(entry, CONF_INCLUDE_BILLING, DEFAULT_INCLUDE_BILLING)):
         entities.extend(
             [
@@ -265,8 +272,6 @@ async def async_setup_entry(
                 PGEBillingLastSyncSensor(coordinator, account_key),
                 PGEBillPdfParseStatusSensor(coordinator, account_key),
                 PGENextPtrEventDateSensor(coordinator, account_key),
-                PGEPtrEventStartSensor(coordinator, account_key),
-                PGEPtrEventEndSensor(coordinator, account_key),
                 PGENetMeteringSensor(coordinator, account_key),
             ]
         )

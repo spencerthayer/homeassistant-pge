@@ -1184,6 +1184,8 @@ class PgeEnergyPanel extends HTMLElement {
     const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
     destroyCharts(this._charts);
     this._charts = [];
+    this._galleryDays = null;
+    this._galleryBillAmount = null;
     await this._probeAvailablePresets();
     if (stale()) return;
     this._todBillReady = !!this._billBounds();
@@ -4092,7 +4094,7 @@ class PgeEnergyPanel extends HTMLElement {
     if (!includeBilling) {
       this._disposeHostCharts(billing);
       billing.innerHTML = `<h2>Billing</h2><p class="muted">Billing import is disabled in Configure → Sync settings.</p>`;
-      programs.innerHTML = `<h2>Programs</h2><p class="muted">Enable billing & programs to see enrollment.</p>`;
+      programs.innerHTML = `<h2>Programs</h2><p class="muted">Enable billing & programs to see enrollment.</p>${this._ptrEventHtml(e)}`;
       return false;
     }
 
