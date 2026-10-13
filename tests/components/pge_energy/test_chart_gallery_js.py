@@ -188,6 +188,35 @@ def test_panel_imports_chart_series_exports_it_calls():
         assert name in imported
 
 
+def test_cost_intelligence_uses_twelve_month_window():
+    source = PANEL_JS.read_text(encoding="utf-8")
+    start = source.index("async _renderInsights()")
+    end = source.index("_renderBillPdfHeader", start)
+    body = source[start:end]
+    assert 'const costRange = rangePresets()["12mo"]' in body
+    assert "start: costRange.start" in body
+    assert "_monthlyRateSeries(kwhForRate, costDay)" in body
+    charts = CHARTS_JS.read_text(encoding="utf-8")
+    assert "barMaxWidth: 28" in charts
+
+
+def test_heatmaps_use_full_recorded_history():
+    source = PANEL_JS.read_text(encoding="utf-8")
+    start = source.index("async _renderInsights()")
+    end = source.index("_renderBillPdfHeader", start)
+    body = source[start:end]
+    assert "HEATMAP_HISTORY_START" in body
+    assert "xs: kwhHistory.xs" in body
+    assert "ys: kwhHistory.values" in body
+    assert "xs: tempHistory.xs" in body
+    assert "ys: tempHistory.means" in body
+    assert "maxPoints: HEATMAP_MAX_DAYS" in body
+    charts = CHARTS_JS.read_text(encoding="utf-8")
+    assert "function heatmapYears" in charts
+    assert "calendarIndex: index" in charts
+    assert "heatmap-scroll" not in source
+
+
 def test_readme_names_every_panel_chart():
     readme = README.read_text(encoding="utf-8")
     assert "## Panel charts" in readme

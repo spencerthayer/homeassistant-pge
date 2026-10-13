@@ -253,11 +253,16 @@ function chartDescription(host) {
   return text || host.id || "PGE chart";
 }
 
-async function mount(host, option, { height = 160, group = null, onLayout = null } = {}) {
+async function mount(host, option, { height = 160, group = null, onLayout = null, scale = true, width = null } = {}) {
   const echarts = await ensureEcharts();
   host.replaceChildren();
-  host.style.width = "100%";
-  host.style.maxWidth = "100%";
+  if (width) {
+    host.style.width = `${Math.round(width)}px`;
+    host.style.maxWidth = "none";
+  } else {
+    host.style.width = "100%";
+    host.style.maxWidth = "100%";
+  }
   const description = chartDescription(host);
   host.setAttribute("role", "img");
   host.setAttribute("aria-label", description);
@@ -274,7 +279,8 @@ async function mount(host, option, { height = 160, group = null, onLayout = null
     },
   };
   const applyHeight = () => {
-    host.style.height = `${responsiveChartHeight(height)}px`;
+    const next = scale ? responsiveChartHeight(height) : height;
+    host.style.height = `${next}px`;
   };
   applyHeight();
   const chart = echarts.init(host, null, { renderer: "canvas" });
@@ -478,6 +484,7 @@ export async function createMonthCompareChart(host, { billedXs, billedYs, payXs,
         type: "bar",
         data: billed,
         barWidth: "40%",
+        barMaxWidth: 28,
         barGap: "12%",
         barCategoryGap: "20%",
         itemStyle: { color: c.cost, borderRadius: [3, 3, 0, 0] },
@@ -488,6 +495,7 @@ export async function createMonthCompareChart(host, { billedXs, billedYs, payXs,
         type: "bar",
         data: paid,
         barWidth: "40%",
+        barMaxWidth: 28,
         itemStyle: { color: c.payment, borderRadius: [3, 3, 0, 0] },
         emphasis: barEmphasis(c.payment),
       },
@@ -1053,6 +1061,17 @@ function dayKeyFromUnix(sec) {
   }).format(d);
 }
 
+/** Vertical space for one year inside a single heatmap chart. */
+const HEATMAP_YEAR_PITCH = 124;
+
+function heatmapYears(startYmd, endYmd) {
+  const startYear = Number(startYmd.slice(0, 4));
+  const endYear = Number(endYmd.slice(0, 4));
+  const years = [];
+  for (let year = startYear; year <= endYear; year += 1) years.push(String(year));
+  return years;
+}
+
 /** Calendar heatmap for daily values (ECharts calendar + heatmap). */
 export async function renderHeatmap(host, { xs, ys, diverging = false, title = "" }) {
   host.replaceChildren();
@@ -1070,19 +1089,31 @@ export async function renderHeatmap(host, { xs, ys, diverging = false, title = "
     return showChartEmpty(host, "Not enough daily samples for a heatmap yet.");
   }
   data.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-  // Only span first→last populated day so empty months don't dominate.
-  const range = [data[0][0], data[data.length - 1][0]];
-  const yearStart = data[0][0].slice(0, 4);
-  const yearEnd = data[data.length - 1][0].slice(0, 4);
-  const yearText = yearStart === yearEnd ? yearStart : `${yearStart}–${yearEnd}`;
+  const years = heatmapYears(data[0][0], data[data.length - 1][0]);
+  const yearText = years.length === 1 ? years[0] : `${years[0]}–${years[years.length - 1]}`;
   const heading = title ? `${title} · ${yearText}` : yearText;
   const values = data.map((d) => d[1]);
   const vmin = Math.min(...values);
-  const vmax = Math.max(...values);
+  let vmax = Math.max(...values);
+  // A few imported spikes would otherwise pin the ramp and hide ordinary days.
+  let clipHigh = false;
+  if (!diverging && values.length >= 20 && vmax > 0) {
+    const sorted = [...values].sort((a, b) => a - b);
+    const p95 = sorted[Math.round(0.95 * (sorted.length - 1))];
+    if (p95 > 0 && vmax > p95 * 1.5) {
+      vmax = p95;
+      clipHigh = true;
+    }
+  }
+  const titleSpace = 22;
+  const cellStyle = {
+    color: withAlpha(theme.muted, 0.06),
+    borderWidth: 1,
+    borderColor: withAlpha(theme.muted, 0.22),
+  };
   const option = {
     ...chartMotion(),
     backgroundColor: theme.bg,
-    // Year range lives in the title (left yearLabel was clipped by the card).
     title: {
       text: heading,
       left: 0,
@@ -1100,42 +1131,58 @@ export async function renderHeatmap(host, { xs, ys, diverging = false, title = "
       max: vmax === vmin ? vmin + 1 : vmax,
       orient: "horizontal",
       left: "center",
-      bottom: 0,
+      bottom: 6,
+      // Horizontal visualMap uses itemWidth as thickness and itemHeight as length.
+      itemWidth: 10,
+      itemHeight: 140,
       textStyle: { color: theme.muted },
       inRange: diverging
-        ? // Mid stop: muted ink (not card surface) so mild days ≠ empty cells.
-          { color: [colors.tempCold, withAlpha(theme.text, 0.4), colors.tempHot] }
-        : { color: [withAlpha(colors.kwh, 0.25), colors.kwh] },
-      outOfRange: { color: withAlpha(theme.muted, 0.12) },
+        ? { color: [colors.tempCold, withAlpha(theme.text, 0.4), colors.tempHot] }
+        : { color: [withAlpha(colors.kwh, 0.18), withAlpha(colors.kwh, 0.55), colors.kwh] },
+      outOfRange: {
+        color: clipHigh ? colors.kwh : withAlpha(theme.muted, 0.12),
+      },
     },
-    calendar: {
-      top: 36,
+    graphic: years.map((year, index) => ({
+      type: "text",
+      left: 0,
+      top: titleSpace + index * HEATMAP_YEAR_PITCH,
+      style: {
+        text: year,
+        fill: theme.muted,
+        fontSize: 11,
+        fontWeight: 600,
+      },
+    })),
+    calendar: years.map((year, index) => ({
+      top: titleSpace + 16 + index * HEATMAP_YEAR_PITCH,
       left: 28,
-      right: 12,
-      bottom: 44,
-      range,
-      cellSize: ["auto", 13],
-      itemStyle: {
-        // Empty days: faint hatch-like wash, distinct from mid-scale temperatures.
-        color: withAlpha(theme.muted, 0.06),
-        borderWidth: 2,
-        borderColor: withAlpha(theme.muted, 0.22),
-      },
+      right: 8,
+      range: year,
+      cellSize: ["auto", 11],
+      itemStyle: cellStyle,
       splitLine: { show: false },
-      dayLabel: { color: theme.muted, nameMap: "en", firstDay: 0 },
-      monthLabel: { color: theme.muted },
-      yearLabel: { show: false },
-    },
-    series: [
-      {
-        type: "heatmap",
-        coordinateSystem: "calendar",
-        data,
-        emphasis: heatmapCellEmphasis(theme),
+      dayLabel: {
+        show: index === 0,
+        color: theme.muted,
+        nameMap: "en",
+        firstDay: 0,
+        fontSize: 9,
+        margin: 4,
       },
-    ],
+      monthLabel: { color: theme.muted, fontSize: 10, margin: 4 },
+      yearLabel: { show: false },
+    })),
+    series: years.map((_, index) => ({
+      type: "heatmap",
+      coordinateSystem: "calendar",
+      calendarIndex: index,
+      data,
+      emphasis: heatmapCellEmphasis(theme),
+    })),
   };
-  return mount(host, option, { height: 210 });
+  const height = titleSpace + years.length * HEATMAP_YEAR_PITCH + 36;
+  return mount(host, option, { height, scale: false });
 }
 
 function countFinite(values) {

@@ -354,29 +354,29 @@ Every chart on `/pge` ends at published data (Pacific yesterday). Gallery charts
 
 - Where: `#cost-per-kwh` in Analytics.
 - Represents: Portal dollars per kWh by month.
-- Data: Monthly `consumption` and `cost`.
-- Window: The selected Usage range.
+- Data: Daily `consumption` and `cost`, summed by Pacific month.
+- Window: The `12mo` preset. Independent of the Usage range chip.
 
 #### Billed vs payments
 
 - Where: `#billed-paid` in Analytics.
 - Represents: Statement billed dollars against payments.
-- Data: `bill_amount` and `payment_amount`.
-- Window: Monthly, the selected Usage range.
+- Data: `bill_amount` and `payment_amount`, `period: "month"`.
+- Window: The `12mo` preset. Independent of the Usage range chip.
 
 #### kWh calendar
 
 - Where: `#heatmap-kwh` in Analytics.
 - Represents: One cell per day of imported kWh. A gray cell is a day with no imported sample.
-- Data: Daily `consumption`.
-- Window: The selected Usage range.
+- Data: Daily `consumption`. Every retained year is a row inside this one chart.
+- Window: All retained daily samples through published end. Independent of the Usage range chip. No downsampling.
 
 #### Temperature calendar
 
 - Where: `#heatmap-temp` in Analytics.
 - Represents: One cell per day of mean outdoor °F. A gray cell is a day with no temperature sample.
-- Data: Daily `temperature` means.
-- Window: The selected Usage range.
+- Data: Daily `temperature` means. Every retained year is a row inside this one chart.
+- Window: All retained daily samples through published end. Independent of the Usage range chip. No downsampling.
 
 #### Ledger dollars
 

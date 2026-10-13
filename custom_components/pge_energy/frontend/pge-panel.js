@@ -893,6 +893,11 @@ details.usage-accounting .usage-accounting-body { padding: 0 0 4px; }
   details.tariff-status-block { margin-top: 20px; }
 `;
 
+/** Daily calendars read every retained day, not the Usage chip. */
+const HEATMAP_HISTORY_START = new Date(Date.UTC(2000, 0, 1));
+/** Above any realistic daily backfill so LTTB cannot drop calendar days. */
+const HEATMAP_MAX_DAYS = 20000;
+
 class PgeEnergyPanel extends HTMLElement {
   constructor() {
     super();
@@ -1126,7 +1131,7 @@ class PgeEnergyPanel extends HTMLElement {
       </section>
       <section class="card" id="insights-cost">
         <h3>Cost intelligence</h3>
-        <p class="muted" style="margin:0 0 8px">Monthly average rate and statement billed vs payments.</p>
+        <p class="muted" style="margin:0 0 8px">Monthly average rate and statement billed vs payments, last 12 months.</p>
         <div class="insights-cost-grid">
           <div class="chart-host" id="cost-per-kwh"></div>
           <div class="chart-host" id="billed-paid"></div>
@@ -3068,9 +3073,14 @@ class PgeEnergyPanel extends HTMLElement {
       this.shadowRoot.getElementById("heatmap-temp")
     );
     const range = this._resolveChartRange();
+    // Monthly rate and statement bars need a year. The Usage chip defaults to
+    // 24h, which leaves this pair as an empty rate chart and one full-width bar.
+    const costRange = rangePresets()["12mo"];
+    const historyEnd = publishedDataEnd();
     const ids = account.statistic_ids;
     const colors = seriesColors(this);
-    const [kwhDay, tempDay, billAmt, payAmt, costDay] = await Promise.all([
+    const [kwhDay, tempDay, billAmt, payAmt, costDay, kwhForRate, kwhHistory, tempHistory] =
+      await Promise.all([
       fetchStatisticSeries(this._hass, ids.consumption, {
         start: range.start,
         end: range.end,
@@ -3084,22 +3094,40 @@ class PgeEnergyPanel extends HTMLElement {
         maxPoints: 400,
       }),
       fetchStatisticSeries(this._hass, ids.bill_amount, {
-        start: range.start,
-        end: range.end,
+        start: costRange.start,
+        end: costRange.end,
         period: "month",
         maxPoints: 48,
       }),
       fetchStatisticSeries(this._hass, ids.payment_amount, {
-        start: range.start,
-        end: range.end,
+        start: costRange.start,
+        end: costRange.end,
         period: "month",
         maxPoints: 48,
       }),
       fetchStatisticSeries(this._hass, ids.cost, {
-        start: range.start,
-        end: range.end,
+        start: costRange.start,
+        end: costRange.end,
         period: "day",
         maxPoints: 400,
+      }),
+      fetchStatisticSeries(this._hass, ids.consumption, {
+        start: costRange.start,
+        end: costRange.end,
+        period: "day",
+        maxPoints: 400,
+      }),
+      fetchStatisticSeries(this._hass, ids.consumption, {
+        start: HEATMAP_HISTORY_START,
+        end: historyEnd,
+        period: "day",
+        maxPoints: HEATMAP_MAX_DAYS,
+      }),
+      fetchStatisticSeries(this._hass, ids.temperature, {
+        start: HEATMAP_HISTORY_START,
+        end: historyEnd,
+        period: "day",
+        maxPoints: HEATMAP_MAX_DAYS,
       }),
     ]);
     if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) return;
@@ -3131,7 +3159,7 @@ class PgeEnergyPanel extends HTMLElement {
 
     const cpkHost = this.shadowRoot.getElementById("cost-per-kwh");
     if (cpkHost) {
-      const { xs, ys } = this._monthlyRateSeries(kwhDay, costDay);
+      const { xs, ys } = this._monthlyRateSeries(kwhForRate, costDay);
       const chart = await createLineChart(cpkHost, {
         xs,
         ys,
@@ -3157,13 +3185,13 @@ class PgeEnergyPanel extends HTMLElement {
     }
 
     const hmKwh = await renderHeatmap(this.shadowRoot.getElementById("heatmap-kwh"), {
-      xs: kwhDay.xs,
-      ys: kwhDay.values,
+      xs: kwhHistory.xs,
+      ys: kwhHistory.values,
       title: "Daily kWh (imported history)",
     });
     const hmTemp = await renderHeatmap(this.shadowRoot.getElementById("heatmap-temp"), {
-      xs: tempDay.xs,
-      ys: tempDay.means,
+      xs: tempHistory.xs,
+      ys: tempHistory.means,
       diverging: true,
       title: "Daily avg temperature (imported history)",
     });
