@@ -163,6 +163,15 @@ def test_charts_js_exports_gallery_wrappers():
         assert f"export async function {name}" in source
 
 
+def test_figures_have_explainer_and_expand():
+    source = PANEL_JS.read_text(encoding="utf-8")
+    assert "data-headline-for" in source
+    assert "What this shows" in source
+    assert 'class="fig-expand"' in source
+    charts = CHARTS_JS.read_text(encoding="utf-8")
+    assert ".fig-title, h3" in charts
+
+
 def test_more_charts_hold_load_shape_overlaps():
     source = PANEL_JS.read_text(encoding="utf-8")
     start = source.index('data-section="more-charts"')

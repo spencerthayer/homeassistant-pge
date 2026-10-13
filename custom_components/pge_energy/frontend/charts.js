@@ -252,10 +252,9 @@ function responsiveChartHeight(base) {
 
 function chartDescription(host) {
   const figure = host.closest?.("figure");
-  const title = figure?.querySelector("h3")?.textContent?.trim();
-  const caption = figure?.querySelector("p")?.textContent?.trim();
-  const text = [title, caption].filter(Boolean).join(". ");
-  return text || host.id || "PGE chart";
+  const title = figure?.querySelector(".fig-title, h3")?.textContent?.trim();
+  const caption = figure?.querySelector("dd, p")?.textContent?.trim();
+  return [title, caption].filter(Boolean).join(". ") || host.id || "PGE chart";
 }
 
 /** Reserve space for tick labels on every grid. Does not mutate the input. */

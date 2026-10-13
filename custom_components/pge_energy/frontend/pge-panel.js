@@ -452,7 +452,13 @@ details.sync-gaps-panel {
   gap: var(--pge-space-4, 16px);
 }
 .chart-gallery figure { margin: 0; }
-.fig-wide { grid-column: 1 / -1; }
+.fig-head { display: flex; align-items: flex-start; gap: var(--pge-space-2, 8px); }
+.fig-titles { flex: 1; min-width: 0; }
+.fig-title { margin: 2px 0 0; font: var(--pge-text-headline); }
+.fig-info { margin-left: auto; }
+.fig-expand { border: 0; background: transparent; color: var(--primary-text-color); cursor: pointer; }
+.chart-card { margin: 0; }
+
 .chart-gallery h3 { margin: 0 0 4px; font-size: 1rem; }
 .chart-host.usage-combo { min-height: 380px; }
 .chart-host.scatter-wide { min-height: 300px; }
@@ -1345,14 +1351,14 @@ class PgeEnergyPanel extends HTMLElement {
       </section>
       <details class="chart-gallery" data-section="more-charts" data-persist="chart_gallery_more"${this._detailsOpenAttr("chart_gallery_more")}>
         <summary><span class="rollup-title">More charts</span></summary>
-        <figure data-chart="chart-fingerprint"><h3>Day fingerprint</h3><p class="muted">Axes: kWh, peak hour, mean °F, on-peak share, portal cents per kWh.</p><div class="chart-host" id="chart-fingerprint"></div></figure>
-        <figure data-chart="chart-ridgelines"><h3>Monthly ridgelines</h3><p class="muted">Horizontal: Pacific hour. Vertical: mean kWh, offset by month.</p><div class="chart-host" id="chart-ridgelines"></div></figure>
-        <figure data-chart="chart-daypart-stream"><h3>Daypart stream</h3><p class="muted">Horizontal: date. Bands: overnight, morning, afternoon, evening.</p><div class="chart-host" id="chart-daypart-stream"></div></figure>
-        <figure data-chart="chart-published-week"><h3>Published week</h3><p class="muted">Horizontal: Pacific hour. Vertical: kWh for the latest closed Pacific week.</p><div class="chart-host" id="chart-published-week"></div></figure>
-        <figure data-chart="chart-program-savings"><h3>Program savings</h3><p class="muted">Horizontal: time. Vertical: dollars. Source: YTD program savings mean.</p><div class="chart-host" id="chart-program-savings"></div></figure>
-        <figure data-chart="chart-baseload"><h3>Baseload band</h3><p class="muted">Weekday average by hour with the overnight minimum.</p><div class="chart-host" id="chart-baseload"></div></figure>
-        <figure data-chart="chart-polar"><h3>24-hour clock</h3><p class="muted">Average weekday use around a 24-hour dial.</p><div class="chart-host" id="chart-polar"></div></figure>
-        <figure data-chart="chart-treemap"><h3>Latest statement treemap</h3><p class="muted">Each block is that charge's share of the latest bill.</p><div class="chart-host" id="chart-treemap"></div></figure>
+        ${this._figure("chart-fingerprint", { eyebrow: "Day fingerprint", title: "Day fingerprint", what: "Each line is a day: energy, peak hour, temperature, on-peak share, and price.", how: "Lines that sit apart from the pack were unusual days.", why: "It shows which days were odd without opening each one.", source: "Imported hourly consumption, cost, and temperature." })}
+        ${this._figure("chart-ridgelines", { eyebrow: "Monthly ridgelines", title: "Monthly ridgelines", what: "Average hourly use for each month, stacked.", how: "Each ridge is one month. Higher means more use at that hour.", why: "You can see how the day shifts across the year.", source: "Imported hourly consumption." })}
+        ${this._figure("chart-daypart-stream", { eyebrow: "Daypart stream", title: "Daypart stream", what: "How your use splits across parts of the day over time.", how: "The bands are overnight, morning, afternoon, and evening.", why: "A band that grows is a part of the day that is taking more of your energy.", source: "Imported hourly consumption." })}
+        ${this._figure("chart-published-week", { eyebrow: "Published week", title: "Published week", what: "Each day of the last full week, hour by hour.", how: "Compare the days side by side.", why: "Last week is the freshest complete week PGE has published.", source: "Imported hourly consumption for the latest closed Pacific week." })}
+        ${this._figure("chart-program-savings", { eyebrow: "Program savings", title: "Program savings", what: "Year-to-date savings reported by PGE programs.", how: "The line is the reported year-to-date amount, not a sum of bills.", why: "It is the savings figure PGE publishes, separate from your usage estimate.", source: "YTD program savings mean." })}
+        ${this._figure("chart-baseload", { eyebrow: "Baseload band", title: "Baseload band", what: "Weekday average by hour with your overnight minimum as a line.", how: "The line is the lowest overnight hour in the weekday average.", why: "Anything above that line is use that turns on and off.", source: "Imported hourly consumption." })}
+        ${this._figure("chart-polar", { eyebrow: "24-hour polar clock", title: "24-hour polar clock", what: "Average weekday use around a 24-hour dial.", how: "Noon is at the top. Longer bars are hours you use more.", why: "A clock makes the daily rhythm easier to see than a list of hours.", source: "Imported hourly consumption." })}
+        ${this._figure("chart-treemap", { eyebrow: "Latest statement treemap", title: "Latest statement treemap", what: "Each block's size is that charge's share of the latest bill.", how: "Bigger blocks are a larger share of the latest statement.", why: "You can see what dominated the last bill without reading every line.", source: "Latest PDF statement families." })}
       </details>
       </div>
       <div class="tab-panel" id="panel-billing" data-tab="billing" role="tabpanel" aria-labelledby="tab-billing">
@@ -2394,12 +2400,40 @@ class PgeEnergyPanel extends HTMLElement {
     void this._renderUsageStats();
   }
 
+  _figure(id, { eyebrow, title, what, how, why, source, wide = false, extra = "", note = false }) {
+    const esc = (value) => this._escape(String(value ?? ""));
+    const definition = (term, text) => `<dt>${esc(term)}</dt><dd>${esc(text)}</dd>`;
+    return `<figure class="chart-card ${wide ? "fig-wide" : ""}" data-figure="${esc(id)}" data-chart="${esc(id)}">
+      <div class="fig-head">
+        <div class="fig-titles"><span class="eyebrow">${esc(eyebrow)}</span>
+          <h3 class="fig-title" data-headline-for="${esc(id)}">${esc(title)}</h3></div>
+        <details class="fig-info"><summary aria-label="About this chart">
+          <ha-icon icon="mdi:information-outline"></ha-icon></summary>
+          <dl>${definition("What this shows", what)}${definition("How to read it", how)}
+            ${definition("Why it matters", why)}${definition("Data source", source)}</dl>
+        </details>
+        <button type="button" class="fig-expand" data-expand="${esc(id)}" aria-label="Expand ${esc(title)}" disabled>
+          <ha-icon icon="mdi:arrow-expand"></ha-icon></button>
+      </div>
+      ${extra}
+      ${note ? `<p class="fig-note muted"></p>` : ""}
+      <div class="chart-host" id="${esc(id)}"></div>
+    </figure>`;
+  }
+
   _loadShapeGalleryHtml() {
     const wide = new Set(["chart-spread", "chart-baseload-history"]);
     const figure = (id, title, caption) =>
-      `<figure class="${wide.has(id) ? "fig-wide" : ""}" data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
-        caption
-      )}</p><div class="chart-host" id="${id}"></div></figure>`;
+      this._figure(id, {
+        eyebrow: title,
+        title,
+        what: caption,
+        how: "Read the horizontal axis as time or category and the vertical axis as the amount. A gap means that sample was not published.",
+        why: "The shape of your own history is easier to see than a table of the same numbers.",
+        source: caption,
+        wide: wide.has(id),
+        note: id === "chart-baseload-history",
+      });
     return `
       <details class="chart-gallery" data-persist="chart_gallery_load"${this._detailsOpenAttr("chart_gallery_load")}>
         <summary><span class="rollup-title">Load shape</span></summary>
@@ -2411,7 +2445,7 @@ class PgeEnergyPanel extends HTMLElement {
         ${figure("chart-spread", "Daily spread", "Horizontal: date. Vertical: daily kWh. Lines: mean and mean plus or minus two standard deviations. Source: imported daily consumption.")}
         ${figure("chart-duck", "Duck curve", "Horizontal: Pacific hour. Vertical: kWh. Import and export. Shown only when the account has returned energy.")}
         ${figure("chart-duck-months", "Duck curve by month", "Horizontal: month. Vertical: kWh and dollars. Import, export, PGE usage estimate, and export compensation.")}
-        <figure class="fig-wide" data-chart="chart-baseload-history"><h3>Always-on load history</h3><p class="muted">Horizontal: date. Vertical: minimum kWh in Pacific hours 0 through 5. Markers are steps. Yearly cost uses the trailing 365-day PGE usage estimate.</p><p class="fig-note muted"></p><div class="chart-host" id="chart-baseload-history"></div></figure>
+        ${figure("chart-baseload-history", "Always-on load history", "Horizontal: date. Vertical: minimum kWh in Pacific hours 0 through 5. Markers are steps. Yearly cost uses the trailing 365-day PGE usage estimate.")}
       </details>`;
   }
 
@@ -2434,9 +2468,16 @@ class PgeEnergyPanel extends HTMLElement {
   _todGalleryHtml() {
     const wide = new Set(["chart-tod-stacked"]);
     const figure = (id, title, caption) =>
-      `<figure class="${wide.has(id) ? "fig-wide" : ""}" data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
-        caption
-      )}</p><div class="chart-host" id="${id}"></div></figure>`;
+      this._figure(id, {
+        eyebrow: title,
+        title,
+        what: caption,
+        how: "Read the horizontal axis as time or category and the vertical axis as the amount. A gap means that sample was not published.",
+        why: "The shape of your own history is easier to see than a table of the same numbers.",
+        source: caption,
+        wide: wide.has(id),
+        note: id === "chart-baseload-history",
+      });
     return `
       <details class="chart-gallery" data-persist="chart_gallery_tod"${this._detailsOpenAttr("chart_gallery_tod")}>
         <summary><span class="rollup-title">Charts</span></summary>
@@ -2482,9 +2523,16 @@ class PgeEnergyPanel extends HTMLElement {
   _weatherGalleryHtml() {
     const wide = new Set(["chart-degree-days", "chart-weather-counterfactual"]);
     const figure = (id, title, caption) =>
-      `<figure class="${wide.has(id) ? "fig-wide" : ""}" data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
-        caption
-      )}</p><div class="chart-host" id="${id}"></div></figure>`;
+      this._figure(id, {
+        eyebrow: title,
+        title,
+        what: caption,
+        how: "Read the horizontal axis as time or category and the vertical axis as the amount. A gap means that sample was not published.",
+        why: "The shape of your own history is easier to see than a table of the same numbers.",
+        source: caption,
+        wide: wide.has(id),
+        note: id === "chart-baseload-history",
+      });
     return `
       ${figure("chart-degree-days", "Degree days vs kWh", "Horizontal: date. Vertical: kWh and degree days at a 65 °F base. Source: daily imported consumption and mean outdoor temperature.")}
       ${figure("chart-temp-bins", "Temperature bins", "Horizontal: outdoor temperature band. Vertical: mean daily kWh. Source: daily imported consumption and mean outdoor temperature.")}
@@ -2495,9 +2543,16 @@ class PgeEnergyPanel extends HTMLElement {
   _billingGalleryHtml() {
     const wide = new Set(["chart-statement-portal", "chart-bill-imported", "chart-balance-due"]);
     const figure = (id, title, caption) =>
-      `<figure class="${wide.has(id) ? "fig-wide" : ""}" data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
-        caption
-      )}</p><div class="chart-host" id="${id}"></div></figure>`;
+      this._figure(id, {
+        eyebrow: title,
+        title,
+        what: caption,
+        how: "Read the horizontal axis as time or category and the vertical axis as the amount. A gap means that sample was not published.",
+        why: "The shape of your own history is easier to see than a table of the same numbers.",
+        source: caption,
+        wide: wide.has(id),
+        note: id === "chart-baseload-history",
+      });
     return `
       <details class="chart-gallery" data-persist="chart_gallery_billing"${this._detailsOpenAttr("chart_gallery_billing")}>
         <summary><span class="rollup-title">Charts</span></summary>
@@ -2558,9 +2613,14 @@ class PgeEnergyPanel extends HTMLElement {
 
   _pdfGalleryHtml() {
     const figure = (id, title, caption) =>
-      `<figure data-chart="${id}"><h3>${this._escape(title)}</h3><p class="muted">${this._escape(
-        caption
-      )}</p><div class="chart-host" id="${id}"></div></figure>`;
+      this._figure(id, {
+        eyebrow: title,
+        title,
+        what: caption,
+        how: "Read the horizontal axis as time or category and the vertical axis as the amount. A gap means that sample was not published.",
+        why: "The shape of your own history is easier to see than a table of the same numbers.",
+        source: caption,
+      });
     return `
       <details class="chart-gallery" data-persist="chart_gallery_pdf"${this._detailsOpenAttr("chart_gallery_pdf")}>
         <summary><span class="rollup-title">Bill PDF</span></summary>
