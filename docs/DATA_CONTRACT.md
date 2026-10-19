@@ -116,10 +116,10 @@ Published statistics:
 
 | Direction | External statistic | Notes |
 | --- | --- | --- |
-| Grid import | `pge_energy:<account_key>_consumption` | non-negative; HA Energy “imported from grid”; display name `PGE <account> consumption` |
-| Grid export | `pge_energy:<account_key>_return` | non-negative; HOURLY signed rows only |
-| Import cost | `pge_energy:<account_key>_cost` | `max(0, amount)` |
-| Export compensation | `pge_energy:<account_key>_compensation` | only when hourly `kwh < 0` and `amount < 0` |
+| Grid import | `pge_energy:<account_key>_consumption` | non-negative; HA Energy grid consumption; display name `PGE <account> grid consumption`. Sensor label `Lifetime import` (`sensor.pge_<account>_energy`) is the lifetime total. |
+| Grid export | `pge_energy:<account_key>_return` | non-negative; HOURLY signed rows only; display name `PGE <account> return to grid`. Sensor label `Lifetime export`. |
+| Import cost | `pge_energy:<account_key>_cost` | `max(0, amount)`; display name `PGE <account> energy cost`. Sensor label `Lifetime cost`. |
+| Export compensation | `pge_energy:<account_key>_compensation` | only when hourly `kwh < 0` and `amount < 0`; display name `PGE <account> export compensation`. Sensor label `Lifetime compensation`. |
 
 A one-time Store-gated migration (`signed_usage_split_migration_done`) rewrites proven fine-grained negative `_consumption` / `_cost` states into `_return` / `_compensation`. Coarse monthly lumps are left alone when source grain cannot be proven.
 

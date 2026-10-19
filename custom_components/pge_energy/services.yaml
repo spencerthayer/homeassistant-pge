@@ -109,3 +109,56 @@ reparse_bill_pdfs:
       required: false
       selector:
         text:
+
+set_ptr_event:
+  name: Set Peak Time Rebate event
+  description: >
+    Schedule a manual Peak Time Event window (Pacific time) from the PGE day-before
+    email/text notice. The ptr_event_active binary sensor will flip on at the start
+    time and off at the end time. Duration must be 1-8 hours.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: true
+      selector:
+        text:
+    start_date:
+      name: Start (Pacific)
+      description: ISO datetime for the event start (e.g. 2026-08-19T17:00:00-07:00).
+      required: true
+      selector:
+        text:
+    end_date:
+      name: End (Pacific)
+      description: ISO datetime for the event end (e.g. 2026-08-19T21:00:00-07:00).
+      required: true
+      selector:
+        text:
+    label:
+      name: Label
+      description: Optional label for the event (e.g. "Heat wave").
+      required: false
+      selector:
+        text:
+
+clear_ptr_event:
+  name: Clear Peak Time Rebate event
+  description: Remove the scheduled Peak Time Event window for a config entry.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: true
+      selector:
+        text:
+
+acknowledge_ptr_event:
+  name: Acknowledge Peak Time Rebate detection
+  description: >
+    Acknowledge a detected PTR event date (from GraphQL) so the ptr_event_detected
+    binary sensor turns off. Copies the date into the seen set.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: true
+      selector:
+        text:

@@ -64,6 +64,7 @@ from .models import (
     tip_intervals_to_store,
 )
 from .options import get_entry_option, resolve_polling_timedelta
+from .ptr_events import PtrEventCoordinator
 from .statistics import (
     async_import_with_baseline,
     async_refresh_lifetime_totals,
@@ -213,6 +214,8 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Time of Day pricing coordinator (transition wake-ups + rate card).
         self.tod = TodPricingCoordinator(hass, entry, self)
+        # Peak Time Rebate event coordinator (manual schedule + detection).
+        self.ptr = PtrEventCoordinator(hass, entry, self)
 
     @property
     def has_retained_state(self) -> bool:
@@ -524,6 +527,16 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_stop_tod(self) -> None:
         await self.tod.async_stop()
+
+    async def async_start_ptr(self) -> None:
+        """Start the PTR event coordinator (window timers + detection state)."""
+        try:
+            await self.ptr.async_start()
+        except Exception as exc:  # noqa: BLE001 - PTR is soft-fail, never breaks setup
+            _LOGGER.warning("PTR event coordinator start failed for %s: %s", self.account_key[:8], exc)
+
+    async def async_stop_ptr(self) -> None:
+        await self.ptr.async_stop()
 
     async def async_set_tod_snapshot(self, snapshot: TodSnapshot | None) -> None:
         """Replace the portal TOD snapshot, persist, and refresh the rate card."""

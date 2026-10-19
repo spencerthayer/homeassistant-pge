@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
-VERSION = "0.11.0"
+VERSION = "0.12.1"
 PLATFORMS = ["sensor", "binary_sensor"]
 
 # Custom panel (registered once per HA instance, not per entry).
@@ -211,6 +211,12 @@ STATISTIC_ID_SUFFIX_LAST_PAYMENT_AMOUNT = "_last_payment_amount"
 # Entity unique-id suffixes (entity_id ≈ sensor.pge_<account>_<name>).
 # Long-term history for energy/cost/temperature is mirrored onto these entity
 # statistic_ids in addition to external pge_energy:… statistics.
+# Friendly names stay distinct from external Energy labels (issue #37).
+ENTITY_NAME_LIFETIME_IMPORT = "Lifetime import"
+ENTITY_NAME_LIFETIME_EXPORT = "Lifetime export"
+ENTITY_NAME_LIFETIME_COST = "Lifetime cost"
+ENTITY_NAME_LIFETIME_COMPENSATION = "Lifetime compensation"
+ENTITY_NAME_OUTDOOR_TEMPERATURE = "Outdoor temperature"
 ENTITY_UNIQUE_ENERGY = "energy"
 ENTITY_UNIQUE_RETURN = "return"
 ENTITY_UNIQUE_COST = "cost"
@@ -258,6 +264,12 @@ ENTITY_UNIQUE_BILLING_CYCLE_TOTAL_DAYS = "billing_cycle_total_days"
 # Programs detail sensors.
 ENTITY_UNIQUE_NEXT_PTR_EVENT_DATE = "next_ptr_event_date"
 ENTITY_UNIQUE_NET_METERING = "net_metering"
+
+# Peak Time Rebate event sensors (manual schedule + GraphQL detection).
+ENTITY_UNIQUE_PTR_EVENT_ACTIVE = "ptr_event_active"
+ENTITY_UNIQUE_PTR_EVENT_DETECTED = "ptr_event_detected"
+ENTITY_UNIQUE_PTR_EVENT_START = "ptr_event_start"
+ENTITY_UNIQUE_PTR_EVENT_END = "ptr_event_end"
 
 # Billing / programs binary sensor entity unique-id suffixes.
 BINARY_UNIQUE_AUTOPAY = "autopay"
@@ -392,3 +404,15 @@ MANUAL_SYNC_ACTION_REFRESH = "refresh"
 MANUAL_SYNC_ACTION_BACKFILL = "backfill"
 
 OPERATION_NAME = "GetUsageCompare"
+
+# Peak Time Rebate event alerts (domain events on pge_energy_alert).
+ALERT_PTR_EVENT_DETECTED = "ptr_event_detected"
+ALERT_PTR_EVENT_STARTING = "ptr_event_starting"
+ALERT_PTR_EVENT_ACTIVE = "ptr_event_active"
+ALERT_PTR_EVENT_ENDED = "ptr_event_ended"
+
+# PTR event window validation (Pacific-local hours).
+PTR_EVENT_MIN_DURATION_HOURS = 1
+PTR_EVENT_MAX_DURATION_HOURS = 8
+PTR_EVENT_MAX_PAST_DAYS = 7
+PTR_EVENT_STARTING_WARN_MINUTES = 15
