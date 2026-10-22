@@ -8,7 +8,6 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from .bill_pdf_statistics import BILL_PDF_METRIC_SUFFIXES
@@ -121,6 +120,7 @@ from .const import (
     WS_SETUP_KEY,
 )
 from .coordinator import PGECoordinator
+from .device_lookup import async_device_for_entry
 from .options import get_entry_option
 from .tod_pricing import (
     resolve_basic_from_catalog,
@@ -262,7 +262,7 @@ def _account_payload(hass: HomeAssistant, entry_id: str, coordinator: PGECoordin
     entry = coordinator.entry
     account_key = entry.data.get(CONF_ACCOUNT_KEY) or coordinator.account_key
     account_id = entry.data.get(CONF_ACCOUNT_ID) or coordinator.account_id
-    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, account_key)})
+    device = async_device_for_entry(hass, entry_id, account_key)
     return {
         "entry_id": entry_id,
         "title": entry.title,
