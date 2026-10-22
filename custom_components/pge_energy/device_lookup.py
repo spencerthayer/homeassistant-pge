@@ -12,9 +12,10 @@ from .const import DOMAIN
 def async_device_for_entry(hass: HomeAssistant, entry_id: str, account_key: str) -> dr.DeviceEntry | None:
     """Return the PGE device owned by one config entry.
 
-    Home Assistant 2026.8 made identifiers unique per config entry and deprecated
-    ``async_get_device``. Older releases have no per-entry lookup, so keep the
-    registry-wide call as a fallback until the test pin moves past 2026.7.
+    Home Assistant 2026.8 added the per-entry lookup and made identifiers unique
+    per config entry; 2026.9 deprecated ``async_get_device``. Keep the
+    registry-wide call for the 2026.7 minimum in hacs.json until that minimum
+    moves to 2026.8 or newer.
     """
     registry = dr.async_get(hass)
     get_by_identifier = getattr(registry, "async_get_device_by_identifier", None)

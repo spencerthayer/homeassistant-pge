@@ -123,7 +123,7 @@ Bare `homeassistant.restart` from the UI **exits** this process (no Supervisor) 
 | `tod_schedule.py` / `tod_pricing.py` | Offline E-TOU schedule engine (3 periods, weekday Pacific windows, observed holidays) + rate-card resolution (override → catalog → portal snapshot → defaults) and transition coordinator |
 | `tod_tariff.py` / `tariff_sources.py` / `tariff_store.py` / `tariff_updater.py` | On-device tariff catalog: effective-dated TOD + Basic rates auto-discovered from PGE public Gatsby page-data and PDF sources, with bundled seed rates, supersession audit trail, and domain-global coordinator |
 | `coordinator.py` | Polling from options, correction window, import lock, billing hook, TOD transition watchdog, tariff updater lifecycle |
-| `device_lookup.py` | Entry-scoped device lookup: `async_get_device_by_identifier` on HA 2026.8+, registry-wide fallback on the pinned 2026.7 test env |
+| `device_lookup.py` | Entry-scoped device lookup: `async_get_device_by_identifier` on HA 2026.8+, registry-wide fallback for the 2026.7 minimum in `hacs.json` |
 | `options.py` | Option helpers, history bounds, tier date ranges, polling conversion |
 | `backfill.py` | Tiered hourly→daily→monthly history import |
 | `statistics.py` | External stats (`pge_energy:…`) + mirror onto sensor entity stats (`sensor.pge_…`) |
