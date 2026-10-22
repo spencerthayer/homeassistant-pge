@@ -61,7 +61,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.12.1";
+} from "./data.js?v=0.12.2";
 import {
   baseloadFloor,
   cycleCumulative,
@@ -103,8 +103,8 @@ import {
   lineItemShares,
   treemapSlices,
   waterfallSteps,
-} from "./chart-series.js?v=0.12.1";
-import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.1";
+} from "./chart-series.js?v=0.12.2";
+import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.2";
 import {
   createBarChart,
   createLineChart,
@@ -114,9 +114,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.12.1";
-import { sparklineSvg } from "./svg-helpers.js?v=0.12.1";
-import { applyPanelTheme, todColors } from "./theme.js?v=0.12.1";
+} from "./charts.js?v=0.12.2";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.2";
+import { applyPanelTheme, todColors } from "./theme.js?v=0.12.2";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {

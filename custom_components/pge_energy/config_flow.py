@@ -765,7 +765,7 @@ class PGEOptionsFlow(config_entries.OptionsFlow):
         coordinator = self.hass.data.get(DOMAIN, {}).get(entry.entry_id)
         path = None
         if coordinator is not None:
-            path = pge_pkg.async_device_progress_path(self.hass, coordinator.account_key)
+            path = pge_pkg.async_device_progress_path(self.hass, entry.entry_id, coordinator.account_key)
         link = f"[View progress]({path})" if path else "Open the PGE device page to view progress."
 
         if coordinator is not None and coordinator.sync_job_in_progress:
