@@ -196,6 +196,117 @@ def test_parse_tod_page_data_rejects_wrong_rate_order():
     assert result.errors
 
 
+def _tod_page_data_no_as_of() -> dict:
+    """Like _tod_page_data() but the CTA shortDescription has no 'As of' date,
+    simulating PGE's current page structure (Oct 2026)."""
+    return {
+        "result": {
+            "data": {
+                "allContentfulPageBasic": {
+                    "nodes": [
+                        {
+                            "contentEntries": [
+                                {
+                                    "__typename": "ContentfulElementCta",
+                                    "shortDescription": {
+                                        "raw": json.dumps(
+                                            _rich_text(
+                                                "Time of Day prices: save by using less energy during "
+                                                "high demand hours."
+                                            )
+                                        )
+                                    },
+                                },
+                                {
+                                    "__typename": "ContentfulModuleAccordion",
+                                    "accordionItems": [
+                                        {
+                                            "tabBody": {
+                                                "raw": json.dumps(
+                                                    {
+                                                        "nodeType": "document",
+                                                        "data": {},
+                                                        "content": [
+                                                            {
+                                                                "nodeType": "paragraph",
+                                                                "data": {},
+                                                                "content": [
+                                                                    {
+                                                                        "nodeType": "text",
+                                                                        "value": "Off-Peak: 8.93¢ per kWh",
+                                                                        "marks": [],
+                                                                        "data": {},
+                                                                    }
+                                                                ],
+                                                            },
+                                                            {
+                                                                "nodeType": "paragraph",
+                                                                "data": {},
+                                                                "content": [
+                                                                    {
+                                                                        "nodeType": "text",
+                                                                        "value": "Mid-Peak: 16.70¢ per kWh",
+                                                                        "marks": [],
+                                                                        "data": {},
+                                                                    }
+                                                                ],
+                                                            },
+                                                            {
+                                                                "nodeType": "paragraph",
+                                                                "data": {},
+                                                                "content": [
+                                                                    {
+                                                                        "nodeType": "text",
+                                                                        "value": "On-Peak: 43.13¢ per kWh",
+                                                                        "marks": [],
+                                                                        "data": {},
+                                                                    }
+                                                                ],
+                                                            },
+                                                        ],
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    ],
+                                },
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+
+def test_parse_tod_page_data_no_as_of_date_still_extracts_rates():
+    """PGE's current TOD page has no 'As of' date text; rates must still be extracted."""
+    result = parse_tod_page_data(_tod_page_data_no_as_of())
+    assert len(result.rows) == 1
+    row = result.rows[0]
+    assert row.off_peak == 0.0893
+    assert row.mid_peak == 0.167
+    assert row.on_peak == 0.4313
+    # The missing "As of" date is a non-fatal warning, not a hard error
+    assert any("As of" in e or "as of" in e.lower() for e in result.errors)
+    # effective_from falls back to today's Pacific date
+    from custom_components.pge_energy.time_util import today_local
+
+    assert row.effective_from == today_local().isoformat()
+
+
+def test_parse_tod_page_data_no_as_of_date_no_rates_fails():
+    """If neither 'As of' date nor rates are present, parsing still fails."""
+    data = _tod_page_data_no_as_of()
+    # Strip rate values entirely
+    data["result"]["data"]["allContentfulPageBasic"]["nodes"][0]["contentEntries"][1]["accordionItems"][0]["tabBody"][
+        "raw"
+    ] = json.dumps(_rich_text("No rate information available."))
+    result = parse_tod_page_data(data)
+    assert result.rows == []
+    assert result.errors
+
+
 def test_find_document_lists_new_typename():
     data = _tariff_page_data()
     lists = _find_document_lists(data)
