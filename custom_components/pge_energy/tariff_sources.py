@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .const import PGE_TARIFF_PAGE_DATA_URL, PGE_TOD_PAGE_DATA_URL
+from .time_util import today_local
 from .tod_tariff import (
     BasicComparisonRow,
     SourceInfo,
@@ -181,18 +182,20 @@ def parse_tod_page_data(raw_json: dict[str, Any]) -> TodSourceResult:
     # Extract all text nodes from the page-data
     all_text = "\n".join(_extract_text_nodes(raw_json))
 
-    # Find "As of" date
+    # Find "As of" date. PGE's page may omit this; fall back to today's
+    # Pacific date so rate extraction can still proceed.
     date_match = _AS_OF_PATTERN.search(all_text)
-    if not date_match:
-        errors.append("No 'As of' date found in TOD page-data")
-        return TodSourceResult(rows=rows, errors=errors)
-
-    as_of_str = date_match.group(1)
-    try:
-        effective_date = _parse_as_of_date(as_of_str)
-    except ValueError as exc:
-        errors.append(f"Cannot parse 'As of' date {as_of_str!r}: {exc}")
-        return TodSourceResult(rows=rows, errors=errors)
+    if date_match:
+        as_of_str = date_match.group(1)
+        try:
+            effective_date = _parse_as_of_date(as_of_str)
+        except ValueError as exc:
+            errors.append(f"Cannot parse 'As of' date {as_of_str!r}: {exc}")
+            return TodSourceResult(rows=rows, errors=errors)
+    else:
+        errors.append("No 'As of' date found in TOD page-data; using current date")
+        _LOGGER.warning("No 'As of' date found in TOD page-data; using current date")
+        effective_date = today_local().isoformat()
 
     # Find cents-per-kWh values
     off_match = _RATE_PATTERN.search(all_text)

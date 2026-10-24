@@ -3,11 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 
 from custom_components.pge_energy.exceptions import (
     PGEAuthenticationError,
     PGECaptchaUnsupportedError,
+    PGEConnectionError,
     PGEMfaUnsupportedError,
     PGERateLimitError,
 )
@@ -106,6 +108,48 @@ def _mock_session_post(responses: list[tuple[int, dict]]):
 
     def _post(url, **kwargs):  # noqa: ANN003
         assert queue, f"unexpected request to {url}"
+        status, payload = queue.pop(0)
+        return _Resp(status, payload)
+
+    session.post = MagicMock(side_effect=_post)
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    return session
+
+
+def _mock_session_post_with_connection_errors(num_initial_errors: int, responses: list[tuple[int, dict]]):
+    """Build a session mock that raises aiohttp.ClientError on the first
+    ``num_initial_errors`` post() calls, then returns queued responses.
+    Used to test exponential-backoff retry behavior for connection errors.
+    """
+    queue = list(responses)
+    call_count = [0]
+
+    class _Resp:
+        def __init__(self, status: int, payload: dict):
+            self.status = status
+            self._payload = payload
+
+        async def json(self, content_type=None):  # noqa: ANN001
+            return self._payload
+
+        async def text(self) -> str:
+            return ""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):  # noqa: ANN002
+            return False
+
+    session = MagicMock()
+
+    def _post(url, **kwargs):  # noqa: ANN003
+        call_count[0] += 1
+        if call_count[0] <= num_initial_errors:
+            raise aiohttp.ClientError("connection refused")
+        if not queue:
+            raise AssertionError(f"unexpected request to {url}")
         status, payload = queue.pop(0)
         return _Resp(status, payload)
 
@@ -328,6 +372,152 @@ class TestLoginOrRefresh:
             )
         assert result.access_token == "apigee-from-password"
         assert result.refresh_credential == "refresh-from-password"
+
+    @pytest.mark.asyncio
+    async def test_connection_error_retries_then_succeeds(self):
+        """ClientConnectorError is retried; succeeds on the second attempt."""
+        session = _mock_session_post_with_connection_errors(
+            num_initial_errors=1,
+            responses=[
+                (
+                    200,
+                    {
+                        "AuthenticationResult": {
+                            "IdToken": "id.jwt.token",
+                            "AccessToken": "access.jwt.token",
+                            "RefreshToken": "refresh-token-value",
+                            "ExpiresIn": 3600,
+                            "TokenType": "Bearer",
+                        }
+                    },
+                ),
+                (200, {"access_token": "apigee-bearer", "expires_at": 1893456000}),
+                (
+                    200,
+                    {
+                        "data": {
+                            "getAccountInfo": {
+                                "encryptedPersonId": "enc-person",
+                                "groups": [
+                                    {
+                                        "defaultAccount": {
+                                            "accountNumber": "0000000000",
+                                            "encryptedPersonId": "enc-person",
+                                        }
+                                    }
+                                ],
+                            }
+                        }
+                    },
+                ),
+            ],
+        )
+        with (
+            patch(
+                "custom_components.pge_energy.portal_auth.aiohttp.ClientSession",
+                return_value=session,
+            ),
+            patch(
+                "custom_components.pge_energy.portal_auth.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as mock_sleep,
+        ):
+            result = await async_login_or_refresh(
+                email="user@example.com",
+                password="secret",
+                refresh_credential=None,
+            )
+        assert result.access_token == "apigee-bearer"
+        assert result.account_ids == ["0000000000"]
+        # One connection error → one retry → one sleep with exponential backoff
+        assert mock_sleep.call_count == 1
+        delay = mock_sleep.call_args[0][0]
+        assert delay == 1  # first retry: 2^0 = 1s
+
+    @pytest.mark.asyncio
+    async def test_connection_error_exhausts_retries(self):
+        """After the max connection-error retries, raises PGEConnectionError."""
+        session = _mock_session_post_with_connection_errors(
+            num_initial_errors=5,
+            responses=[],
+        )
+        with (
+            patch(
+                "custom_components.pge_energy.portal_auth.aiohttp.ClientSession",
+                return_value=session,
+            ),
+            patch(
+                "custom_components.pge_energy.portal_auth.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+            pytest.raises(PGEConnectionError),
+        ):
+            await async_login_or_refresh(
+                email="user@example.com",
+                password="secret",
+                refresh_credential=None,
+            )
+        # 5 connection errors → 5 Cognito post calls, 4 sleeps between them
+        assert session.post.call_count == 5
+
+    @pytest.mark.asyncio
+    async def test_connection_error_uses_exponential_backoff(self):
+        """Backoff delays follow 1s, 2s, 4s, 8s across 5 failed attempts."""
+        session = _mock_session_post_with_connection_errors(
+            num_initial_errors=5,
+            responses=[],
+        )
+        with (
+            patch(
+                "custom_components.pge_energy.portal_auth.aiohttp.ClientSession",
+                return_value=session,
+            ),
+            patch(
+                "custom_components.pge_energy.portal_auth.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as mock_sleep,
+            pytest.raises(PGEConnectionError),
+        ):
+            await async_login_or_refresh(
+                email="user@example.com",
+                password="secret",
+                refresh_credential=None,
+            )
+        delays = [call[0][0] for call in mock_sleep.call_args_list]
+        assert delays == [1, 2, 4, 8]
+
+    @pytest.mark.asyncio
+    async def test_auth_error_does_not_retry(self):
+        """PGEAuthenticationError (password rejection) does not retry — 1 post, 0 sleeps."""
+        session = _mock_session_post(
+            [
+                (
+                    400,
+                    {
+                        "__type": "NotAuthorizedException",
+                        "message": "Incorrect username or password.",
+                    },
+                )
+            ]
+        )
+        with (
+            patch(
+                "custom_components.pge_energy.portal_auth.aiohttp.ClientSession",
+                return_value=session,
+            ),
+            patch(
+                "custom_components.pge_energy.portal_auth.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as mock_sleep,
+            pytest.raises(PGEAuthenticationError),
+        ):
+            await async_login_or_refresh(
+                email="user@example.com",
+                password="secret",
+                refresh_credential=None,
+            )
+        assert session.post.call_count == 1
+        assert mock_sleep.call_count == 0
 
 
 class TestAccountDiscoveryMerge:
