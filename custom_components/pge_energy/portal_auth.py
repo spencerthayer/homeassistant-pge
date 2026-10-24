@@ -47,8 +47,12 @@ COGNITO_URL = f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/"
 COGNITO_AUTH_FLOW = "USER_PASSWORD_AUTH"
 COGNITO_REFRESH_FLOW = "REFRESH_TOKEN_AUTH"
 
-# Cap password InitiateAuth calls to avoid account lockout.
+# Cap password InitiateAuth calls to avoid account lockout on credential rejects.
+# Connection-level errors (ClientConnectorError, timeouts) retry separately with
+# exponential backoff — they never reach Cognito's auth path, so they do not
+# count against password-attempt limits.
 MAX_LOGIN_ATTEMPTS = 2
+_MAX_CONNECTION_RETRIES = 5
 
 # Observed Cognito challenge names that mean MFA (fail closed).
 _MFA_CHALLENGE_NAMES = frozenset(
@@ -496,7 +500,7 @@ async def _login_with_password(
 ) -> PortalAuthResult:
     auth_result: dict[str, Any] | None = None
     last_connection_error: Exception | None = None
-    for attempt in range(1, MAX_LOGIN_ATTEMPTS + 1):
+    for attempt in range(1, _MAX_CONNECTION_RETRIES + 1):
         try:
             auth_result = await _cognito_initiate_auth(
                 session,
@@ -516,10 +520,15 @@ async def _login_with_password(
             raise
         except PGEConnectionError as exc:
             last_connection_error = exc
-            _LOGGER.warning("PGE Cognito connection error on attempt %s", attempt)
-            if attempt >= MAX_LOGIN_ATTEMPTS:
+            _LOGGER.warning(
+                "PGE Cognito connection error on attempt %s of %s; retrying in %ss",
+                attempt,
+                _MAX_CONNECTION_RETRIES,
+                min(2 ** (attempt - 1), 30),
+            )
+            if attempt >= _MAX_CONNECTION_RETRIES:
                 raise
-            await asyncio.sleep(1)
+            await asyncio.sleep(min(2 ** (attempt - 1), 30))
     if auth_result is None:
         raise last_connection_error or PGEAuthenticationError("PGE login failed")
 

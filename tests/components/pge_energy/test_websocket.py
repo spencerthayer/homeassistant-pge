@@ -74,8 +74,8 @@ def test_websocket_accounts_payload_has_no_credentials():
 
     with (
         patch(
-            "custom_components.pge_energy.websocket.dr.async_get",
-            return_value=MagicMock(async_get_device=MagicMock(return_value=device)),
+            "custom_components.pge_energy.device_lookup.dr.async_get",
+            return_value=MagicMock(async_get_device_by_identifier=MagicMock(return_value=device)),
         ),
         patch(
             "custom_components.pge_energy.websocket.er.async_get",
@@ -225,8 +225,8 @@ def test_websocket_accounts_with_programs_snapshot():
 
     with (
         patch(
-            "custom_components.pge_energy.websocket.dr.async_get",
-            return_value=MagicMock(async_get_device=MagicMock(return_value=device)),
+            "custom_components.pge_energy.device_lookup.dr.async_get",
+            return_value=MagicMock(async_get_device_by_identifier=MagicMock(return_value=device)),
         ),
         patch(
             "custom_components.pge_energy.websocket.er.async_get",

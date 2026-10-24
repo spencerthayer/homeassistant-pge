@@ -54,6 +54,7 @@ from .const import (
 )
 from .coordinator import PGECoordinator
 from .day_validation import clip_hourly_to_local_day, is_invalid_closed_day, validate_hourly_day
+from .device_lookup import async_device_for_entry
 from .options import (
     get_entry_option,
     history_incomplete,
@@ -197,7 +198,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     device_registry = dr.async_get(hass)
-    device = device_registry.async_get_device(identifiers={(DOMAIN, coordinator.account_key)})
+    device = async_device_for_entry(hass, entry.entry_id, coordinator.account_key)
     if device is not None and device.name_by_user is None and device.name != desired_title:
         device_registry.async_update_device(device.id, name=desired_title)
 
@@ -330,10 +331,9 @@ def _coordinator_for_entry(hass: HomeAssistant, entry_id: str) -> PGECoordinator
     return hass.data.get(DOMAIN, {}).get(entry_id)
 
 
-def async_device_progress_path(hass: HomeAssistant, account_key: str) -> str | None:
+def async_device_progress_path(hass: HomeAssistant, entry_id: str, account_key: str) -> str | None:
     """Return `/config/devices/device/<id>` for the PGE device, if registered."""
-    device_registry = dr.async_get(hass)
-    device = device_registry.async_get_device(identifiers={(DOMAIN, account_key)})
+    device = async_device_for_entry(hass, entry_id, account_key)
     if device is None:
         return None
     return f"/config/devices/device/{device.id}"
@@ -342,12 +342,13 @@ def async_device_progress_path(hass: HomeAssistant, account_key: str) -> str | N
 async def async_notify_sync_started(
     hass: HomeAssistant,
     *,
+    entry_id: str,
     account_id: str,
     account_key: str,
     kind: str,
 ) -> str | None:
     """Create a persistent notification with a device deep link. Return the path."""
-    path = async_device_progress_path(hass, account_key)
+    path = async_device_progress_path(hass, entry_id, account_key)
     link = f"[View progress]({path})" if path else "Open the PGE device to view progress."
     persistent_notification.async_create(
         hass,
@@ -368,6 +369,7 @@ async def async_start_manual_refresh(hass: HomeAssistant, entry_id: str) -> str 
     await coordinator.async_start_refresh_job()
     await async_notify_sync_started(
         hass,
+        entry_id=entry_id,
         account_id=coordinator.account_id,
         account_key=coordinator.account_key,
         kind="refresh",
@@ -409,6 +411,7 @@ async def async_start_history_backfill(hass: HomeAssistant, entry_id: str) -> st
     )
     await async_notify_sync_started(
         hass,
+        entry_id=entry_id,
         account_id=coordinator.account_id,
         account_key=coordinator.account_key,
         kind="backfill",
@@ -469,6 +472,7 @@ def _async_setup_services(hass: HomeAssistant) -> None:
         )
         await async_notify_sync_started(
             hass,
+            entry_id=entry_id,
             account_id=coordinator.account_id,
             account_key=coordinator.account_key,
             kind="backfill",
