@@ -61,7 +61,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.12.3";
+} from "./data.js?v=0.12.4";
 import {
   baseloadFloor,
   cycleCumulative,
@@ -103,8 +103,8 @@ import {
   lineItemShares,
   treemapSlices,
   waterfallSteps,
-} from "./chart-series.js?v=0.12.3";
-import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.3";
+} from "./chart-series.js?v=0.12.4";
+import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.4";
 import {
   createBarChart,
   createLineChart,
@@ -114,9 +114,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.12.3";
-import { sparklineSvg } from "./svg-helpers.js?v=0.12.3";
-import { applyPanelTheme, todColors } from "./theme.js?v=0.12.3";
+} from "./charts.js?v=0.12.4";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.4";
+import { applyPanelTheme, todColors } from "./theme.js?v=0.12.4";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -1632,6 +1632,9 @@ class PgeEnergyPanel extends HTMLElement {
     this._filtersDirty = false;
     this._todDirty = false;
     this._kpiSig = "";
+    this._billingSummarySig = "";
+    this._billingPdfHeaderSig = "";
+    this._billingPdfDetailsSig = "";
   }
 
   set hass(hass) {
@@ -5790,21 +5793,23 @@ class PgeEnergyPanel extends HTMLElement {
       return false;
     }
     this._disposeHostCharts(billing);
+    const summaryContent =
+      summaryHtml ||
+      `<p class="muted stats-meta">No billing values yet — wait for a sync or check Configure → Sync settings.</p>`;
+    const headerHtml = this._renderBillPdfHeader();
+    const detailsHtml = this._renderBillPdfStatementDetails();
     billing.innerHTML = `
       <section class="card">
       <h2>Billing ${this._hint("Account balance, statement, and lifetime totals from PGE billing sync. Ledger charts use external statistic ids, including bill kWh, which has no mirrored entity.")}</h2>
-      <div id="billing-pdf-header">${this._renderBillPdfHeader()}</div>
+      <div id="billing-pdf-header">${headerHtml}</div>
       <div class="usage-accounting-body">
         <div id="billing-summary">
-        ${
-          summaryHtml ||
-          `<p class="muted stats-meta">No billing values yet — wait for a sync or check Configure → Sync settings.</p>`
-        }
+        ${summaryContent}
         </div>
       </div>
       </section>
       <section class="card">
-        <div id="billing-pdf-details">${this._renderBillPdfStatementDetails()}</div>
+        <div id="billing-pdf-details">${detailsHtml}</div>
       </section>
       <section class="card">
         <figure class="chart-card">
@@ -5818,6 +5823,9 @@ class PgeEnergyPanel extends HTMLElement {
       </section>
       ${this._billingGalleryHtml()}
     `;
+    this._billingSummarySig = summaryContent;
+    this._billingPdfHeaderSig = headerHtml;
+    this._billingPdfDetailsSig = detailsHtml;
     this._bindPersistentDetails(billing);
     this._renderProgramsCard(programs, e);
     return true;
@@ -5828,11 +5836,25 @@ class PgeEnergyPanel extends HTMLElement {
     const pdfHeader = this.shadowRoot.getElementById("billing-pdf-header");
     const pdfDetails = this.shadowRoot.getElementById("billing-pdf-details");
     if (!summary || !pdfHeader || !pdfDetails) return false;
-    summary.innerHTML =
+    const html =
       summaryHtml ||
       `<p class="muted stats-meta">No billing values yet — wait for a sync or check Configure → Sync settings.</p>`;
-    pdfHeader.innerHTML = this._renderBillPdfHeader();
-    pdfDetails.innerHTML = this._renderBillPdfStatementDetails();
+    // Skip DOM replacement per region when content is unchanged — preserves
+    // open <details> state across hass pushes that don't alter that region's values.
+    if (html !== this._billingSummarySig) {
+      this._billingSummarySig = html;
+      summary.innerHTML = html;
+    }
+    const headerHtml = this._renderBillPdfHeader();
+    if (headerHtml !== this._billingPdfHeaderSig) {
+      this._billingPdfHeaderSig = headerHtml;
+      pdfHeader.innerHTML = headerHtml;
+    }
+    const detailsHtml = this._renderBillPdfStatementDetails();
+    if (detailsHtml !== this._billingPdfDetailsSig) {
+      this._billingPdfDetailsSig = detailsHtml;
+      pdfDetails.innerHTML = detailsHtml;
+    }
     return true;
   }
 
