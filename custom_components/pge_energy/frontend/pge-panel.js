@@ -5793,21 +5793,23 @@ class PgeEnergyPanel extends HTMLElement {
       return false;
     }
     this._disposeHostCharts(billing);
+    const summaryContent =
+      summaryHtml ||
+      `<p class="muted stats-meta">No billing values yet — wait for a sync or check Configure → Sync settings.</p>`;
+    const headerHtml = this._renderBillPdfHeader();
+    const detailsHtml = this._renderBillPdfStatementDetails();
     billing.innerHTML = `
       <section class="card">
       <h2>Billing ${this._hint("Account balance, statement, and lifetime totals from PGE billing sync. Ledger charts use external statistic ids, including bill kWh, which has no mirrored entity.")}</h2>
-      <div id="billing-pdf-header">${this._renderBillPdfHeader()}</div>
+      <div id="billing-pdf-header">${headerHtml}</div>
       <div class="usage-accounting-body">
         <div id="billing-summary">
-        ${
-          summaryHtml ||
-          `<p class="muted stats-meta">No billing values yet — wait for a sync or check Configure → Sync settings.</p>`
-        }
+        ${summaryContent}
         </div>
       </div>
       </section>
       <section class="card">
-        <div id="billing-pdf-details">${this._renderBillPdfStatementDetails()}</div>
+        <div id="billing-pdf-details">${detailsHtml}</div>
       </section>
       <section class="card">
         <figure class="chart-card">
@@ -5821,6 +5823,9 @@ class PgeEnergyPanel extends HTMLElement {
       </section>
       ${this._billingGalleryHtml()}
     `;
+    this._billingSummarySig = summaryContent;
+    this._billingPdfHeaderSig = headerHtml;
+    this._billingPdfDetailsSig = detailsHtml;
     this._bindPersistentDetails(billing);
     this._renderProgramsCard(programs, e);
     return true;
