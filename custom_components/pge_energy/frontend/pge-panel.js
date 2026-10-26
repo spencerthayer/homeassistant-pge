@@ -1633,6 +1633,8 @@ class PgeEnergyPanel extends HTMLElement {
     this._todDirty = false;
     this._kpiSig = "";
     this._billingSummarySig = "";
+    this._billingPdfHeaderSig = "";
+    this._billingPdfDetailsSig = "";
   }
 
   set hass(hass) {
@@ -5832,13 +5834,22 @@ class PgeEnergyPanel extends HTMLElement {
     const html =
       summaryHtml ||
       `<p class="muted stats-meta">No billing values yet — wait for a sync or check Configure → Sync settings.</p>`;
-    // Skip DOM replacement when content is unchanged — preserves open <details>
-    // state across hass pushes that don't alter billing values.
-    if (html === this._billingSummarySig) return true;
-    this._billingSummarySig = html;
-    summary.innerHTML = html;
-    pdfHeader.innerHTML = this._renderBillPdfHeader();
-    pdfDetails.innerHTML = this._renderBillPdfStatementDetails();
+    // Skip DOM replacement per region when content is unchanged — preserves
+    // open <details> state across hass pushes that don't alter that region's values.
+    if (html !== this._billingSummarySig) {
+      this._billingSummarySig = html;
+      summary.innerHTML = html;
+    }
+    const headerHtml = this._renderBillPdfHeader();
+    if (headerHtml !== this._billingPdfHeaderSig) {
+      this._billingPdfHeaderSig = headerHtml;
+      pdfHeader.innerHTML = headerHtml;
+    }
+    const detailsHtml = this._renderBillPdfStatementDetails();
+    if (detailsHtml !== this._billingPdfDetailsSig) {
+      this._billingPdfDetailsSig = detailsHtml;
+      pdfDetails.innerHTML = detailsHtml;
+    }
     return true;
   }
 
