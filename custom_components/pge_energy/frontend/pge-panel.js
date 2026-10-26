@@ -61,7 +61,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.12.3";
+} from "./data.js?v=0.12.4";
 import {
   baseloadFloor,
   cycleCumulative,
@@ -103,8 +103,8 @@ import {
   lineItemShares,
   treemapSlices,
   waterfallSteps,
-} from "./chart-series.js?v=0.12.3";
-import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.3";
+} from "./chart-series.js?v=0.12.4";
+import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.4";
 import {
   createBarChart,
   createLineChart,
@@ -114,9 +114,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.12.3";
-import { sparklineSvg } from "./svg-helpers.js?v=0.12.3";
-import { applyPanelTheme, todColors } from "./theme.js?v=0.12.3";
+} from "./charts.js?v=0.12.4";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.4";
+import { applyPanelTheme, todColors } from "./theme.js?v=0.12.4";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -1632,6 +1632,7 @@ class PgeEnergyPanel extends HTMLElement {
     this._filtersDirty = false;
     this._todDirty = false;
     this._kpiSig = "";
+    this._billingSummarySig = "";
   }
 
   set hass(hass) {
@@ -5828,9 +5829,14 @@ class PgeEnergyPanel extends HTMLElement {
     const pdfHeader = this.shadowRoot.getElementById("billing-pdf-header");
     const pdfDetails = this.shadowRoot.getElementById("billing-pdf-details");
     if (!summary || !pdfHeader || !pdfDetails) return false;
-    summary.innerHTML =
+    const html =
       summaryHtml ||
       `<p class="muted stats-meta">No billing values yet — wait for a sync or check Configure → Sync settings.</p>`;
+    // Skip DOM replacement when content is unchanged — preserves open <details>
+    // state across hass pushes that don't alter billing values.
+    if (html === this._billingSummarySig) return true;
+    this._billingSummarySig = html;
+    summary.innerHTML = html;
     pdfHeader.innerHTML = this._renderBillPdfHeader();
     pdfDetails.innerHTML = this._renderBillPdfStatementDetails();
     return true;
