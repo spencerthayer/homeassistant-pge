@@ -295,6 +295,23 @@ def test_parse_tod_page_data_no_as_of_date_still_extracts_rates():
     assert row.effective_from == today_local().isoformat()
 
 
+def test_parse_tod_page_data_uses_fallback_effective_date():
+    """The caller's published tariff date dates the row when PGE omits 'As of'."""
+    result = parse_tod_page_data(_tod_page_data_no_as_of(), fallback_effective_date="2026-10-15")
+    assert len(result.rows) == 1
+    assert result.rows[0].effective_from == "2026-10-15"
+    assert any("2026-10-15" in e for e in result.errors)
+
+
+def test_parse_tod_page_data_does_not_warn(caplog):
+    """Parsing is not a policy decision: a fallback date is an error entry, not a WARNING."""
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="custom_components.pge_energy.tariff_sources")
+    parse_tod_page_data(_tod_page_data_no_as_of(), fallback_effective_date="2026-10-15")
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
 def test_parse_tod_page_data_no_as_of_date_no_rates_fails():
     """If neither 'As of' date nor rates are present, parsing still fails."""
     data = _tod_page_data_no_as_of()

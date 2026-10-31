@@ -325,6 +325,28 @@ def merge_validated_catalog(
     return sorted(by_date.values(), key=lambda r: _row_effective_date(r))
 
 
+def _same_tod_rates(a: TodTariffRow, b: TodTariffRow) -> bool:
+    """True when two TOD rows publish the same three period rates."""
+    return a.off_peak == b.off_peak and a.mid_peak == b.mid_peak and a.on_peak == b.on_peak
+
+
+def prune_redundant_tod_rows(rows: list[TodTariffRow]) -> list[TodTariffRow]:
+    """Drop TOD rows whose rate triple repeats the preceding row.
+
+    A rate card only needs a new row when the price changes, so a row with an
+    identical triple carries no pricing information.  The earliest date in each
+    identical run is kept, which is the published effective date rather than
+    the observation date a fallback date would have used.  This also collapses
+    the observation-dated duplicates minted before the fallback-date fix.
+    """
+    pruned: list[TodTariffRow] = []
+    for row in sorted(rows, key=_row_effective_date):
+        if pruned and _same_tod_rates(pruned[-1], row):
+            continue
+        pruned.append(row)
+    return pruned
+
+
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------

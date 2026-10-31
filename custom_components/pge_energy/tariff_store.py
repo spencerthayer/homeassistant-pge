@@ -22,6 +22,7 @@ from .tod_tariff import (
     bundled_tod_rows,
     deserialize_row_from_store,
     merge_validated_catalog,
+    prune_redundant_tod_rows,
     serialize_row_for_store,
     validate_basic_catalog,
     validate_tod_catalog,
@@ -57,6 +58,7 @@ class TariffStore(Store):
             migrated.setdefault("last_success", None)
             migrated.setdefault("last_error", None)
             migrated.setdefault("next_retry", None)
+            migrated.setdefault("latest_tariff_effective_date", None)
             migrated.setdefault("parser_version", 1)
             migrated["schema_version"] = STORAGE_VERSION
             return migrated
@@ -82,6 +84,9 @@ class TariffStoreData:
     last_success: str | None = None
     last_error: str | None = None
     next_retry: str | None = None
+    # Newest effective date published on the tariff page, kept across a 304
+    # so a TOD row is never dated by its observation day.
+    latest_tariff_effective_date: str | None = None
     parser_version: int = 1
 
 
@@ -119,6 +124,7 @@ async def async_load_tariff_catalogs(
         data.last_success = raw.get("last_success")
         data.last_error = raw.get("last_error")
         data.next_retry = raw.get("next_retry")
+        data.latest_tariff_effective_date = raw.get("latest_tariff_effective_date")
         data.parser_version = raw.get("parser_version", 1)
 
     # Deserialize stored rows
@@ -134,7 +140,7 @@ async def async_load_tariff_catalogs(
             stored_basic.append(row)
 
     # Merge with bundled seeds
-    merged_tod = merge_validated_catalog(bundled_tod_rows(), stored_tod, [])
+    merged_tod = prune_redundant_tod_rows(merge_validated_catalog(bundled_tod_rows(), stored_tod, []))
     merged_basic = merge_validated_catalog(bundled_basic_rows(), stored_basic, [])
 
     return merged_tod, merged_basic, data
@@ -179,6 +185,7 @@ async def async_save_tariff_catalogs(
         "last_success": store_data.last_success,
         "last_error": store_data.last_error,
         "next_retry": store_data.next_retry,
+        "latest_tariff_effective_date": store_data.latest_tariff_effective_date,
         "parser_version": store_data.parser_version,
     }
     await store.async_save(payload)
