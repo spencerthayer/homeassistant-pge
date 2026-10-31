@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import os
@@ -94,7 +95,15 @@ async def async_download_bill_pdf(
     last_error: PGEConnectionError | None = None
     host_failures = 0
     while host_failures < MAX_AUTH_ATTEMPTS:
-        origin = await hosts.acquire(session, exclude=exclude)
+        try:
+            origin = await hosts.acquire(session, exclude=exclude)
+        except PGEConnectionError as exc:
+            host_failures += 1
+            last_error = exc
+            if host_failures >= MAX_AUTH_ATTEMPTS:
+                break
+            await asyncio.sleep(min(2 ** (host_failures - 1), 8))
+            continue
         url = bill_pdf_url(origin)
         token = await auth.ensure_valid_token()
         headers = {

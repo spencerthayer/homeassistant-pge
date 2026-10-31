@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import UTC, datetime, timedelta
@@ -490,7 +491,15 @@ class PGEBillingApiClient:
         last_error: PGEConnectionError | None = None
         host_failures = 0
         while host_failures < MAX_AUTH_ATTEMPTS:
-            origin = await hosts.acquire(self._session, exclude=exclude)
+            try:
+                origin = await hosts.acquire(self._session, exclude=exclude)
+            except PGEConnectionError as exc:
+                host_failures += 1
+                last_error = exc
+                if host_failures >= MAX_AUTH_ATTEMPTS:
+                    break
+                await asyncio.sleep(min(2 ** (host_failures - 1), 8))
+                continue
             url = graphql_url(origin)
             token = await self._auth_manager.ensure_valid_token()
             headers = {
