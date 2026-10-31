@@ -37,10 +37,10 @@ _LOGGER = logging.getLogger(__name__)
 # A dead gateway is cut off here instead of waiting out its ~4.6s 503.
 PROBE_TIMEOUT_SECONDS = 2.0
 PROBE_IDP_TOKEN = "probe"
-# Two authenticated attempts: the sticky host, then one fallback.
-# Worst case for failed host work in one call is one gateway 503 (about 5s)
-# plus one 2s probe. That stays under the 10s poll budget. This layer does
-# not also run the old 3-step sleep ladder.
+# Two authenticated attempts (sticky then fallback). Each attempt runs a full
+# probe sweep (up to MAX_PROBES_PER_CYCLE probes at PROBE_TIMEOUT_SECONDS).
+# With MAX_AUTH_ATTEMPTS=2 and MAX_PROBES_PER_CYCLE=4 the worst-case probe
+# time is 2 * 4 * 2.0 = 16s. Callers add exponential backoff between attempts.
 MAX_AUTH_ATTEMPTS = 2
 MAX_PROBES_PER_CYCLE = 4
 FAILURES_BEFORE_OPEN = 2
@@ -85,6 +85,12 @@ def token_exchange_url(origin: str | None = None) -> str:
 def public_hostname(url: str) -> str:
     """Hostname only, so logs and errors never include a query string."""
     return urlsplit(url).hostname or "unknown"
+
+
+def _probe_detail(origin: str, statuses: dict[str, int | None]) -> str:
+    """``host=status`` for the failure message; ``no-response`` on connect errors."""
+    status = statuses.get(origin)
+    return f"{public_hostname(origin)}={status if status is not None else 'no-response'}"
 
 
 class HostOverrideError(ValueError):
@@ -227,7 +233,10 @@ def probe_is_alive(
     and never reach this function.
     """
     if strict:
-        return status == 401
+        # Strict mode: only accept 401 with JSON body (real API), not text/plain (WAF page).
+        if status != 401:
+            return False
+        return _body_is_json(content_type, body)
     if status in (502, 503, 504):
         return False
     if status in (401, 403, 429, 501) or status < 400:
@@ -277,6 +286,7 @@ class ApiHostResolver:
     _last_switch_at: float | None = None
     _last_switch_reason: str | None = None
     _last_preferred_check: float = 0.0
+    _probe_status: dict[str, int | None] = field(default_factory=dict)
 
     @property
     def sticky(self) -> str | None:
@@ -407,12 +417,14 @@ class ApiHostResolver:
             connect=PROBE_TIMEOUT_SECONDS,
             sock_connect=PROBE_TIMEOUT_SECONDS,
         )
+        status: int | None = None
         try:
             async with session.post(
                 token_exchange_url(origin),
                 headers={"idp_access_token": PROBE_IDP_TOKEN},
                 timeout=timeout,
             ) as resp:
+                status = resp.status
                 raw = await resp.read()
                 text = raw.decode("utf-8", errors="replace")[:300]
                 strict = origin not in self.origins and origin != self._override
@@ -424,9 +436,11 @@ class ApiHostResolver:
                 )
         except (TimeoutError, aiohttp.ClientError):
             alive = False
+        self._probe_status[origin] = status
         _LOGGER.debug(
-            "PGE API host probe host=%s alive=%s",
+            "PGE API host probe host=%s status=%s alive=%s",
             public_hostname(origin),
+            status if status is not None else "no-response",
             alive,
         )
         return alive
@@ -439,6 +453,7 @@ class ApiHostResolver:
         """
         await self._maybe_recheck_preferred(session)
         skipped = exclude or set()
+        probed: list[str] = []
         for origin in self.candidates():
             if origin in skipped:
                 continue
@@ -449,6 +464,7 @@ class ApiHostResolver:
                     self.mark_success(origin, reason="operator override passed the credential-free probe")
                     return origin
                 self.mark_failure(origin, status=None)
+                probed.append(_probe_detail(origin, self._probe_status))
                 continue
             if origin in self._verified and not self.in_cooldown(origin):
                 return origin
@@ -456,7 +472,10 @@ class ApiHostResolver:
                 self.mark_success(origin, reason="credential-free probe succeeded")
                 return origin
             self.mark_failure(origin, status=None)
-        raise PGEConnectionError(host_detail("PGE API host unavailable", self.origins[0]))
+            probed.append(_probe_detail(origin, self._probe_status))
+        raise PGEConnectionError(
+            "PGE API host unavailable (probes: " + (", ".join(probed) or "none") + ")"
+        )
 
     async def _maybe_recheck_preferred(self, session: aiohttp.ClientSession) -> None:
         preferred = self.origins[0]
