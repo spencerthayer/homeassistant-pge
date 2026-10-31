@@ -39,8 +39,8 @@ PROBE_TIMEOUT_SECONDS = 2.0
 PROBE_IDP_TOKEN = "probe"
 # Two authenticated attempts (sticky then fallback). Each attempt runs a full
 # probe sweep (up to MAX_PROBES_PER_CYCLE probes at PROBE_TIMEOUT_SECONDS).
-# With MAX_AUTH_ATTEMPTS=2 and MAX_PROBES_PER_CYCLE=4 the worst-case probe
-# time is 2 * 4 * 2.0 = 16s. Callers add exponential backoff between attempts.
+# One acquire() runs up to MAX_PROBES_PER_CYCLE probes (4 * 2.0s = 8s).
+# Callers add exponential backoff between acquire() retries (MAX_AUTH_ATTEMPTS).
 MAX_AUTH_ATTEMPTS = 2
 MAX_PROBES_PER_CYCLE = 4
 FAILURES_BEFORE_OPEN = 2
@@ -453,6 +453,7 @@ class ApiHostResolver:
         """
         await self._maybe_recheck_preferred(session)
         skipped = exclude or set()
+        self._probe_status.clear()
         probed: list[str] = []
         for origin in self.candidates():
             if origin in skipped:

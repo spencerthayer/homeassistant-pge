@@ -489,16 +489,14 @@ class PGEBillingApiClient:
         renewed = False
         exclude: set[str] = set()
         last_error: PGEConnectionError | None = None
-        host_failures = 0
-        while host_failures < MAX_AUTH_ATTEMPTS:
+        for _attempt in range(MAX_AUTH_ATTEMPTS):
             try:
                 origin = await hosts.acquire(self._session, exclude=exclude)
             except PGEConnectionError as exc:
-                host_failures += 1
                 last_error = exc
-                if host_failures >= MAX_AUTH_ATTEMPTS:
+                if _attempt + 1 >= MAX_AUTH_ATTEMPTS:
                     break
-                await asyncio.sleep(min(2 ** (host_failures - 1), 8))
+                await asyncio.sleep(min(2**_attempt, 8))
                 continue
             url = graphql_url(origin)
             token = await self._auth_manager.ensure_valid_token()
@@ -530,7 +528,6 @@ class PGEBillingApiClient:
                         self._rate_limit_until = datetime.now(UTC) + timedelta(seconds=delay)
                         raise PGERateLimitError(f"Rate limited, retry after {delay}s")
                     if resp.status in (502, 503, 504):
-                        host_failures += 1
                         exclude.add(origin)
                         hosts.mark_failure(origin, status=resp.status)
                         last_error = PGEConnectionError(host_detail(f"HTTP {resp.status}", url))
@@ -539,7 +536,6 @@ class PGEBillingApiClient:
                         body = await resp.text()
                         kind = classify_http(resp.status, content_type=content_type_of(resp), body=body)
                         if kind is FailureClass.HOST:
-                            host_failures += 1
                             exclude.add(origin)
                             hosts.mark_failure(origin, status=resp.status)
                             last_error = PGEConnectionError(
@@ -551,7 +547,6 @@ class PGEBillingApiClient:
                     data = await resp.json()
 
             except (TimeoutError, aiohttp.ClientError) as exc:
-                host_failures += 1
                 exclude.add(origin)
                 hosts.mark_failure(origin, status=None)
                 last_error = PGEConnectionError(host_detail(f"Connection failed ({type(exc).__name__})", url))
@@ -566,7 +561,7 @@ class PGEBillingApiClient:
                 return result
 
         raise last_error or PGEConnectionError(
-            host_detail("PGE API host unavailable", graphql_url(hosts.endpoint_origin()))
+            host_detail("PGE API host unavailable", url or graphql_url(hosts.endpoint_origin()))
         )
 
     # -- Account detail -----------------------------------------------------

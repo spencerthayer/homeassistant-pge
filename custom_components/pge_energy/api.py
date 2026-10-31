@@ -705,7 +705,7 @@ class PGEApiClient:
                         )
                 return _parse_usage_response(data, resolution, account_key)
 
-        raise last_error or PGEConnectionError(host_detail("PGE API host unavailable", graphql_url()))
+        raise last_error or PGEConnectionError(host_detail("PGE API host unavailable", url or graphql_url()))
 
     async def get_monthly_usage_paged(
         self,

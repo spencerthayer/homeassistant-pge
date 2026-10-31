@@ -93,16 +93,14 @@ async def async_download_bill_pdf(
     renewed = False
     exclude: set[str] = set()
     last_error: PGEConnectionError | None = None
-    host_failures = 0
-    while host_failures < MAX_AUTH_ATTEMPTS:
+    for _attempt in range(MAX_AUTH_ATTEMPTS):
         try:
             origin = await hosts.acquire(session, exclude=exclude)
         except PGEConnectionError as exc:
-            host_failures += 1
             last_error = exc
-            if host_failures >= MAX_AUTH_ATTEMPTS:
+            if _attempt + 1 >= MAX_AUTH_ATTEMPTS:
                 break
-            await asyncio.sleep(min(2 ** (host_failures - 1), 8))
+            await asyncio.sleep(min(2**_attempt, 8))
             continue
         url = bill_pdf_url(origin)
         token = await auth.ensure_valid_token()
@@ -131,7 +129,6 @@ async def async_download_bill_pdf(
                 if resp.status == 403:
                     raise PGEAuthorizationError("Access forbidden")
                 if resp.status in (502, 503, 504):
-                    host_failures += 1
                     exclude.add(origin)
                     hosts.mark_failure(origin, status=resp.status)
                     last_error = PGEConnectionError(host_detail(f"HTTP {resp.status}", url))
@@ -158,14 +155,13 @@ async def async_download_bill_pdf(
                 hosts.mark_success(origin, reason="bill PDF download succeeded")
                 return data
         except (TimeoutError, aiohttp.ClientError) as exc:
-            host_failures += 1
             exclude.add(origin)
             hosts.mark_failure(origin, status=None)
             last_error = PGEConnectionError(host_detail(f"Connection failed ({type(exc).__name__})", url))
             continue
 
     raise last_error or PGEConnectionError(
-        host_detail("PGE API host unavailable", bill_pdf_url(hosts.endpoint_origin()))
+        host_detail("PGE API host unavailable", url or bill_pdf_url(hosts.endpoint_origin()))
     )
 
 
