@@ -516,6 +516,7 @@ async def test_usage_timeout_fails_over_once_and_hides_the_bearer(caplog: pytest
     credential_calls = [url for url, kwargs in session.calls if "idp_access_token" not in (kwargs.get("headers") or {})]
     assert len(credential_calls) == 2
 
+
 @pytest.mark.asyncio
 async def test_acquire_reports_each_probed_host() -> None:
     def handler(url: str, _kwargs: dict) -> _Resp:
@@ -549,6 +550,7 @@ async def test_acquire_reports_no_response_on_connect_error() -> None:
 @pytest.mark.asyncio
 async def test_acquire_probe_status_is_isolated_per_sweep() -> None:
     """Each failed acquire() sweep reports only its own probes, no stale data."""
+
     def fail_handler(url: str, _kwargs: dict) -> _Resp:
         return _Resp(503, b"upstream connect error")
 

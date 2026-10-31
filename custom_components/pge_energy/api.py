@@ -640,7 +640,7 @@ class PGEApiClient:
                 last_error = exc
                 if _attempt + 1 >= MAX_AUTH_ATTEMPTS:
                     break
-                await asyncio.sleep(min(2 ** _attempt, 8))
+                await asyncio.sleep(min(2**_attempt, 8))
                 continue
             url = graphql_url(origin)
             try:
@@ -705,9 +705,7 @@ class PGEApiClient:
                         )
                 return _parse_usage_response(data, resolution, account_key)
 
-        raise last_error or PGEConnectionError(
-            host_detail("PGE API host unavailable", graphql_url())
-        )
+        raise last_error or PGEConnectionError(host_detail("PGE API host unavailable", graphql_url()))
 
     async def get_monthly_usage_paged(
         self,

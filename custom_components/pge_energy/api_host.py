@@ -473,9 +473,7 @@ class ApiHostResolver:
                 return origin
             self.mark_failure(origin, status=None)
             probed.append(_probe_detail(origin, self._probe_status))
-        raise PGEConnectionError(
-            "PGE API host unavailable (probes: " + (", ".join(probed) or "none") + ")"
-        )
+        raise PGEConnectionError("PGE API host unavailable (probes: " + (", ".join(probed) or "none") + ")")
 
     async def _maybe_recheck_preferred(self, session: aiohttp.ClientSession) -> None:
         preferred = self.origins[0]
