@@ -15,7 +15,6 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
-import logging
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -28,8 +27,6 @@ from .tod_tariff import (
     SourceInfo,
     TodTariffRow,
 )
-
-_LOGGER = logging.getLogger(__name__)
 
 # Allowed PDF host for tariff documents.
 _PDF_ALLOWED_HOSTS = ("assets.ctfassets.net",)
@@ -170,10 +167,21 @@ _ON_PATTERN = re.compile(
 _AS_OF_PATTERN = re.compile(r"as\s+of\s+(\w+\s+\d{1,2},?\s+\d{4})", re.IGNORECASE)
 
 
-def parse_tod_page_data(raw_json: dict[str, Any]) -> TodSourceResult:
+def parse_tod_page_data(
+    raw_json: dict[str, Any],
+    *,
+    fallback_effective_date: str | None = None,
+) -> TodSourceResult:
     """Parse the TOD page-data JSON for effective date and three period rates.
 
+    PGE dropped the "As of <date>" sentence from the TOD page (Oct 2026), so
+    callers should pass ``fallback_effective_date`` (the newest published
+    tariff effective date).  Without one the parser falls back to today's
+    Pacific date so standalone rate extraction still works.
+
     Returns a :class:`TodSourceResult` with zero or one rows and any errors.
+    Policy (whether to mint a row at all) belongs to the caller; this function
+    only reports what it found in ``errors``.
     """
     errors: list[str] = []
     rows: list[TodTariffRow] = []
@@ -182,8 +190,9 @@ def parse_tod_page_data(raw_json: dict[str, Any]) -> TodSourceResult:
     # Extract all text nodes from the page-data
     all_text = "\n".join(_extract_text_nodes(raw_json))
 
-    # Find "As of" date. PGE's page may omit this; fall back to today's
-    # Pacific date so rate extraction can still proceed.
+    # Find "As of" date. PGE's page may omit this; fall back to the caller's
+    # published effective date (or today's Pacific date) so rate extraction
+    # can still proceed.
     date_match = _AS_OF_PATTERN.search(all_text)
     if date_match:
         as_of_str = date_match.group(1)
@@ -193,9 +202,8 @@ def parse_tod_page_data(raw_json: dict[str, Any]) -> TodSourceResult:
             errors.append(f"Cannot parse 'As of' date {as_of_str!r}: {exc}")
             return TodSourceResult(rows=rows, errors=errors)
     else:
-        errors.append("No 'As of' date found in TOD page-data; using current date")
-        _LOGGER.warning("No 'As of' date found in TOD page-data; using current date")
-        effective_date = today_local().isoformat()
+        effective_date = fallback_effective_date or today_local().isoformat()
+        errors.append(f"No 'As of' date found in TOD page-data; using {effective_date} as the effective date")
 
     # Find cents-per-kWh values
     off_match = _RATE_PATTERN.search(all_text)

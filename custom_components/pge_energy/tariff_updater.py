@@ -55,6 +55,7 @@ from .tod_tariff import (
     bundled_basic_rows,
     bundled_tod_rows,
     merge_validated_catalog,
+    prune_redundant_tod_rows,
     validate_basic_catalog,
     validate_tod_catalog,
 )
@@ -76,6 +77,33 @@ def _jittered_delay(base: timedelta) -> timedelta:
     """Add 10% jitter to a delay to avoid thundering herds."""
     jitter = base.total_seconds() * 0.1 * random.random()
     return timedelta(seconds=base.total_seconds() + jitter)
+
+
+def _rates_match_latest(existing: list[TodTariffRow], fetched: TodTariffRow) -> bool:
+    """True when the fetched triple is identical to the newest catalog row.
+
+    ``existing`` is kept sorted by effective date (see
+    :func:`merge_validated_catalog`), so the newest row is last.  Identical
+    rates mean there is nothing to activate, so no row should be minted.
+    """
+    if not existing:
+        return False
+    latest = existing[-1]
+    return (
+        fetched.off_peak == latest.off_peak
+        and fetched.mid_peak == latest.mid_peak
+        and fetched.on_peak == latest.on_peak
+    )
+
+
+def discover_latest_effective_date(docs: list[dict[str, Any]] | None) -> str | None:
+    """Newest YYYY-MM-DD published on the tariff page, or None.
+
+    :func:`discover_tariff_documents` already normalizes the title date into
+    ``effective_date_str``; ISO dates sort lexicographically.
+    """
+    dates = [doc["effective_date_str"] for doc in docs or [] if doc.get("effective_date_str")]
+    return max(dates) if dates else None
 
 
 def _is_pdf_url(url: str) -> bool:
@@ -228,7 +256,9 @@ class TariffUpdaterCoordinator(DataUpdateCoordinator[TariffSourceUpdate]):
 
         # Apply successful results
         if has_tod:
-            new_tod = merge_validated_catalog(bundled_tod_rows(), self._tod_rows, update.tod_result.rows)
+            new_tod = prune_redundant_tod_rows(
+                merge_validated_catalog(bundled_tod_rows(), self._tod_rows, update.tod_result.rows)
+            )
             if not validate_tod_catalog(new_tod):
                 self._tod_rows = new_tod
             else:
@@ -287,15 +317,25 @@ class TariffUpdaterCoordinator(DataUpdateCoordinator[TariffSourceUpdate]):
         basic_result: BasicSourceResult | None = None
 
         session = aiohttp_client.async_get_clientsession(self.hass)
-        # 1. Fetch TOD page-data
-        tod_result, tod_error = await self._fetch_tod_page_data(session)
-        if tod_error:
-            errors.append(tod_error)
 
-        # 2. Fetch tariff page-data for document discovery
+        # 1. Fetch tariff page-data for document discovery first: its newest
+        #    published effective date dates a TOD row when PGE omits "As of".
         tariff_docs, tariff_error = await self._fetch_tariff_documents(session)
         if tariff_error:
             errors.append(tariff_error)
+
+        latest_published = discover_latest_effective_date(tariff_docs)
+        if latest_published:
+            self._store_data.latest_tariff_effective_date = latest_published
+
+        # 2. Fetch TOD page-data, dated by the newest published tariff date
+        #    (or the last one seen across a 304) instead of an observation date.
+        tod_result, tod_error = await self._fetch_tod_page_data(
+            session,
+            fallback_effective_date=latest_published or self._store_data.latest_tariff_effective_date,
+        )
+        if tod_error:
+            errors.append(tod_error)
 
         # 3. Process discovered documents
         if tariff_docs:
@@ -308,7 +348,10 @@ class TariffUpdaterCoordinator(DataUpdateCoordinator[TariffSourceUpdate]):
         )
 
     async def _fetch_tod_page_data(
-        self, session: aiohttp.ClientSession
+        self,
+        session: aiohttp.ClientSession,
+        *,
+        fallback_effective_date: str | None = None,
     ) -> tuple[TodSourceResult | None, TariffFetchError | None]:
         """Fetch and parse the TOD page-data JSON."""
         etag = self._store_data.etag_map.get(_TOD_PAGE_DATA_URL)
@@ -342,12 +385,20 @@ class TariffUpdaterCoordinator(DataUpdateCoordinator[TariffSourceUpdate]):
                 if new_lm:
                     self._store_data.last_modified_map[_TOD_PAGE_DATA_URL] = new_lm
 
-                result = parse_tod_page_data(data)
+                result = parse_tod_page_data(data, fallback_effective_date=fallback_effective_date)
                 if not result.rows and result.errors:
                     return None, TariffFetchError(
                         url=_TOD_PAGE_DATA_URL,
                         reason=f"Parse errors: {'; '.join(result.errors[:3])}",
                     )
+                if result.rows and _rates_match_latest(self._tod_rows, result.rows[0]):
+                    _LOGGER.debug(
+                        "TOD page-data rates match %s; not minting a new row",
+                        self._tod_rows[-1].effective_from,
+                    )
+                    return TodSourceResult(rows=[], errors=[]), None
+                if result.rows and result.errors:
+                    _LOGGER.warning("TOD row dated by fallback: %s", "; ".join(result.errors))
                 return result, None
         except Exception as exc:
             return None, TariffFetchError(url=_TOD_PAGE_DATA_URL, reason=str(exc)[:200])
