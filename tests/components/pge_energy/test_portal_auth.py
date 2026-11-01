@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
-
 from custom_components.pge_energy.exceptions import (
     PGEAuthenticationError,
     PGECaptchaUnsupportedError,
@@ -141,13 +140,12 @@ def _mock_session_post_with_connection_errors(num_initial_errors: int, responses
 
         async def __aexit__(self, *args):  # noqa: ANN002
             return False
-
     session = MagicMock()
 
     def _post(url, **kwargs):  # noqa: ANN003
         call_count[0] += 1
         if call_count[0] <= num_initial_errors:
-            raise aiohttp.ClientError("connection refused")
+            raise aiohttp.ClientConnectorError("connection refused", OSError("connection refused"))
         if not queue:
             raise AssertionError(f"unexpected request to {url}")
         status, payload = queue.pop(0)
@@ -374,8 +372,10 @@ class TestLoginOrRefresh:
         assert result.refresh_credential == "refresh-from-password"
 
     @pytest.mark.asyncio
-    async def test_connection_error_retries_then_succeeds(self):
+    async def test_connection_error_retries_then_succeeds(self, caplog):
         """ClientConnectorError is retried; succeeds on the second attempt."""
+        import logging
+        caplog.set_level(logging.DEBUG)
         session = _mock_session_post_with_connection_errors(
             num_initial_errors=1,
             responses=[
@@ -434,9 +434,23 @@ class TestLoginOrRefresh:
         delay = mock_sleep.call_args[0][0]
         assert delay == 1  # first retry: 2^0 = 1s
 
+        # Logging assertions: exactly one INFO record, zero WARNING records
+        pge_logs = [r for r in caplog.records if r.name == "custom_components.pge_energy.portal_auth"]
+        info_logs = [r for r in pge_logs if r.levelno == logging.INFO]
+        warning_logs = [r for r in pge_logs if r.levelno == logging.WARNING]
+        assert len(info_logs) == 1
+        assert len(warning_logs) == 0
+        assert "PGE Cognito connection error on attempt 1 of 5" in info_logs[0].message
+        assert "retrying in 1s" in info_logs[0].message
+        assert "ClientConnectorError" in info_logs[0].message
+        # No credentials, email, or query string in log
+        assert "secret" not in info_logs[0].message
+        assert "user@example.com" not in info_logs[0].message
     @pytest.mark.asyncio
-    async def test_connection_error_exhausts_retries(self):
+    async def test_connection_error_exhausts_retries(self, caplog):
         """After the max connection-error retries, raises PGEConnectionError."""
+        import logging
+        caplog.set_level(logging.DEBUG)
         session = _mock_session_post_with_connection_errors(
             num_initial_errors=5,
             responses=[],
@@ -460,6 +474,17 @@ class TestLoginOrRefresh:
         # 5 connection errors → 5 Cognito post calls, 4 sleeps between them
         assert session.post.call_count == 5
 
+        # Logging assertions: exactly one WARNING record with the underlying message
+        pge_logs = [r for r in caplog.records if r.name == "custom_components.pge_energy.portal_auth"]
+        warning_logs = [r for r in pge_logs if r.levelno == logging.WARNING]
+        info_logs = [r for r in pge_logs if r.levelno == logging.INFO]
+        assert len(warning_logs) == 1
+        assert len(info_logs) == 4  # 4 retry attempts logged at INFO
+        assert "PGE Cognito connection failed after 5 attempts" in warning_logs[0].message
+        assert "ClientConnectorError" in warning_logs[0].message
+        # No credentials, email, or query string in log
+        assert "secret" not in warning_logs[0].message
+        assert "user@example.com" not in warning_logs[0].message
     @pytest.mark.asyncio
     async def test_connection_error_uses_exponential_backoff(self):
         """Backoff delays follow 1s, 2s, 4s, 8s across 5 failed attempts."""
