@@ -141,6 +141,7 @@ def _mock_session_post_with_connection_errors(num_initial_errors: int, responses
 
         async def __aexit__(self, *args):  # noqa: ANN002
             return False
+
     session = MagicMock()
 
     def _post(url, **kwargs):  # noqa: ANN003
@@ -376,6 +377,7 @@ class TestLoginOrRefresh:
     async def test_connection_error_retries_then_succeeds(self, caplog):
         """ClientConnectorError is retried; succeeds on the second attempt."""
         import logging
+
         caplog.set_level(logging.DEBUG)
         session = _mock_session_post_with_connection_errors(
             num_initial_errors=1,
@@ -447,10 +449,12 @@ class TestLoginOrRefresh:
         # No credentials, email, or query string in log
         assert "secret" not in info_logs[0].message
         assert "user@example.com" not in info_logs[0].message
+
     @pytest.mark.asyncio
     async def test_connection_error_exhausts_retries(self, caplog):
         """After the max connection-error retries, raises PGEConnectionError."""
         import logging
+
         caplog.set_level(logging.DEBUG)
         session = _mock_session_post_with_connection_errors(
             num_initial_errors=5,
@@ -486,6 +490,7 @@ class TestLoginOrRefresh:
         # No credentials, email, or query string in log
         assert "secret" not in warning_logs[0].message
         assert "user@example.com" not in warning_logs[0].message
+
     @pytest.mark.asyncio
     async def test_connection_error_uses_exponential_backoff(self):
         """Backoff delays follow 1s, 2s, 4s, 8s across 5 failed attempts."""
