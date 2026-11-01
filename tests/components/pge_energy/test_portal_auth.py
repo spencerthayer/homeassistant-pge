@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
+
 from custom_components.pge_energy.exceptions import (
     PGEAuthenticationError,
     PGECaptchaUnsupportedError,
