@@ -12,14 +12,14 @@ import {
   projectDirectionalUsage,
   symmetricExtent,
   todPeriodForPacific,
-} from "./data.js?v=0.12.6";
+} from "./data.js?v=0.12.7";
 import {
   chromeColors,
   galleryPalette,
   seriesColors,
   tooltipTheme,
   withAlpha,
-} from "./theme.js?v=0.12.6";
+} from "./theme.js?v=0.12.7";
 
 export { seriesColors };
 
