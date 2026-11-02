@@ -1635,6 +1635,24 @@ class PgeEnergyPanel extends HTMLElement {
     this._billingSummarySig = "";
     this._billingPdfHeaderSig = "";
     this._billingPdfDetailsSig = "";
+    this._renderedTabs = new Set();
+    this._fetchCache = new Map();
+  }
+
+  /** Cached fetch for statistic series within a render cycle. */
+  _fetchCached(statisticId, options) {
+    const key = `${statisticId}|${options.start instanceof Date ? options.start.toISOString() : options.start}|${options.end instanceof Date ? options.end.toISOString() : options.end}|${options.period || "hour"}|${options.maxPoints || 1200}`;
+    if (this._fetchCache.has(key)) {
+      return this._fetchCache.get(key);
+    }
+    const promise = fetchStatisticSeries(this._hass, statisticId, options);
+    this._fetchCache.set(key, promise);
+    return promise;
+  }
+
+  /** Clear the fetch cache (call at start of each render cycle). */
+  _clearFetchCache() {
+    this._fetchCache.clear();
   }
 
   set hass(hass) {
@@ -1795,6 +1813,7 @@ class PgeEnergyPanel extends HTMLElement {
 
   _selectPanelTab(tab, { writeHistory = false, focus = false } = {}) {
     if (!PANEL_TABS.includes(tab)) return;
+    const firstVisit = !this._renderedTabs.has(tab);
     this._activeTab = tab;
     for (const button of this.shadowRoot.querySelectorAll(".section-tabs [role=tab]")) {
       const active = button.dataset.tab === tab;
@@ -1809,6 +1828,42 @@ class PgeEnergyPanel extends HTMLElement {
     if (writeHistory && location.hash !== panelTabHash(tab)) history.pushState(null, "", panelTabHash(tab));
     const panel = this.shadowRoot.getElementById("panel-" + tab);
     requestAnimationFrame(() => this._resizeChartsUnder(panel));
+
+    // Lazy-render galleries for this tab on first visit.
+    if (firstVisit && !this._loading) {
+      this._renderedTabs.add(tab);
+      void this._renderTabGalleries(tab);
+    }
+  }
+
+  /** Render galleries for a specific tab (lazy-loaded on first visit). */
+  async _renderTabGalleries(tab) {
+    this._clearFetchCache();
+    const gen = this._galleryRenderGen;
+    const entryId = this._activeEntryId;
+    const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
+
+    /** Yield to main thread between gallery renders to keep UI responsive. */
+    const yieldFrame = () => new Promise((r) => requestAnimationFrame(r));
+
+    switch (tab) {
+      case "usage":
+        await this._softGallery(() => this._renderLoadShapeGallery());
+        break;
+      case "analytics":
+        await this._softGallery(() => this._renderInsights());
+        if (stale()) return;
+        await yieldFrame();
+        await this._softGallery(() => this._renderWeatherMoney());
+        break;
+      case "billing":
+        await this._softGallery(() => this._renderLedgerCharts());
+        break;
+      case "tod":
+        await this._softGallery(() => this._renderTodGallery());
+        break;
+      // glance and programs have no deferred galleries
+    }
   }
 
   _attachRangeBar(tab) {
@@ -2068,6 +2123,7 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   async _renderAll() {
+    this._clearFetchCache();
     const gen = ++this._galleryRenderGen;
     const entryId = this._activeEntryId;
     const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
@@ -2075,30 +2131,311 @@ class PgeEnergyPanel extends HTMLElement {
     this._charts = [];
     this._galleryDays = null;
     this._galleryBillAmount = null;
+
+    /** Yield to main thread between major render phases. */
+    const yieldFrame = () => new Promise((r) => requestAnimationFrame(r));
+
     const presetsApplied = await this._probeAvailablePresets();
     if (stale()) return;
+    await yieldFrame();
+
     this._todBillReady = !!this._billBounds();
     if (presetsApplied || this._availablePresets) this._renderFilters();
     this._renderSync();
     await this._renderKpis();
     if (stale()) return;
+    await yieldFrame();
+
     await this._renderDataGaps();
     if (stale()) return;
+    await yieldFrame();
+
     await this._renderHero();
     if (stale()) return;
-    await this._softGallery(() => this._renderLoadShapeGallery());
-    if (stale()) return;
-    await this._softGallery(() => this._renderInsights());
-    if (stale()) return;
-    await this._renderTod();
-    if (stale()) return;
-    this._renderBillingPrograms(true);
-    if (stale()) return;
-    await this._softGallery(() => this._renderLedgerCharts());
-    if (stale()) return;
-    await this._softGallery(() => this._renderWeatherMoney());
+    await yieldFrame();
+
+    // Render active tab's main content (not galleries).
+    // Galleries are lazy-loaded on first tab visit via _renderTabGalleries.
+    const activeTab = this._activeTab;
+    if (activeTab === "tod") {
+      await this._renderTodMain();
+    } else if (activeTab === "billing" || activeTab === "programs") {
+      this._renderBillingPrograms(false);
+    }
+    // glance and usage share the hero chart; analytics has no main content beyond galleries.
+
     if (stale()) return;
     this._renderDiagnostics();
+
+    // Mark the active tab as rendered so _selectPanelTab doesn't re-render main content.
+    this._renderedTabs.add(activeTab);
+  }
+
+  /** Render TOD main content without the gallery. */
+  async _renderTodMain() {
+    this._clearFetchCache();
+    const el = this.shadowRoot.getElementById("tod");
+    if (!el) return;
+    this._todDirty = false;
+    this._disposeHostCharts(el);
+    const gen = ++this._todRenderGen;
+    try {
+      await this._renderTodBodyMain(el, gen);
+    } catch (err) {
+      if (gen !== this._todRenderGen) return;
+      el.innerHTML = `<h2>Time of Day</h2><p class="error">Failed to render Time of Day: ${this._escape(
+        String(err?.message || err)
+      )}</p>`;
+    }
+  }
+
+  /** Render TOD body without the gallery HTML and gallery render call. */
+  async _renderTodBodyMain(el, gen) {
+    const account = this._account;
+    if (!account || !account.tod) {
+      if (gen !== this._todRenderGen) return;
+      el.innerHTML = `<h2>Time of Day</h2><p class="muted">TOD data not available yet — wait for a sync.</p>`;
+      return;
+    }
+    const tod = account.tod;
+    const e = account.entity_ids;
+    const enrolled = tod.enrolled ?? null;
+    const period = tod.period || "off_peak";
+    const rateUsd = Number(tod.rates?.[period]);
+    const rateCents = Number.isFinite(rateUsd) ? rateUsd * 100 : null;
+    const sourceLabels = {
+      override: "manual override",
+      portal: "PGE",
+      default: "offline defaults",
+    };
+    const sourceLabel = sourceLabels[tod.rate_source] || tod.rate_source || "—";
+    const fetched = tod.portal_fetched_at
+      ? ` · updated ${this._fmtDate(tod.portal_fetched_at)}`
+      : "";
+    const nextAt = tod.next_transition_at;
+    let nextValue = "—";
+    let nextDelta = "—";
+    if (nextAt) {
+      const when = new Date(nextAt);
+      const parts = pacificParts(new Date(nextAt));
+      const nextPeriod = todPeriodForPacific(parts.ymd, parts.hour);
+      const clock = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Los_Angeles",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(when);
+      nextValue = `${TOD_PERIOD_LABELS[nextPeriod] || nextPeriod} at ${clock}`;
+      nextDelta = `in ${this._todCountdown(nextAt)}`;
+    }
+    const dayNote = tod.is_holiday
+      ? "Holiday — off-peak all day"
+      : tod.is_weekend
+        ? "Weekend — off-peak all day"
+        : "Weekday schedule";
+    const sourceHint = `Live rate: ${sourceLabel}${fetched}`;
+    this._ensureTodRangeKey();
+
+    // Catalog data from the domain tariff updater (effective-dated).
+    const catalogs = tod.catalogs || {};
+    const todCatalog = catalogs.tod || [];
+    const basicCatalog = catalogs.basic || [];
+    const tariffStatus = tod.tariff_status || {};
+    const hasCatalog = todCatalog.length > 0 && basicCatalog.length > 0;
+
+    let usageHtml = "";
+    let savingsHtml = "";
+    let windowNote = "";
+    try {
+      const { kwh, cost, kwhSeries, costSeries, hasCost, window } = await this._todUsageByPeriod();
+      if (gen !== this._todRenderGen) return;
+      const totalKwh = kwh.off_peak + kwh.mid_peak + kwh.on_peak;
+      const importedCost = cost.off_peak + cost.mid_peak + cost.on_peak;
+
+      windowNote = window.capped
+        ? `Newest 60 days of ${this._escape(formatRangeLabel(window.start, window.end))} — long ranges stay capped so hourly totals stay exact.`
+        : `Imported hourly intervals, ${this._escape(formatRangeLabel(window.start, window.end))}.`;
+
+      if (totalKwh > 0) {
+        const rows = TOD_PERIODS.map((p) => {
+          const kw = kwh[p] || 0;
+          const c = cost[p] || 0;
+          const share = (kw / totalKwh) * 100;
+          return `<tr>
+            <td>${TOD_PERIOD_LABELS[p]}</td>
+            <td class="num">${this._fmt(kw, " kWh")}</td>
+            <td class="num">${this._fmt(c, "", true)}</td>
+            <td class="num">${this._fmt(share, "%")}</td>
+            <td class="num">${Number.isFinite(kw) && kw > 0 ? this._fmt((c / kw) * 100, " ¢/kWh") : "—"}</td>
+          </tr>`;
+        }).join("");
+        usageHtml = `
+          <h3>Usage by period ${this._hint("PGE usage estimate: the portal hourly amount. It may ignore Time of Day and is not a billed charge.")}</h3>
+          <p class="muted" style="margin:0 0 8px">${windowNote}</p>
+          ${this._todShareBar(kwh)}
+          <table class="tod-table">
+            <thead><tr><th>Period</th><th class="num">Energy</th><th class="num">Cost</th><th class="num">Share</th><th class="num">Avg portal ¢/kWh</th></tr></thead>
+            <tbody>${rows}</tbody>
+            <tfoot><tr><td>Total</td><td class="num">${this._fmt(totalKwh, " kWh")}</td><td class="num">${this._fmt(importedCost, "", true)}</td><td class="num">100%</td><td class="num">—</td></tr></tfoot>
+          </table>
+        `;
+
+        if (hasCatalog) {
+          const overrideRates = tod.override_rates || null;
+          const estimate = estimatePlanCostSeries({
+            hourlyKwh: kwhSeries,
+            todCatalog,
+            basicCatalog,
+            overrideRates,
+            start: window.start,
+            end: window.end,
+          });
+          if (gen !== this._todRenderGen) return;
+
+          if (estimate.coverage.complete) {
+            const localTodTotal = estimate.todValues.reduce((s, v) => s + (v ?? 0), 0);
+            const localBasicTotal = estimate.basicValues.reduce((s, v) => s + (v ?? 0), 0);
+            const localSavings = localBasicTotal - localTodTotal;
+
+            const reconciled = reconcilePlanComparison({
+              local: {
+                todTotal: localTodTotal,
+                basicTotal: localBasicTotal,
+                savings: localSavings,
+                start: window.start,
+                end: window.end,
+                complete: true,
+              },
+              rateCompare: tod.rate_compare || null,
+              selectedRange: { start: window.start, end: window.end },
+            });
+
+            if (gen !== this._todRenderGen) return;
+
+            let flatRateDiag = null;
+            try {
+              flatRateDiag = detectFlatPortalRates({
+                hourlyKwh: kwhSeries,
+                hourlyCost: costSeries,
+                todCatalog,
+              });
+            } catch (_) {
+              /* ignore */
+            }
+
+            savingsHtml = this._todCompareHtmlDual({
+              enrolled,
+              localTodTotal,
+              localBasicTotal,
+              localSavings,
+              reconciled,
+              flatRateDiag,
+              tod,
+              sourceLabel,
+              windowLabel: formatRangeLabel(window.start, window.end),
+              todCatalog,
+              basicCatalog,
+              tariffStatus,
+              overrideRates: tod.override_rates || null,
+              overrideScope: tod.override_scope || null,
+              basicComparisonRate: tod.basic_comparison_rate,
+              basicComparisonSource: tod.basic_comparison_source,
+              basicComparisonEffectiveFrom: tod.basic_comparison_effective_from,
+              basicComparisonComponentBasis: tod.basic_comparison_component_basis,
+              basicComparisonExclusions: tod.basic_comparison_exclusions,
+            });
+          } else {
+            savingsHtml = this._todCompareHtmlCoverage(estimate.coverage, hasCost);
+          }
+        } else if (hasCost) {
+          const compare = computeTodPlanCompare({
+            kwh,
+            cost,
+            rates: tod.rates || {},
+            basicRate: tod.basic_rate,
+            enrolled,
+            hasCost,
+          });
+          savingsHtml = compare
+            ? this._todCompareHtml(compare, tod, sourceLabel, formatRangeLabel(window.start, window.end))
+            : "";
+        } else {
+          savingsHtml = `<div class="tod-counterfactual"><p class="muted" style="margin:0">Local estimate unavailable — imported cost must cover every consumption hour in this window (enable Include cost / wait for a full cost sync).</p></div>`;
+        }
+      } else {
+        usageHtml = `<p class="muted">No imported hourly usage in this window yet.</p>`;
+      }
+    } catch (_err) {
+      if (gen !== this._todRenderGen) return;
+      usageHtml = `<p class="muted">Usage-by-period unavailable for this range.</p>`;
+    }
+
+    if (gen !== this._todRenderGen) return;
+
+    if (tod.savings_total != null) {
+      const rateCompare = tod.rate_compare || null;
+      const officialPeriod =
+        tod.savings_source === "rate_compare" && rateCompare && rateCompare.comparison_period
+          ? ` for ${this._escape(rateCompare.comparison_period)}`
+          : "";
+      const savingsSourceLabels = {
+        pricing_plan: "PGE pricing plan",
+        rate_compare: "PGE rate comparison",
+      };
+      const savingsSourceLabel = savingsSourceLabels[tod.savings_source] || "PGE portal";
+      savingsHtml = `
+        <div class="tod-counterfactual official">
+          <div class="label">PGE TOD vs Basic savings</div>
+          <div class="value">${this._fmt(tod.savings_total, "", true)}</div>
+          <div class="delta">Official total from PGE portal${officialPeriod} (${this._escape(savingsSourceLabel)}).</div>
+        </div>
+        ${savingsHtml}
+      `;
+    }
+
+    el.innerHTML = `
+      <section class="card">
+      <h2>Time of Day</h2>
+      <div class="tod-header">
+        <span class="badge ${
+          enrolled === true ? "on" : enrolled === false ? "off" : ""
+        }">${
+          enrolled === true
+            ? "Enrolled in Time of Day"
+            : enrolled === false
+              ? "Not enrolled in Time of Day"
+              : "Time of Day enrollment unknown"
+        }</span>
+        <span class="muted tod-source">${this._escape(sourceHint)}</span>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi tod-${period}"><div class="label">Period now</div><div class="value">${TOD_PERIOD_LABELS[period]}</div><div class="delta">${this._escape(dayNote)}</div></div>
+        <div class="kpi"><div class="label">Current rate</div><div class="value">${rateCents != null ? this._fmt(rateCents, " ¢/kWh") : "—"}</div><div class="delta">${this._escape(sourceLabel)}</div></div>
+        <div class="kpi"><div class="label">Next transition</div><div class="value">${this._escape(nextValue)}</div><div class="delta">${this._escape(nextDelta)}</div></div>
+      </div>
+      <div class="tod-schedule">
+        <h3>Week schedule (Pacific) ${this._hint("Time of Day periods are off-peak, mid-peak, and on-peak. The hours change by season and are all off-peak on weekends and holidays. Weekday windows (Pacific): off-peak 12am–7am and 9pm–12am, mid-peak 7am–5pm, on-peak 5pm–9pm.")}</h3>
+        <div class="tod-legend">
+          ${TOD_PERIODS.map((p) => `<span class="legend ${p}"><i></i>${TOD_PERIOD_LABELS[p]}</span>`).join("")}
+          <span class="muted" style="margin-left:auto">Highlighted column = now</span>
+        </div>
+        ${this._todWeekGrid()}
+        ${this._todHolidayNote()}
+      </div>
+      </section>
+      <section class="card">
+      <div class="usage-accounting tod-usage">
+        ${this._todRangeControlsHtml()}
+        ${usageHtml}
+        ${savingsHtml}
+      </div>
+      ${this._tariffStatusHtml(tariffStatus, todCatalog, basicCatalog)}
+      </section>
+      ${this._todGalleryHtml()}
+    `;
+    if (gen !== this._todRenderGen) return;
+    this._bindPersistentDetails(el);
+    this._bindTodRange(el);
+    // Gallery rendering is deferred to _renderTabGalleries.
   }
 
   async _mountAccountGalleries() {
@@ -2333,31 +2670,40 @@ class PgeEnergyPanel extends HTMLElement {
       return true;
     }
     const id = this._account.statistic_ids.consumption;
-    const available = [];
     const bill = this._billBounds();
-    for (const key of RANGE_PRESET_ORDER) {
-      if (gen !== this._presetProbeGen) return false;
-      if (key === "cycle" || key === "last_cycle") {
-        // Statement bounds alone make bill-bound presets meaningful.
-        if (bill) available.push(key);
-        continue;
-      }
-      try {
-        const range = this._basePresetRange(key);
-        const series = await fetchStatisticSeries(this._hass, id, {
-          start: range.start,
-          end: range.end,
-          period: range.period,
+    const available = [];
+
+    // Bill-bound presets don't need a probe.
+    if (bill) {
+      available.push("cycle", "last_cycle");
+    }
+
+    // Probe all other presets in parallel.
+    const probeKeys = RANGE_PRESET_ORDER.filter(
+      (k) => k !== "cycle" && k !== "last_cycle"
+    );
+    const results = await Promise.allSettled(
+      probeKeys.map((key) =>
+        fetchStatisticSeries(this._hass, id, {
+          start: this._basePresetRange(key).start,
+          end: this._basePresetRange(key).end,
+          period: this._basePresetRange(key).period,
           maxPoints: 400,
-        });
-        if (countSeriesPoints(series) >= minPointsForPreset(key)) {
-          available.push(key);
-        }
-      } catch (_err) {
-        /* probe optional */
+        }).then((series) => ({
+          key,
+          ok: countSeriesPoints(series) >= minPointsForPreset(key),
+        }))
+      )
+    );
+
+    if (gen !== this._presetProbeGen) return false;
+
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value.ok) {
+        available.push(result.value.key);
       }
     }
-    if (gen !== this._presetProbeGen) return false;
+
     this._availablePresets = available.length ? available : ["24h"];
     const current = this._normalizeRangeKey(this._rangeKey);
     if (current !== "custom" && !this._availablePresets.includes(current)) {
@@ -2546,13 +2892,18 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   async _renderRangeScope() {
+    this._clearFetchCache();
     const rangeGen = ++this._rangeRenderGen;
     const entryId = this._activeEntryId;
     const gen = this._galleryRenderGen;
     const stale = () =>
       this._rangeRenderGen !== rangeGen || this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
+
+    const yieldFrame = () => new Promise((r) => requestAnimationFrame(r));
+
     await this._renderHero();
     if (stale()) return;
+    await yieldFrame();
   }
 
   async _renderDataGaps() {
@@ -2600,13 +2951,13 @@ class PgeEnergyPanel extends HTMLElement {
       const day = rangePresets()["24h"];
       const ids = this._account.statistic_ids;
       const [kwh, temp] = await Promise.all([
-        fetchStatisticSeries(this._hass, ids.consumption, {
+        this._fetchCached(ids.consumption, {
           start: day.start,
           end: day.end,
           period: "hour",
           maxPoints: 48,
         }),
-        fetchStatisticSeries(this._hass, ids.temperature, {
+        this._fetchCached(ids.temperature, {
           start: day.start,
           end: day.end,
           period: "hour",
@@ -2912,13 +3263,13 @@ class PgeEnergyPanel extends HTMLElement {
       const sparkStart = new Date(publishedEnd.getTime() - 31 * 24 * 60 * 60 * 1000);
       const yesterdayStart = pacificMidnightUtc(priorPacificYmd(pacificYmd(publishedEnd)));
       const [kwhSeries, costSeries, weekKwhSum, weekCostSum, compensationDaySum, compensationSparkSeries] = await Promise.all([
-        fetchStatisticSeries(this._hass, this._account.statistic_ids.consumption, {
+        this._fetchCached(this._account.statistic_ids.consumption, {
           start: sparkStart,
           end: publishedEnd,
           period: "day",
           maxPoints: 40,
         }),
-        fetchStatisticSeries(this._hass, this._account.statistic_ids.cost, {
+        this._fetchCached(this._account.statistic_ids.cost, {
           start: sparkStart,
           end: publishedEnd,
           period: "day",
@@ -2939,7 +3290,7 @@ class PgeEnergyPanel extends HTMLElement {
           end: publishedEnd,
           period: "hour",
         }),
-        fetchStatisticSeries(this._hass, this._account.statistic_ids.compensation, {
+        this._fetchCached(this._account.statistic_ids.compensation, {
           start: sparkStart,
           end: publishedEnd,
           period: "day",
@@ -3846,15 +4197,15 @@ class PgeEnergyPanel extends HTMLElement {
 
   async _fetchUsageSeries(ids, start, end, period, maxPoints) {
     const [kwh, returned, cost, compensation, temp] = await Promise.all([
-      fetchStatisticSeries(this._hass, ids.consumption, { start, end, period, maxPoints }),
+      this._fetchCached(ids.consumption, { start, end, period, maxPoints }),
       ids.return
-        ? fetchStatisticSeries(this._hass, ids.return, { start, end, period, maxPoints })
+        ? this._fetchCached(ids.return, { start, end, period, maxPoints })
         : Promise.resolve({ xs: [], values: [] }),
-      fetchStatisticSeries(this._hass, ids.cost, { start, end, period, maxPoints }),
+      this._fetchCached(ids.cost, { start, end, period, maxPoints }),
       ids.compensation
-        ? fetchStatisticSeries(this._hass, ids.compensation, { start, end, period, maxPoints })
+        ? this._fetchCached(ids.compensation, { start, end, period, maxPoints })
         : Promise.resolve({ xs: [], values: [] }),
-      fetchStatisticSeries(this._hass, ids.temperature, { start, end, period, maxPoints }),
+      this._fetchCached(ids.temperature, { start, end, period, maxPoints }),
     ]);
     return { kwh, returned, cost, compensation, temp };
   }
@@ -4562,55 +4913,72 @@ class PgeEnergyPanel extends HTMLElement {
     const historyEnd = publishedDataEnd();
     const ids = account.statistic_ids;
     const colors = seriesColors(this);
+    // Determine heatmap fetch range from stored window (default 12mo).
+    // Only fetch full history when user explicitly selects "All years".
+    const heatWindow = this._heatmapWindowKey();
+    const heatStart = (() => {
+      if (heatWindow === "all") return HEATMAP_HISTORY_START;
+      if (heatWindow === "12mo") {
+        const endYmd = pacificYmd(new Date(historyEnd.getTime() - 1));
+        const [year, month] = endYmd.split("-").map(Number);
+        return new Date(Date.UTC(year, month - 12, 1));
+      }
+      if (/^\d{4}$/.test(heatWindow)) {
+        return new Date(Date.UTC(Number(heatWindow), 0, 1));
+      }
+      return HEATMAP_HISTORY_START;
+    })();
+    const heatMaxPoints = heatWindow === "all" ? HEATMAP_MAX_DAYS : 400;
+
     const [kwhDay, tempDay, billAmt, payAmt, costDay, kwhForRate, kwhHistory, tempHistory] =
       await Promise.all([
-      fetchStatisticSeries(this._hass, ids.consumption, {
+      this._fetchCached(ids.consumption, {
         start: costRange.start,
         end: costRange.end,
         period: "day",
         maxPoints: 400,
       }),
-      fetchStatisticSeries(this._hass, ids.temperature, {
+      this._fetchCached(ids.temperature, {
         start: costRange.start,
         end: costRange.end,
         period: "day",
         maxPoints: 400,
       }),
-      fetchStatisticSeries(this._hass, ids.bill_amount, {
+      this._fetchCached(ids.bill_amount, {
         start: costRange.start,
         end: costRange.end,
         period: "month",
         maxPoints: 48,
       }),
-      fetchStatisticSeries(this._hass, ids.payment_amount, {
+      this._fetchCached(ids.payment_amount, {
         start: costRange.start,
         end: costRange.end,
         period: "month",
         maxPoints: 48,
       }),
-      fetchStatisticSeries(this._hass, ids.cost, {
+      this._fetchCached(ids.cost, {
         start: costRange.start,
         end: costRange.end,
         period: "day",
         maxPoints: 400,
       }),
-      fetchStatisticSeries(this._hass, ids.consumption, {
+      this._fetchCached(ids.consumption, {
         start: costRange.start,
         end: costRange.end,
         period: "day",
         maxPoints: 400,
       }),
-      fetchStatisticSeries(this._hass, ids.consumption, {
-        start: HEATMAP_HISTORY_START,
+      this._fetchCached(ids.consumption, {
+        start: heatStart,
         end: historyEnd,
         period: "day",
-        maxPoints: HEATMAP_MAX_DAYS,
+        maxPoints: heatMaxPoints,
       }),
-      fetchStatisticSeries(this._hass, ids.temperature, {
-        start: HEATMAP_HISTORY_START,
+      this._fetchCached(ids.temperature, {
+        start: heatStart,
         end: historyEnd,
         period: "day",
-        maxPoints: HEATMAP_MAX_DAYS,
+        maxPoints: heatMaxPoints,
       }),
     ]);
     if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) return;
@@ -4966,13 +5334,13 @@ class PgeEnergyPanel extends HTMLElement {
     const range = this._resolveTodRange();
     const window = this._todAnalysisWindow(range);
     const [kwhSeries, costSeries] = await Promise.all([
-      fetchStatisticSeries(this._hass, ids.consumption, {
+      this._fetchCached(ids.consumption, {
         start: window.start,
         end: window.end,
         period: "hour",
         maxPoints: 2000,
       }),
-      fetchStatisticSeries(this._hass, ids.cost, {
+      this._fetchCached(ids.cost, {
         start: window.start,
         end: window.end,
         period: "hour",
@@ -5115,7 +5483,9 @@ class PgeEnergyPanel extends HTMLElement {
     this._disposeHostCharts(el);
     const gen = ++this._todRenderGen;
     try {
-      await this._renderTodBody(el, gen);
+      await this._renderTodBodyMain(el, gen);
+      if (gen !== this._todRenderGen) return;
+      await this._softGallery(() => this._renderTodGallery());
     } catch (err) {
       if (gen !== this._todRenderGen) return;
       el.innerHTML = `<h2>Time of Day</h2><p class="error">Failed to render Time of Day: ${this._escape(
@@ -5949,17 +6319,17 @@ class PgeEnergyPanel extends HTMLElement {
     kwhHost.replaceChildren();
     try {
       const [bill, pay, kwh] = await Promise.all([
-        fetchStatisticSeries(this._hass, account.statistic_ids.bill_amount, {
+        this._fetchCached(account.statistic_ids.bill_amount, {
           start: range.start,
           end: range.end,
           period: "month",
         }),
-        fetchStatisticSeries(this._hass, account.statistic_ids.payment_amount, {
+        this._fetchCached(account.statistic_ids.payment_amount, {
           start: range.start,
           end: range.end,
           period: "month",
         }),
-        fetchStatisticSeries(this._hass, account.statistic_ids.bill_kwh, {
+        this._fetchCached(account.statistic_ids.bill_kwh, {
           start: range.start,
           end: range.end,
           period: "month",

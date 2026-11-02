@@ -10,7 +10,7 @@ function _cacheKey(statisticId, period, start, end, maxPoints) {
 }
 
 /** Largest-Triangle-Three-Buckets downsample for [x, y] pairs. */
-export function lttb(xs, ys, threshold) {
+export async function lttb(xs, ys, threshold) {
   const n = xs.length;
   if (threshold >= n || threshold < 3) {
     return { xs: xs.slice(), ys: ys.slice() };
@@ -54,6 +54,11 @@ export function lttb(xs, ys, threshold) {
     sampledX.push(xs[nextA]);
     sampledY.push(ys[nextA]);
     a = nextA;
+
+    // Yield to main thread every 100 iterations to prevent blocking on large datasets.
+    if (i % 100 === 0 && typeof scheduler !== "undefined" && scheduler.yield) {
+      await scheduler.yield();
+    }
   }
   sampledX.push(xs[n - 1]);
   sampledY.push(ys[n - 1]);
@@ -141,8 +146,8 @@ export async function fetchStatisticSeries(hass, statisticId, { start, end, peri
 
   let out = { xs, sums, means, states, changes: values, values };
   if (xs.length > maxPoints) {
-    const dSum = lttb(xs, values, maxPoints);
-    const dMean = lttb(xs, means, maxPoints);
+    const dSum = await lttb(xs, values, maxPoints);
+    const dMean = await lttb(xs, means, maxPoints);
     out = {
       xs: dSum.xs,
       values: dSum.ys,
