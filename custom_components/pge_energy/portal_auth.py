@@ -520,15 +520,22 @@ async def _login_with_password(
             raise
         except PGEConnectionError as exc:
             last_connection_error = exc
-            _LOGGER.warning(
-                "PGE Cognito connection error on attempt %s of %s; retrying in %ss",
+            delay = min(2 ** (attempt - 1), 30)
+            if attempt >= _MAX_CONNECTION_RETRIES:
+                _LOGGER.warning(
+                    "PGE Cognito connection failed after %s attempts: %s",
+                    attempt,
+                    exc,
+                )
+                raise
+            _LOGGER.info(
+                "PGE Cognito connection error on attempt %s of %s (%s); retrying in %ss",
                 attempt,
                 _MAX_CONNECTION_RETRIES,
-                min(2 ** (attempt - 1), 30),
+                exc,
+                delay,
             )
-            if attempt >= _MAX_CONNECTION_RETRIES:
-                raise
-            await asyncio.sleep(min(2 ** (attempt - 1), 30))
+            await asyncio.sleep(delay)
     if auth_result is None:
         raise last_connection_error or PGEAuthenticationError("PGE login failed")
 

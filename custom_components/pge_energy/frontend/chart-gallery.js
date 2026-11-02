@@ -14,8 +14,8 @@ import {
   createThemeRiver,
   createTreemap,
   createWaterfall,
-} from "./charts.js?v=0.12.5";
-import { billFamilyColors, todColors } from "./theme.js?v=0.12.5";
+} from "./charts.js?v=0.12.6";
+import { billFamilyColors, todColors } from "./theme.js?v=0.12.6";
 import {
   estimatePlanCostSeries,
   fetchStatisticSeries,
@@ -26,7 +26,7 @@ import {
   TOD_PERIOD_LABELS,
   todPeriodForPacific,
   isTodOffPeakDay,
-} from "./data.js?v=0.12.5";
+} from "./data.js?v=0.12.6";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const HOURS = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0"));

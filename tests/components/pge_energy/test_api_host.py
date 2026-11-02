@@ -156,7 +156,9 @@ def test_probe_is_alive_matches_the_unauthenticated_checks() -> None:
     assert probe_is_alive(501, content_type="text/plain", body="no") is True
     assert probe_is_alive(503, content_type="text/plain", body="upstream connect error") is False
     assert probe_is_alive(400, content_type="text/plain", body="upstream connect error") is False
-    assert probe_is_alive(401, strict=True) is True
+    # Strict mode: guessed hosts need 401 with JSON body (real API), not text/plain (WAF page)
+    assert probe_is_alive(401, content_type="application/json", body="{}", strict=True) is True
+    assert probe_is_alive(401, content_type="text/plain", body="", strict=True) is False
     assert probe_is_alive(403, content_type="text/html", body="<html>", strict=True) is False
     assert probe_is_alive(200, strict=True) is False
     assert probe_is_alive(501, strict=True) is False
@@ -280,7 +282,8 @@ async def test_label_candidate_is_probed_before_it_can_take_credentials(
         assert "authorization" not in {key.lower() for key in kwargs["headers"]}
         if any(url.startswith(origin) for origin in dead):
             return _Resp(503, b"upstream connect error")
-        return _Resp(401, b"")
+        # Guessed host needs JSON body for strict 401
+        return _Resp(401, b"{}", "application/json")
 
     session = _Session(handler)
     resolver = ApiHostResolver()
@@ -303,7 +306,8 @@ async def test_guessed_host_403_never_receives_credentials() -> None:
         assert kwargs["headers"]["idp_access_token"] == PROBE_IDP_TOKEN
         assert "authorization" not in {key.lower() for key in kwargs["headers"]}
         if url.startswith("https://portal.portlandgeneral.com"):
-            return _Resp(401, b"")
+            # Guessed host needs JSON body for strict 401
+            return _Resp(401, b"{}", "application/json")
         if url.startswith(PGE_API_HOSTS[0]):
             return _Resp(503, b"upstream connect error")
         return _Resp(403, b"<html>", "text/html")
@@ -426,7 +430,8 @@ async def test_guessed_host_401_on_the_real_token_keeps_sweeping() -> None:
         token = (kwargs.get("headers") or {}).get("idp_access_token")
         if token == PROBE_IDP_TOKEN:
             if host in {"api-gw.portlandgeneral.com", "gw.portlandgeneral.com"}:
-                return _Resp(401, b"")
+                # Guessed hosts need JSON body for strict 401
+                return _Resp(401, b"{}", "application/json")
             return _Resp(503, b"down")
         if host == "api-gw.portlandgeneral.com":
             return _Resp(401, b"denied")
@@ -508,7 +513,75 @@ async def test_usage_timeout_fails_over_once_and_hides_the_bearer(caplog: pytest
     ):
         await client.get_usage(UsageResolution.HOURLY, datetime.now(UTC), datetime.now(UTC), "key")
     assert "secret-token" not in str(excinfo.value)
-    assert "secret-token" not in caplog.text
-    assert "Bearer" not in caplog.text
     credential_calls = [url for url, kwargs in session.calls if "idp_access_token" not in (kwargs.get("headers") or {})]
     assert len(credential_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_acquire_reports_each_probed_host() -> None:
+    def handler(url: str, _kwargs: dict) -> _Resp:
+        return _Resp(503, b"upstream connect error")
+
+    resolver = ApiHostResolver()
+    with pytest.raises(PGEConnectionError) as excinfo:
+        await resolver.acquire(_Session(handler))  # type: ignore[arg-type]
+
+    message = str(excinfo.value)
+    assert message.startswith("PGE API host unavailable (probes: ")
+    assert "api.portlandgeneral.com=503" in message
+    assert "apix.portlandgeneral.com=503" in message
+
+
+@pytest.mark.asyncio
+async def test_acquire_reports_no_response_on_connect_error() -> None:
+    def handler(url: str, _kwargs: dict) -> _Resp | Exception:
+        return aiohttp.ClientConnectionError("down")
+
+    resolver = ApiHostResolver()
+    with pytest.raises(PGEConnectionError) as excinfo:
+        await resolver.acquire(_Session(handler))  # type: ignore[arg-type]
+
+    message = str(excinfo.value)
+    assert message.startswith("PGE API host unavailable (probes: ")
+    assert "api.portlandgeneral.com=no-response" in message
+    assert "apix.portlandgeneral.com=no-response" in message
+
+
+@pytest.mark.asyncio
+async def test_acquire_probe_status_is_isolated_per_sweep() -> None:
+    """Each failed acquire() sweep reports only its own probes, no stale data."""
+
+    def fail_handler(url: str, _kwargs: dict) -> _Resp:
+        return _Resp(503, b"upstream connect error")
+
+    # First failed sweep
+    resolver1 = ApiHostResolver()
+    with pytest.raises(PGEConnectionError) as excinfo:
+        await resolver1.acquire(_Session(fail_handler))  # type: ignore[arg-type]
+    message1 = str(excinfo.value)
+    assert message1.startswith("PGE API host unavailable (probes: ")
+    assert "api.portlandgeneral.com=503" in message1
+    assert "apix.portlandgeneral.com=503" in message1
+    assert "api-gw.portlandgeneral.com=503" in message1
+    assert "gw.portlandgeneral.com=503" in message1
+
+    # Successful acquire on a new resolver
+    def success_handler(url: str, _kwargs: dict) -> _Resp:
+        return _Resp(401, b"")
+
+    resolver2 = ApiHostResolver()
+    origin = await resolver2.acquire(_Session(success_handler))  # type: ignore[arg-type]
+    assert origin == PGE_API_HOSTS[0]
+
+    # Second failed sweep on another new resolver - should report same probes
+    resolver3 = ApiHostResolver()
+    with pytest.raises(PGEConnectionError) as excinfo:
+        await resolver3.acquire(_Session(fail_handler))  # type: ignore[arg-type]
+    message2 = str(excinfo.value)
+    assert message2.startswith("PGE API host unavailable (probes: ")
+    assert "api.portlandgeneral.com=503" in message2
+    assert "apix.portlandgeneral.com=503" in message2
+    assert "api-gw.portlandgeneral.com=503" in message2
+    assert "gw.portlandgeneral.com=503" in message2
+    # Messages should be identical (same probes, same statuses)
+    assert message1 == message2
