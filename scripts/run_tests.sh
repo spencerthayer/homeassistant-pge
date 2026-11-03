@@ -18,5 +18,8 @@ if [[ "$node_ok" != "true" ]]; then
   echo "error: frontend tests require Node.js 18.19+, 20.6+, or 21+ (found $(node -v))" >&2
   exit 1
 fi
+for module in custom_components/pge_energy/frontend/*.js; do
+  node --check "$module"
+done
 node --import ./tests/frontend/register-hooks.mjs --test tests/frontend/*.test.js
 "$PY" scripts/scan_secrets.py

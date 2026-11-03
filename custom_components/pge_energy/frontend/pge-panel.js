@@ -61,7 +61,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.12.7";
+} from "./data.js?v=0.12.8";
 import {
   baseloadFloor,
   cycleCumulative,
@@ -103,8 +103,8 @@ import {
   lineItemShares,
   treemapSlices,
   waterfallSteps,
-} from "./chart-series.js?v=0.12.7";
-import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.7";
+} from "./chart-series.js?v=0.12.8";
+import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.8";
 import {
   createBarChart,
   createLineChart,
@@ -114,9 +114,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.12.7";
-import { sparklineSvg } from "./svg-helpers.js?v=0.12.7";
-import { applyPanelTheme, todColors } from "./theme.js?v=0.12.7";
+} from "./charts.js?v=0.12.8";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.8";
+import { applyPanelTheme, todColors } from "./theme.js?v=0.12.8";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -5024,7 +5024,6 @@ class PgeEnergyPanel extends HTMLElement {
       if (chart) this._charts.push(chart);
     }
 
-    const heatWindow = this._heatmapWindowKey(); // 12mo default, or a year, or all
     const kwhWindow = this._sliceHeatmap(kwhHistory.xs, kwhHistory.values, heatWindow);
     const tempWindow = this._sliceHeatmap(tempHistory.xs, tempHistory.means, heatWindow);
     this._renderHeatmapChips(kwhHistory.xs);
