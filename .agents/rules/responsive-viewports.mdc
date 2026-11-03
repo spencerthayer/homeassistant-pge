@@ -1,0 +1,46 @@
+---
+description: Check PGE panel layout at every useful viewport before finishing a UI change
+alwaysApply: true
+---
+
+# Responsive viewports
+
+Every application change must be checked in EgoLite Browser before it is called done. Run `ego-browser skill` first and follow the installed usage guide. Use the running app and simulate desktop, tablet, and mobile device/viewports; check UX, UI, responsive behavior, and page load time at each form factor. Report the routes, viewport/device settings, observed load times, and any defects. If the app cannot be run or its relevant path cannot be reached, state the blocker instead of treating the check as passed.
+
+Do not hard-reset, reboot, or reload the Cursor Browser. Use EgoLite Browser for a clean browser process when required. Clear device-metric overrides before stopping so the browser is not left at a simulated device size.
+
+## Widths to check
+
+Check each width below. At every width, confirm text stays inside its card, columns fill the row evenly, and nothing jumps from a cramped grid to a stretched one.
+
+| Window | What must be true |
+| --- | --- |
+| 390 | Phone. Two columns. Labels may wrap to two lines. |
+| 780 | Large phone. Still two columns. Cards are wider, not four cramped columns. |
+| 960 | Four columns. Labels fit on one line. Last row is a complete pair. |
+| 1100 | Four columns. Seven columns here is too narrow. |
+| 1280 | Four columns. Pairs sit side by side. |
+| 1500 | Still four columns. Seven columns still wraps long labels. |
+| 1680 and wider | Seven columns and two rows. Labels stay on one line. |
+
+The At a glance grid uses window plus card width. Two columns below an 871px window, where Home Assistant hides the sidebar. Four columns from 871px when `#kpis` is at least 600px. Seven columns and two rows when `#kpis` is at least 1300px. Card width alone cannot hit two columns at 780 (sidebar hidden, card about 706px) and four at 960 (sidebar open, card about 622px).
+
+## Example
+
+```css
+/* ❌ BAD: seven columns for every window above 900px */
+@media (min-width: 900px) {
+  .kpi-grid { grid-template-columns: repeat(7, 1fr); }
+}
+
+/* ✅ GOOD: window plus card. 871px is the HA sidebar breakpoint. */
+#kpis { container-type: inline-size; }
+@media (min-width: 871px) {
+  @container (min-width: 600px) {
+    .kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
+  @container (min-width: 1300px) {
+    .kpi-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  }
+}
+```
