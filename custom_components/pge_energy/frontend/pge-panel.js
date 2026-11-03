@@ -112,6 +112,7 @@ import {
   createScatter,
   createUsageComboChart,
   destroyCharts,
+  ensureEcharts,
   renderHeatmap,
   seriesColors,
 } from "./charts.js?v=0.12.9";
@@ -3783,6 +3784,8 @@ class PgeEnergyPanel extends HTMLElement {
     const period = overview ? "hour" : this._period || range.period;
     const ids = account.statistic_ids;
     const colors = seriesColors(this);
+    // Download ECharts alongside the recorder reads instead of after them.
+    ensureEcharts().catch(() => {});
     const raw = await this._fetchUsageSeries(
       ids,
       range.start,
