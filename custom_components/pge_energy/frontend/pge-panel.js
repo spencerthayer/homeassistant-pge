@@ -2190,7 +2190,7 @@ class PgeEnergyPanel extends HTMLElement {
           this._weatherMoney = this._softGallery(() => this._renderWeatherMoney());
         }
         await this._softGallery(() => this._renderInsights());
-        if (this._weatherMoney) await this._weatherMoney;
+        // Weather keeps running. Its hourly history must not hold primary readiness.
       } else if (tab === "tod") {
         await this._renderTodMain();
       } else {

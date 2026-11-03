@@ -70,6 +70,36 @@ it("starts the landing primary before any secondary recorder work", async () => 
   assert.ok(calls.indexOf("insights") < calls.indexOf("kpis"));
 });
 
+it("a deferred weather render does not block a switch off Analytics", async () => {
+  const insights = deferred();
+  const weather = deferred();
+  const calls = [];
+  const panel = panelWith({
+    _activeTab: "analytics",
+    _accounts: [{ entry_id: "a" }],
+    _renderInsights: () => { calls.push("insights"); return insights.promise; },
+    _renderWeatherMoney: () => { calls.push("weather"); return weather.promise; },
+    _renderHero: async () => { calls.push("hero"); },
+    _renderKpis: async () => {}, _renderDataGaps: async () => {},
+    _probeAvailablePresets: async () => false, _renderTabGalleries: async () => {},
+    _renderBillingPrograms() { calls.push("billing"); },
+  });
+  const done = panel._renderAll();
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, ["weather", "insights"]);
+    panel._activeTab = "billing";
+    insights.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(calls.includes("billing"));
+    assert.equal(panel._primaryReady, true);
+  } finally {
+    weather.resolve();
+    await done;
+  }
+  assert.equal(panel._primaryReady, true);
+});
+
 it("switching tabs during initial rendering renders the newly selected primary", async () => {
   const gate = deferred();
   const calls = [];
