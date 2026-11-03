@@ -755,6 +755,8 @@ bash scripts/run_tests.sh
 
 Local CLI testing reuses the production `api` / `auth` / `portal_auth` modules with an opt-in `.env` (gitignored, never auto-loaded): [`docs/LIVE_TESTING.md`](docs/LIVE_TESTING.md).
 
+HACS publication is the manual `Release` workflow after the change is on `main`. Dispatch it with the approved full commit SHA and version. It publishes only when the latest push runs of CI and Prek succeeded for that SHA. Merging and publishing need separate approval.
+
 ## Security
 
 See [`SECURITY.md`](SECURITY.md). Diagnostics redact tokens, passwords, emails, person IDs, and account numbers.

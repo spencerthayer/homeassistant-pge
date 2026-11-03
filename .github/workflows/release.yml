@@ -1,47 +1,79 @@
-# Create a GitHub Release (HACS Latest) when VERSION lands on main
-# and no matching tag exists yet. Squash/merge of a version-bump PR
-# is what publishes; re-running after the tag exists is a no-op.
 name: Release
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full main commit SHA explicitly approved for publishing
+        required: true
+        type: string
+      version:
+        description: Approved integration version without v
+        required: true
+        type: string
 
 permissions:
   contents: write
+  actions: read
+
+concurrency:
+  group: hacs-release
+  cancel-in-progress: false
 
 jobs:
   release:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_SHA: ${{ inputs.sha }}
+      EXPECTED_VERSION: ${{ inputs.version }}
     steps:
+      - name: Validate approved inputs
+        run: |
+          python3 - <<'PY'
+          import os, re
+          assert re.fullmatch(r"[0-9a-f]{40}", os.environ["RELEASE_SHA"]), "full SHA required"
+          assert re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", os.environ["EXPECTED_VERSION"]), "SemVer required"
+          PY
+
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
 
-      - name: Read integration version
-        id: version
+      - name: Verify target, version, and green CI
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
           VERSION="$(python3 -c "import json; print(json.load(open('custom_components/pge_energy/manifest.json'))['version'])")"
-          CONST_VERSION="$(python3 -c "import pathlib,re; t=pathlib.Path('custom_components/pge_energy/const.py').read_text(); print(re.search(r'^VERSION = \"([^\"]+)\"', t, re.M).group(1))")"
-          if [[ "$VERSION" != "$CONST_VERSION" ]]; then
-            echo "manifest.json version ($VERSION) != const.py VERSION ($CONST_VERSION)" >&2
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          CONST_VERSION="$(python3 -c "import pathlib,re; s=pathlib.Path('custom_components/pge_energy/const.py').read_text(); print(re.search(r'^VERSION = \"([^\"]+)\"', s, re.M).group(1))")"
+          test "$VERSION" = "$EXPECTED_VERSION"
+          test "$CONST_VERSION" = "$EXPECTED_VERSION"
+          test -f "release_notes_v${EXPECTED_VERSION}.md"
+          gh api --method GET --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/runs" \
+            -f head_sha="$RELEASE_SHA" -f event=push -f branch=main -F per_page=100 \
+            | python3 scripts/check_release_ci.py "$RELEASE_SHA"
 
-      - name: Create GitHub Release if missing
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
+      - name: Publish approved release idempotently
         run: |
           set -euo pipefail
+          TAG="v$EXPECTED_VERSION"
+          git fetch --tags origin
+          if git rev-parse --verify -q "refs/tags/$TAG^{commit}" >/dev/null; then
+            test "$(git rev-parse "$TAG^{commit}")" = "$RELEASE_SHA"
+          fi
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; skipping"
+            test "$(git rev-parse "$TAG^{commit}")" = "$RELEASE_SHA"
+            test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" = "$TAG"
+            echo "Approved release already exists at the expected SHA and is Latest."
             exit 0
           fi
           gh release create "$TAG" \
-            --target "${{ github.sha }}" \
+            --target "$RELEASE_SHA" \
             --title "$TAG" \
-            --notes "HACS release \`$VERSION\` from \`${{ github.sha }}\`." \
+            --notes-file "release_notes_v${EXPECTED_VERSION}.md" \
             --latest
