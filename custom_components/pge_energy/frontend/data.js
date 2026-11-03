@@ -69,6 +69,12 @@ export function invalidateStatsCache() {
   _cache.clear();
 }
 
+/** Let an in-view chart paint before a long recorder walk occupies the main thread. */
+async function yieldBeforeLargeWalk(rowCount) {
+  if (rowCount < 1500 || typeof requestAnimationFrame !== "function") return;
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+}
+
 /** Sum change/delta over a window — never downsamples (KPI-safe). */
 export async function sumStatisticChange(hass, statisticId, { start, end, period = "hour" } = {}) {
   const startIso = start instanceof Date ? start.toISOString() : start;
@@ -82,6 +88,7 @@ export async function sumStatisticChange(hass, statisticId, { start, end, period
     types: ["sum", "change"],
   });
   const rows = (raw && raw[statisticId]) || [];
+  await yieldBeforeLargeWalk(rows.length);
   let total = 0;
   let count = 0;
   for (let i = 0; i < rows.length; i++) {
@@ -117,6 +124,7 @@ export async function fetchStatisticSeries(hass, statisticId, { start, end, peri
   });
 
   const rows = (raw && raw[statisticId]) || [];
+  await yieldBeforeLargeWalk(rows.length);
   const xs = [];
   const sums = [];
   const means = [];

@@ -1866,18 +1866,20 @@ class PgeEnergyPanel extends HTMLElement {
     const gen = this._galleryRenderGen;
     const entryId = this._activeEntryId;
     const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
-    const yieldFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
 
     switch (tab) {
       case "usage":
         await this._softGallery(() => this._renderLoadShapeGallery());
         break;
       case "analytics":
-        if (!primaryRendered) await this._softGallery(() => this._renderInsights());
-        if (stale()) return;
-        await yieldFrame();
-        if (stale()) return;
-        await this._softGallery(() => this._renderWeatherMoney());
+        if (primaryRendered) break;
+        {
+          const weather = this._weatherMoney || this._softGallery(() => this._renderWeatherMoney());
+          this._weatherMoney = null;
+          await this._softGallery(() => this._renderInsights());
+          if (stale()) return;
+          await weather;
+        }
         break;
       case "billing":
         if (!primaryRendered) this._renderBillingPrograms(false);
@@ -2168,6 +2170,7 @@ class PgeEnergyPanel extends HTMLElement {
     this._chartFactories.clear();
     this._galleryDays = null;
     this._galleryBillAmount = null;
+    this._weatherMoney = null;
     const yieldFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
 
     this._renderSync();
@@ -2183,7 +2186,11 @@ class PgeEnergyPanel extends HTMLElement {
         if (tab === "glance") void this._renderKpis({ recorder: false });
         await this._softGallery(() => this._renderHero());
       } else if (tab === "analytics") {
+        if (Array.isArray(this._accounts)) {
+          this._weatherMoney = this._softGallery(() => this._renderWeatherMoney());
+        }
         await this._softGallery(() => this._renderInsights());
+        if (this._weatherMoney) await this._weatherMoney;
       } else if (tab === "tod") {
         await this._renderTodMain();
       } else {
