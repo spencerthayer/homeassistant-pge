@@ -61,7 +61,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.12.8";
+} from "./data.js?v=0.12.9";
 import {
   baseloadFloor,
   cycleCumulative,
@@ -103,8 +103,8 @@ import {
   lineItemShares,
   treemapSlices,
   waterfallSteps,
-} from "./chart-series.js?v=0.12.8";
-import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.8";
+} from "./chart-series.js?v=0.12.9";
+import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.9";
 import {
   createBarChart,
   createLineChart,
@@ -114,9 +114,9 @@ import {
   destroyCharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.12.8";
-import { sparklineSvg } from "./svg-helpers.js?v=0.12.8";
-import { applyPanelTheme, todColors } from "./theme.js?v=0.12.8";
+} from "./charts.js?v=0.12.9";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.9";
+import { applyPanelTheme, todColors } from "./theme.js?v=0.12.9";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -1813,6 +1813,7 @@ class PgeEnergyPanel extends HTMLElement {
 
   _selectPanelTab(tab, { writeHistory = false, focus = false } = {}) {
     if (!PANEL_TABS.includes(tab)) return;
+    const changed = this._activeTab !== tab;
     const firstVisit = !this._renderedTabs.has(tab);
     this._activeTab = tab;
     for (const button of this.shadowRoot.querySelectorAll(".section-tabs [role=tab]")) {
@@ -1828,6 +1829,11 @@ class PgeEnergyPanel extends HTMLElement {
     if (writeHistory && location.hash !== panelTabHash(tab)) history.pushState(null, "", panelTabHash(tab));
     const panel = this.shadowRoot.getElementById("panel-" + tab);
     requestAnimationFrame(() => this._resizeChartsUnder(panel));
+
+    // Paint only the visible primary chart; the other range loads when its tab opens.
+    if (changed && !this._loading && (tab === "glance" || tab === "usage")) {
+      void this._renderHero();
+    }
 
     // Lazy-render galleries for this tab on first visit.
     if (firstVisit && !this._loading) {
@@ -2135,40 +2141,40 @@ class PgeEnergyPanel extends HTMLElement {
     /** Yield to main thread between major render phases. */
     const yieldFrame = () => new Promise((r) => requestAnimationFrame(r));
 
-    const presetsApplied = await this._probeAvailablePresets();
-    if (stale()) return;
-    await yieldFrame();
-
-    this._todBillReady = !!this._billBounds();
-    if (presetsApplied || this._availablePresets) this._renderFilters();
+    // A chart for the selected range does not depend on preset availability or
+    // the secondary KPI / gap rollups. Paint it before those recorder queries.
     this._renderSync();
-    await this._renderKpis();
-    if (stale()) return;
-    await yieldFrame();
-
-    await this._renderDataGaps();
-    if (stale()) return;
-    await yieldFrame();
-
+    this._todBillReady = !!this._billBounds();
+    if (!this._availablePresets) this._availablePresets = ["24h"];
+    this._renderFilters();
     await this._renderHero();
     if (stale()) return;
     await yieldFrame();
 
-    // Render active tab's main content (not galleries).
-    // Galleries are lazy-loaded on first tab visit via _renderTabGalleries.
-    const activeTab = this._activeTab;
-    if (activeTab === "tod") {
-      await this._renderTodMain();
-    } else if (activeTab === "billing" || activeTab === "programs") {
+    const initialRange = this._normalizeRangeKey(this._rangeKey);
+    const background = await Promise.allSettled([
+      this._renderKpis(),
+      this._renderDataGaps(),
+      this._probeAvailablePresets(),
+    ]);
+    if (stale()) return;
+    if (background[2].status === "fulfilled" && background[2].value) {
+      this._renderFilters();
+      if (this._normalizeRangeKey(this._rangeKey) !== initialRange) {
+        await this._renderHero();
+        if (stale()) return;
+      }
+    } else if (background[2].status === "rejected") {
+      console.warn("PGE range availability probe failed", background[2].reason);
+    }
+    this._renderSync();
+    if (this._activeTab === "tod") await this._renderTodMain();
+    else if (this._activeTab === "billing" || this._activeTab === "programs") {
       this._renderBillingPrograms(false);
     }
-    // glance and usage share the hero chart; analytics has no main content beyond galleries.
-
     if (stale()) return;
     this._renderDiagnostics();
-
-    // Mark the active tab as rendered so _selectPanelTab doesn't re-render main content.
-    this._renderedTabs.add(activeTab);
+    this._renderedTabs.add(this._activeTab);
   }
 
   /** Render TOD main content without the gallery. */
@@ -3706,74 +3712,47 @@ class PgeEnergyPanel extends HTMLElement {
   async _renderHero() {
     const account = this._account;
     if (!account) return;
+    const tab = this._activeTab;
+    if (tab !== "glance" && tab !== "usage") return;
+    const overview = tab === "glance";
     const stamp = { entryId: this._activeEntryId, gen: this._galleryRenderGen || 0 };
     const stale = () =>
-      stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0);
-    const usageRange = this._resolveChartRange();
-    const usagePeriod = this._period || usageRange.period;
-    const overviewRange = this._basePresetRange("24h");
+      stamp.entryId !== this._activeEntryId ||
+      stamp.gen !== (this._galleryRenderGen || 0) ||
+      tab !== this._activeTab;
+    const range = overview ? this._basePresetRange("24h") : this._resolveChartRange();
+    const period = overview ? "hour" : this._period || range.period;
     const ids = account.statistic_ids;
     const colors = seriesColors(this);
-    // High ceiling so range accounting is not LTTB-downsampled away.
-    const maxPoints = 20000;
-
-    const usageRaw = await this._fetchUsageSeries(
+    const raw = await this._fetchUsageSeries(
       ids,
-      usageRange.start,
-      usageRange.end,
-      usagePeriod,
-      maxPoints,
+      range.start,
+      range.end,
+      period,
+      20000,
     );
     if (stale()) return;
-    const usageChartProjection = projectDirectionalUsage(usageRaw);
-    const accountingProjection = projectUsageSeries(usageRaw);
-    this._lastSeries = {
-      ...usageRaw,
-      projection: accountingProjection,
-      range: usageRange,
-      period: usagePeriod,
-    };
-
-    const reuseOverview =
-      usageRange.start.getTime() === overviewRange.start.getTime() &&
-      usageRange.end.getTime() === overviewRange.end.getTime() &&
-      usagePeriod === "hour";
-    let overviewRaw = usageRaw;
-    let overviewProjection = usageChartProjection;
-    if (!reuseOverview) {
-      overviewRaw = await this._fetchUsageSeries(
-        ids,
-        overviewRange.start,
-        overviewRange.end,
-        "hour",
-        maxPoints,
-      );
-      if (stale()) return;
-      overviewProjection = projectDirectionalUsage(overviewRaw);
+    const projection = projectDirectionalUsage(raw);
+    if (!overview) {
+      this._lastSeries = {
+        ...raw,
+        projection: projectUsageSeries(raw),
+        range,
+        period,
+      };
     }
-
-    const usagePainted = await this._paintUsageCombo(
-      "chart-usage",
-      usageRaw,
-      usageChartProjection,
-      usagePeriod,
-      this._usageMetric,
+    const painted = await this._paintUsageCombo(
+      overview ? "chart-overview-usage" : "chart-usage",
+      raw,
+      projection,
+      period,
+      overview ? "kwh" : this._usageMetric,
       stamp,
       colors,
     );
-    if (!usagePainted) return;
-    const overviewPainted = await this._paintUsageCombo(
-      "chart-overview-usage",
-      overviewRaw,
-      overviewProjection,
-      "hour",
-      "kwh",
-      stamp,
-      colors,
-    );
-    if (!overviewPainted) return;
-    this._setOverviewUsageTitle(overviewRange);
-    void this._renderUsageStats();
+    if (!painted) return;
+    if (overview) this._setOverviewUsageTitle(range);
+    else void this._renderUsageStats();
   }
 
   _setOverviewUsageTitle(range) {
