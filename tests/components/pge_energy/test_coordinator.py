@@ -320,7 +320,7 @@ async def test_cold_boot_connection_error_restores_sensor_snapshots():
     ):
         await coord.async_load_store()
 
-    assert len(coord.recent_intervals) == 24
+    assert len(coord.recent_intervals) == len(prior)
     assert coord.account_snapshot is not None
     assert coord.account_snapshot.amount_due == 194.07
     assert coord.lifetime_payments_usd == 100.0
@@ -330,7 +330,7 @@ async def test_cold_boot_connection_error_restores_sensor_snapshots():
     coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=PGEConnectionError("DNS timeout contacting Apigee"))
     data = await coord._async_update_data()
     assert data["stale"] is True
-    assert len(coord.recent_intervals) == 24
+    assert len(coord.recent_intervals) == len(prior)
     assert coord.account_snapshot.amount_due == 194.07
     assert "DNS timeout" in (coord._last_api_error or "")
 
