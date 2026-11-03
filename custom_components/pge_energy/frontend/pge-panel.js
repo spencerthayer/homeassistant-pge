@@ -1832,7 +1832,7 @@ class PgeEnergyPanel extends HTMLElement {
 
     // Paint only the visible primary chart; the other range loads when its tab opens.
     if (changed && !this._loading && (tab === "glance" || tab === "usage")) {
-      void this._renderHero();
+      void this._softGallery(() => this._renderHero());
     }
 
     // Lazy-render galleries for this tab on first visit.
