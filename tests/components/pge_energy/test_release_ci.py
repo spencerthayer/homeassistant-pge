@@ -1,28 +1,47 @@
 from copy import deepcopy
+
 import pytest
+
 from scripts.check_release_ci import REQUIRED, validate_release_ci
 
 SHA = "a" * 40
 
 
 def green_pages():
-    return [{"workflow_runs": [
-        {"id": index, "path": path, "head_sha": SHA, "event": "push",
-         "head_branch": "main", "status": "completed", "conclusion": "success"}
-        for index, path in enumerate(REQUIRED, 1)
-    ]}]
+    return [
+        {
+            "workflow_runs": [
+                {
+                    "id": index,
+                    "path": path,
+                    "head_sha": SHA,
+                    "event": "push",
+                    "head_branch": "main",
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+                for index, path in enumerate(REQUIRED, 1)
+            ]
+        }
+    ]
 
 
 def test_all_required_runs_pass():
     validate_release_ci(green_pages(), SHA)
 
 
-@pytest.mark.parametrize("field,value", [
-    ("head_sha", "b" * 40), ("event", "pull_request"),
-    ("head_branch", "pr-59"), ("status", "in_progress"),
-    ("conclusion", "failure"), ("conclusion", "skipped"),
-    ("conclusion", "cancelled"),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("head_sha", "b" * 40),
+        ("event", "pull_request"),
+        ("head_branch", "pr-59"),
+        ("status", "in_progress"),
+        ("conclusion", "failure"),
+        ("conclusion", "skipped"),
+        ("conclusion", "cancelled"),
+    ],
+)
 def test_non_success_evidence_fails_closed(field, value):
     pages = green_pages()
     pages[0]["workflow_runs"][0][field] = value

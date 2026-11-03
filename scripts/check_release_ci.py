@@ -1,4 +1,5 @@
 """Require successful latest main-push CI and Prek runs for an exact SHA."""
+
 from __future__ import annotations
 
 import json
@@ -15,8 +16,7 @@ def validate_release_ci(pages: list[dict], sha: str) -> None:
     for page in pages:
         for run in page["workflow_runs"]:
             path = run["path"]
-            if (path not in REQUIRED or run["head_sha"] != sha
-                    or run["event"] != "push" or run["head_branch"] != "main"):
+            if path not in REQUIRED or run["head_sha"] != sha or run["event"] != "push" or run["head_branch"] != "main":
                 continue
             if path not in latest or run["id"] > latest[path]["id"]:
                 latest[path] = run
