@@ -87,7 +87,7 @@ jobs:
           if [[ "$ACTION" == "publish" ]]; then
             NOTES="release_notes_v${VERSION}.md"
             if [[ ! -f "$NOTES" ]]; then
-              printf 'HACS release `%s` from `%s`.\n' "$VERSION" "$RELEASE_SHA" > "$NOTES"
+              printf 'HACS release %s from %s.\n' "$VERSION" "$RELEASE_SHA" > "$NOTES"
             fi
             gh release create "$TAG" \
               --target "$RELEASE_SHA" \
@@ -110,7 +110,7 @@ jobs:
           NEW="$(git rev-parse HEAD)"
           NOTES="release_notes_v${NEXT}.md"
           if [[ ! -f "$NOTES" ]]; then
-            printf 'HACS release `%s` from `%s`.\n' "$NEXT" "$NEW" > "$NOTES"
+            printf 'HACS release %s from %s.\n' "$NEXT" "$NEW" > "$NOTES"
           fi
           gh release create "v$NEXT" \
             --target "$NEW" \
