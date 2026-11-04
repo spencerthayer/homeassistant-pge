@@ -1,6 +1,3 @@
-# Create a GitHub Release (HACS Latest) when VERSION lands on main
-# and no matching tag exists yet. Squash/merge of a version-bump PR
-# is what publishes; re-running after the tag exists is a no-op.
 name: Release
 
 on:
@@ -9,39 +6,114 @@ on:
 
 permissions:
   contents: write
+  actions: read
+
+concurrency:
+  group: hacs-release
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
 
-      - name: Read integration version
-        id: version
+      - name: Skip a commit that is already published
         run: |
           set -euo pipefail
           VERSION="$(python3 -c "import json; print(json.load(open('custom_components/pge_energy/manifest.json'))['version'])")"
-          CONST_VERSION="$(python3 -c "import pathlib,re; t=pathlib.Path('custom_components/pge_energy/const.py').read_text(); print(re.search(r'^VERSION = \"([^\"]+)\"', t, re.M).group(1))")"
-          if [[ "$VERSION" != "$CONST_VERSION" ]]; then
-            echo "manifest.json version ($VERSION) != const.py VERSION ($CONST_VERSION)" >&2
-            exit 1
+          git fetch --tags origin
+          if git rev-parse --verify -q "refs/tags/v${VERSION}^{commit}" >/dev/null \
+            && test "$(git rev-parse "v${VERSION}^{commit}")" = "$(git rev-parse HEAD)"; then
+            echo "v$VERSION already points at this commit."
+            echo "skip" > "$RUNNER_TEMP/release-action"
+          else
+            echo "publish" > "$RUNNER_TEMP/release-action"
           fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Release if missing
+      - name: Wait for green CI and Prek
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; skipping"
+          if [[ "$(cat "$RUNNER_TEMP/release-action")" == "skip" ]]; then
             exit 0
           fi
-          gh release create "$TAG" \
-            --target "${{ github.sha }}" \
-            --title "$TAG" \
-            --notes "HACS release \`$VERSION\` from \`${{ github.sha }}\`." \
+          for _ in $(seq 1 40); do
+            status="$(gh api --method GET --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/actions/runs" \
+              -f head_sha="$RELEASE_SHA" -f event=push -f branch=main -F per_page=100 \
+              | python3 scripts/check_release_ci.py --status "$RELEASE_SHA")"
+            case "$status" in
+              ready) exit 0 ;;
+              fail) echo "CI or Prek failed for $RELEASE_SHA" >&2; exit 1 ;;
+              wait) sleep 30 ;;
+              *) echo "unexpected release status: $status" >&2; exit 1 ;;
+            esac
+          done
+          echo "CI and Prek did not finish for $RELEASE_SHA" >&2
+          exit 1
+
+      - name: Publish the merge or bump the patch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c "import json; print(json.load(open('custom_components/pge_energy/manifest.json'))['version'])")"
+          CONST_VERSION="$(python3 -c "import pathlib,re; s=pathlib.Path('custom_components/pge_energy/const.py').read_text(); print(re.search(r'^VERSION = \"([^\"]+)\"', s, re.M).group(1))")"
+          test "$VERSION" = "$CONST_VERSION"
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+          git fetch --tags origin
+          TAG="v$VERSION"
+          if git rev-parse --verify -q "refs/tags/$TAG^{commit}" >/dev/null; then
+            TAGGED="$(git rev-parse "$TAG^{commit}")"
+          else
+            TAGGED="missing"
+          fi
+          if [[ "$(cat "$RUNNER_TEMP/release-action")" == "skip" ]]; then
+            exit 0
+          fi
+          ACTION="$(python3 scripts/check_release_ci.py --plan "$VERSION" "$RELEASE_SHA" "$TAGGED")"
+          if [[ "$ACTION" == "skip" ]]; then
+            echo "v$VERSION already points at this commit."
+            exit 0
+          fi
+          if [[ "$ACTION" == "publish" ]]; then
+            NOTES="release_notes_v${VERSION}.md"
+            if [[ ! -f "$NOTES" ]]; then
+              printf 'HACS release %s from %s.\n' "$VERSION" "$RELEASE_SHA" > "$NOTES"
+            fi
+            gh release create "$TAG" \
+              --target "$RELEASE_SHA" \
+              --title "$TAG" \
+              --notes-file "$NOTES" \
+              --latest
+            exit 0
+          fi
+          if [[ "$ACTION" != "bump" ]]; then
+            echo "unexpected release action: $ACTION" >&2
+            exit 1
+          fi
+          NEXT="$(python3 scripts/check_release_ci.py --next-patch "$VERSION")"
+          python3 scripts/bump_integration_version.py "$VERSION" "$NEXT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/pge_energy/const.py custom_components/pge_energy/manifest.json custom_components/pge_energy/frontend README.md
+          git commit -m "Release v$NEXT"
+          git push origin "HEAD:main"
+          NEW="$(git rev-parse HEAD)"
+          NOTES="release_notes_v${NEXT}.md"
+          if [[ ! -f "$NOTES" ]]; then
+            printf 'HACS release %s from %s.\n' "$NEXT" "$NEW" > "$NOTES"
+          fi
+          gh release create "v$NEXT" \
+            --target "$NEW" \
+            --title "v$NEXT" \
+            --notes-file "$NOTES" \
             --latest

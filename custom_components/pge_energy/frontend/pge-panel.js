@@ -61,7 +61,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.12.9";
+} from "./data.js?v=0.12.10";
 import {
   baseloadFloor,
   cycleCumulative,
@@ -103,8 +103,8 @@ import {
   lineItemShares,
   treemapSlices,
   waterfallSteps,
-} from "./chart-series.js?v=0.12.9";
-import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.9";
+} from "./chart-series.js?v=0.12.10";
+import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.10";
 import {
   createBarChart,
   createLineChart,
@@ -112,11 +112,12 @@ import {
   createScatter,
   createUsageComboChart,
   destroyCharts,
+  ensureEcharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.12.9";
-import { sparklineSvg } from "./svg-helpers.js?v=0.12.9";
-import { applyPanelTheme, todColors } from "./theme.js?v=0.12.9";
+} from "./charts.js?v=0.12.10";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.10";
+import { applyPanelTheme, todColors } from "./theme.js?v=0.12.10";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -194,6 +195,7 @@ const STYLE = `
   color-scheme: dark;
 }
 .chart-skeleton { min-height: 160px; }
+.kpi .kpi-pending { color: var(--secondary-text-color); }
 @media (prefers-reduced-motion: reduce) {
   :host * { transition: none !important; animation: none !important; }
   .chart-skeleton { animation: none; }
@@ -1586,6 +1588,8 @@ class PgeEnergyPanel extends HTMLElement {
     this._syncObserved = {};
     this._bootRendering = false;
     this._galleryRefreshAfterBoot = false;
+    this._primaryReady = false;
+    this._themeRefreshPending = false;
     this._chartFactories = new Map();
     this._pendingMounts = new Map();
     this._lazyObserver = typeof IntersectionObserver === "function"
@@ -1662,6 +1666,12 @@ class PgeEnergyPanel extends HTMLElement {
     if (first) {
       this._boot();
     } else if (!this._loading && this._account) {
+      if (!this._primaryReady) {
+        this._themeRefreshPending ||= themeChanged;
+        this._renderSync();
+        this._renderDiagnostics();
+        return;
+      }
       void this._renderKpis();
       const billingRebuilt = this._renderBillingPrograms();
       this._renderSync();
@@ -1700,6 +1710,14 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this._primaryReady = false;
+    this._galleryRenderGen += 1;
+    this._presetProbeGen += 1;
+    this._todRenderGen += 1;
+    this._rangeRenderGen += 1;
+    this._lazyObserver?.disconnect();
+    this._pendingMounts.clear();
+    this._chartFactories.clear();
     if (this._presetProbeTimer) {
       clearTimeout(this._presetProbeTimer);
       this._presetProbeTimer = null;
@@ -1753,9 +1771,9 @@ class PgeEnergyPanel extends HTMLElement {
           invalidateStatsCache();
           this._renderSync();
           this._renderDiagnostics();
-          void this._renderDataGaps();
+          if (this._primaryReady) void this._renderDataGaps();
           if (!refreshGalleries) return;
-          if (this._bootRendering) {
+          if (this._bootRendering || !this._primaryReady) {
             this._galleryRefreshAfterBoot = true;
             return;
           }
@@ -1811,7 +1829,7 @@ class PgeEnergyPanel extends HTMLElement {
     window.addEventListener("hashchange", this._onPanelHashChange);
   }
 
-  _selectPanelTab(tab, { writeHistory = false, focus = false } = {}) {
+  _selectPanelTab(tab, { writeHistory = false, focus = false, galleries = true } = {}) {
     if (!PANEL_TABS.includes(tab)) return;
     const changed = this._activeTab !== tab;
     const firstVisit = !this._renderedTabs.has(tab);
@@ -1831,44 +1849,52 @@ class PgeEnergyPanel extends HTMLElement {
     requestAnimationFrame(() => this._resizeChartsUnder(panel));
 
     // Paint only the visible primary chart; the other range loads when its tab opens.
-    if (changed && !this._loading && (tab === "glance" || tab === "usage")) {
+    if (galleries && this._primaryReady && changed && !this._loading && (tab === "glance" || tab === "usage")) {
       void this._softGallery(() => this._renderHero());
     }
 
     // Lazy-render galleries for this tab on first visit.
-    if (firstVisit && !this._loading) {
+    if (galleries && this._primaryReady && firstVisit && !this._loading) {
       this._renderedTabs.add(tab);
       void this._renderTabGalleries(tab);
     }
   }
 
   /** Render galleries for a specific tab (lazy-loaded on first visit). */
-  async _renderTabGalleries(tab) {
+  async _renderTabGalleries(tab, { primaryRendered = false } = {}) {
     this._clearFetchCache();
     const gen = this._galleryRenderGen;
     const entryId = this._activeEntryId;
     const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
-
-    /** Yield to main thread between gallery renders to keep UI responsive. */
-    const yieldFrame = () => new Promise((r) => requestAnimationFrame(r));
 
     switch (tab) {
       case "usage":
         await this._softGallery(() => this._renderLoadShapeGallery());
         break;
       case "analytics":
-        await this._softGallery(() => this._renderInsights());
-        if (stale()) return;
-        await yieldFrame();
-        await this._softGallery(() => this._renderWeatherMoney());
+        if (primaryRendered) break;
+        {
+          const weather = this._weatherMoney || this._softGallery(() => this._renderWeatherMoney());
+          this._weatherMoney = null;
+          await this._softGallery(() => this._renderInsights());
+          if (stale()) return;
+          await weather;
+        }
         break;
       case "billing":
+        if (!primaryRendered) this._renderBillingPrograms(false);
         await this._softGallery(() => this._renderLedgerCharts());
         break;
-      case "tod":
-        await this._softGallery(() => this._renderTodGallery());
+      case "programs":
+        if (!primaryRendered) this._renderBillingPrograms(false);
         break;
-      // glance and programs have no deferred galleries
+      case "tod":
+        if (primaryRendered || this.shadowRoot.getElementById("chart-tod-stacked")) {
+          await this._softGallery(() => this._renderTodGallery());
+        } else {
+          await this._renderTod();
+        }
+        break;
     }
   }
 
@@ -1917,6 +1943,8 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   _renderShell() {
+    this._primaryReady = false;
+    this._presetProbeGen += 1;
     applyPanelTheme(this, this._hass);
     const root = this.shadowRoot;
     if (!root.querySelector(".toolbar")) {
@@ -2097,7 +2125,7 @@ class PgeEnergyPanel extends HTMLElement {
     this._observeHeaderHeight();
     this._bindFilterInteractionGuard();
     this._bindTodInteractionGuard();
-    this._selectPanelTab(resolvePanelTab(location.hash, this._defaultSection));
+    this._selectPanelTab(resolvePanelTab(location.hash, this._defaultSection), { galleries: false });
     content.querySelector(".drawer-close")?.addEventListener("click", () => {
       this.shadowRoot.getElementById("sync-drawer")?.close();
     });
@@ -2129,27 +2157,55 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   async _renderAll() {
+    this._primaryReady = false;
+    this._renderedTabs = new Set();
     this._clearFetchCache();
     const gen = ++this._galleryRenderGen;
     const entryId = this._activeEntryId;
     const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
     destroyCharts(this._charts);
     this._charts = [];
+    this._lazyObserver?.disconnect();
+    this._pendingMounts.clear();
+    this._chartFactories.clear();
     this._galleryDays = null;
     this._galleryBillAmount = null;
+    this._weatherMoney = null;
+    const yieldFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
 
-    /** Yield to main thread between major render phases. */
-    const yieldFrame = () => new Promise((r) => requestAnimationFrame(r));
-
-    // A chart for the selected range does not depend on preset availability or
-    // the secondary KPI / gap rollups. Paint it before those recorder queries.
     this._renderSync();
     this._todBillReady = !!this._billBounds();
     if (!this._availablePresets) this._availablePresets = ["24h"];
     this._renderFilters();
-    await this._renderHero();
-    if (stale()) return;
-    await yieldFrame();
+
+    let tab;
+    do {
+      tab = this._activeTab;
+      this._themeRefreshPending = false;
+      if (tab === "glance" || tab === "usage") {
+        if (tab === "glance") void this._renderKpis({ recorder: false });
+        await this._softGallery(() => this._renderHero());
+      } else if (tab === "analytics") {
+        if (Array.isArray(this._accounts)) {
+          this._weatherMoney = this._softGallery(() => this._renderWeatherMoney());
+        }
+        await this._softGallery(() => this._renderInsights());
+        // Weather keeps running. Its hourly history must not hold primary readiness.
+      } else if (tab === "tod") {
+        await this._renderTodMain();
+      } else {
+        this._renderBillingPrograms(false);
+      }
+      if (stale()) return;
+      await yieldFrame();
+      if (stale()) return;
+      await yieldFrame();
+      if (stale()) return;
+    } while (tab !== this._activeTab || this._themeRefreshPending);
+
+    this._primaryReady = true;
+    this._renderedTabs.add(tab);
+    void this._softGallery(() => this._renderTabGalleries(tab, { primaryRendered: true }));
 
     const initialRange = this._normalizeRangeKey(this._rangeKey);
     const background = await Promise.allSettled([
@@ -2161,20 +2217,18 @@ class PgeEnergyPanel extends HTMLElement {
     if (background[2].status === "fulfilled" && background[2].value) {
       this._renderFilters();
       if (this._normalizeRangeKey(this._rangeKey) !== initialRange) {
-        await this._renderHero();
+        await this._softGallery(() => this._renderHero());
         if (stale()) return;
       }
     } else if (background[2].status === "rejected") {
       console.warn("PGE range availability probe failed", background[2].reason);
     }
     this._renderSync();
-    if (this._activeTab === "tod") await this._renderTodMain();
-    else if (this._activeTab === "billing" || this._activeTab === "programs") {
-      this._renderBillingPrograms(false);
-    }
-    if (stale()) return;
     this._renderDiagnostics();
-    this._renderedTabs.add(this._activeTab);
+    if (!this._bootRendering && this._galleryRefreshAfterBoot) {
+      this._galleryRefreshAfterBoot = false;
+      await this._refreshGalleriesAfterSync();
+    }
   }
 
   /** Render TOD main content without the gallery. */
@@ -2643,6 +2697,10 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   async _refreshPresetFilters() {
+    if (!this._primaryReady) {
+      this._presetProbeSkipped = true;
+      return;
+    }
     if (this._filterControlFocused()) {
       this._presetProbeSkipped = true;
       return;
@@ -3196,7 +3254,7 @@ class PgeEnergyPanel extends HTMLElement {
     });
   }
 
-  async _renderKpis() {
+  async _renderKpis({ recorder = true } = {}) {
     const el = this.shadowRoot.getElementById("kpis");
     if (!el || !this._account) return;
     const kpiEntry = this._activeEntryId;
@@ -3263,6 +3321,7 @@ class PgeEnergyPanel extends HTMLElement {
     let sinceStatementRange = "After statement cycle";
     let yesterdayCompensationStat = null;
     let sparkNetCost = null;
+    if (recorder) {
     try {
       const publishedEnd = publishedDataEnd();
       const weekStart = pacificWeekStartUtc();
@@ -3305,8 +3364,8 @@ class PgeEnergyPanel extends HTMLElement {
       ]);
       sparkKwh = (kwhSeries.values || []).slice(-30);
       sparkCost = costSeries.values || [];
-      weekKwh = weekKwhSum.total;
-      weekCost = weekCostSum.total;
+      weekKwh = weekKwhSum.count > 0 ? weekKwhSum.total : null;
+      weekCost = weekCostSum.count > 0 ? weekCostSum.total : null;
       yesterdayCompensationStat = compensationDaySum.count > 0 ? compensationDaySum.total : null;
       const weekStartDay = pacificYmd(weekStart);
       const weekEndDay = pacificYmd(new Date(publishedEnd.getTime() - 1));
@@ -3383,8 +3442,8 @@ class PgeEnergyPanel extends HTMLElement {
               period: "hour",
             }),
           ]);
-          usageCycleKwh = kwhSum.total;
-          usageCycleCost = costSum.total;
+          usageCycleKwh = kwhSum.count > 0 ? kwhSum.total : null;
+          usageCycleCost = costSum.count > 0 ? costSum.total : null;
         }
         // Usage after the closed statement through yesterday (exclusive published end).
         if (
@@ -3403,8 +3462,8 @@ class PgeEnergyPanel extends HTMLElement {
               period: "hour",
             }),
           ]);
-          sinceStatementKwh = kwhSum.total;
-          sinceStatementCost = costSum.total;
+          sinceStatementKwh = kwhSum.count > 0 ? kwhSum.total : null;
+          sinceStatementCost = costSum.count > 0 ? costSum.total : null;
           const sinceStartDay = this._fmtDate(cycleEnd);
           const sinceEndDay = pacificYmd(new Date(publishedEnd.getTime() - 1));
           if (sinceStartDay && sinceEndDay) {
@@ -3414,6 +3473,7 @@ class PgeEnergyPanel extends HTMLElement {
       }
     } catch (_err) {
       /* sparklines / usage cycle optional */
+    }
     }
 
     const kwhDelta =
@@ -3445,13 +3505,17 @@ class PgeEnergyPanel extends HTMLElement {
 
     if (this._activeEntryId !== kpiEntry || (this._galleryRenderGen || 0) !== kpiGen) return;
     const spark = (vals, color) => sparklineSvg(vals || [], { stroke: color });
-    const usualChip = !usualComplete || usualDelta == null
-      ? `<div class="delta">Not enough complete days to compare</div>`
-      : Math.abs(usualDelta) <= 5
-        ? `<div class="delta-chip">about usual</div>`
-        : usualDelta > 0
-          ? `<div class="delta-chip warn">▲ ${Math.round(usualDelta)}% vs your usual day</div>`
-          : `<div class="delta-chip good">▼ ${Math.round(Math.abs(usualDelta))}% vs your usual day</div>`;
+    const pending = !recorder;
+    const later = (html) => (pending ? `<span class="kpi-pending">…</span>` : html);
+    const usualChip = pending
+      ? `<div class="delta">&nbsp;</div>`
+      : !usualComplete || usualDelta == null
+        ? `<div class="delta">Not enough complete days to compare</div>`
+        : Math.abs(usualDelta) <= 5
+          ? `<div class="delta-chip">about usual</div>`
+          : usualDelta > 0
+            ? `<div class="delta-chip warn">▲ ${Math.round(usualDelta)}% vs your usual day</div>`
+            : `<div class="delta-chip good">▼ ${Math.round(Math.abs(usualDelta))}% vs your usual day</div>`;
     const hasYesterdayExport = yesterdayReturn != null && yesterdayReturn > 0;
     // yesterday_compensation is disabled by default; fall back to the imported
     // `_compensation` statistic so export days still show the net interval amount.
@@ -3480,6 +3544,7 @@ class PgeEnergyPanel extends HTMLElement {
     const moneySpark = hasYesterdayCredit && sparkNetCost ? sparkNetCost : sparkCost;
     const kpiSig = [
       kpiEntry,
+      pending,
       yesterdayKwh,
       yesterdayReturn,
       yesterdayMoneyValue,
@@ -3526,20 +3591,22 @@ class PgeEnergyPanel extends HTMLElement {
       <div class="kpi-grid">
         <div class="kpi kpi-usage"><div class="label"><span class="group">Yesterday</span>Import</div><div class="value">${this._fmt(yesterdayKwh, " kWh")}</div>${usualChip}${exportNote}${spark(sparkKwh, "var(--pge-series-kwh)")}</div>
         <div class="kpi kpi-statement"><div class="label"><span class="group">Yesterday</span>Cost</div><div class="value">${yesterdayMoneyValue}</div>${yesterdayMoneyNote ? `<div class="delta">${this._escape(yesterdayMoneyNote)}</div>` : ""}${spark(moneySpark, "var(--pge-series-cost)")}</div>
-        <div class="kpi kpi-usage"><div class="label"><span class="group">This week</span>Import</div><div class="value">${this._fmt(weekKwh, " kWh")}</div><div class="delta">${this._fmtRangeDelta(weekRange)}</div>${spark(sparkWeekKwh, "var(--pge-series-kwh)")}</div>
-        <div class="kpi kpi-statement"><div class="label"><span class="group">This week</span>Cost</div><div class="value">${this._fmt(weekCost, "", true)}</div><div class="delta">${this._fmtRangeDelta(weekRange)}</div>${spark(sparkWeekCost, "var(--pge-series-cost)")}</div>
+        <div class="kpi kpi-usage"><div class="label"><span class="group">This week</span>Import</div><div class="value">${later(this._fmt(weekKwh, " kWh"))}</div><div class="delta">${this._fmtRangeDelta(weekRange)}</div>${spark(sparkWeekKwh, "var(--pge-series-kwh)")}</div>
+        <div class="kpi kpi-statement"><div class="label"><span class="group">This week</span>Cost</div><div class="value">${later(this._fmt(weekCost, "", true))}</div><div class="delta">${this._fmtRangeDelta(weekRange)}</div>${spark(sparkWeekCost, "var(--pge-series-cost)")}</div>
         <div class="kpi kpi-usage"><div class="label"><span class="group">Statement</span>kWh</div><div class="value">${this._fmt(cycleKwh, " kWh")}</div><div class="delta">${this._fmtRangeDelta(cycleRange)}</div></div>
         <div class="kpi kpi-statement"><div class="label"><span class="group">Statement</span>Cost</div><div class="value">${this._fmt(cycleCost, "", true)}</div><div class="delta">${this._fmtRangeDelta(cycleRange)}</div></div>
-        <div class="kpi kpi-usage"><div class="label"><span class="group">Statement</span>Import</div><div class="value">${this._fmt(usageCycleKwh, " kWh")}</div><div class="delta">${this._escape(fmtDelta(kwhDelta, false))}</div></div>
-        <div class="kpi kpi-statement"><div class="label"><span class="group">Statement</span>Import cost</div><div class="value">${this._fmt(usageCycleCost, "", true)}</div><div class="delta">${this._escape(fmtDelta(costDelta, true))}</div></div>
-        <div class="kpi kpi-usage"><div class="label"><span class="group">Since statement</span>Import</div><div class="value">${this._fmt(sinceStatementKwh, " kWh")}</div><div class="delta">${this._fmtRangeDelta(sinceStatementRange)}</div></div>
-        <div class="kpi kpi-statement"><div class="label"><span class="group">Since statement</span>Cost</div><div class="value">${this._fmt(sinceStatementCost, "", true)}</div><div class="delta">${this._fmtRangeDelta(sinceStatementRange)}</div></div>
+        <div class="kpi kpi-usage"><div class="label"><span class="group">Statement</span>Import</div><div class="value">${later(this._fmt(usageCycleKwh, " kWh"))}</div><div class="delta">${pending ? "&nbsp;" : this._escape(fmtDelta(kwhDelta, false))}</div></div>
+        <div class="kpi kpi-statement"><div class="label"><span class="group">Statement</span>Import cost</div><div class="value">${later(this._fmt(usageCycleCost, "", true))}</div><div class="delta">${pending ? "&nbsp;" : this._escape(fmtDelta(costDelta, true))}</div></div>
+        <div class="kpi kpi-usage"><div class="label"><span class="group">Since statement</span>Import</div><div class="value">${later(this._fmt(sinceStatementKwh, " kWh"))}</div><div class="delta">${this._fmtRangeDelta(sinceStatementRange)}</div></div>
+        <div class="kpi kpi-statement"><div class="label"><span class="group">Since statement</span>Cost</div><div class="value">${later(this._fmt(sinceStatementCost, "", true))}</div><div class="delta">${this._fmtRangeDelta(sinceStatementRange)}</div></div>
         <div class="kpi kpi-estimate"><div class="label"><span class="group">Account</span>Charges so far</div><div class="value">${this._fmt(estCharges, "", true)}</div><div class="delta">${this._escape(cycleProgress)}</div></div>
         <div class="kpi kpi-estimate"><div class="label"><span class="group">Account</span>Next bill</div><div class="value">${this._escape(estRange)}</div><div class="delta">${this._escape(cycleProgress)}</div></div>
         <div class="kpi status-${dueStatus}"><div class="label"><span class="group">Account</span>Amount due</div><div class="value">${this._fmt(amountDue, "", true)}</div><div class="delta">Due ${this._escape(this._fmtDate(dueDate) || "—")}</div></div>
         <div class="kpi status-${dueStatus}"><div class="label"><span class="group">Account</span>Last payment</div><div class="value">${this._fmt(lastPayment, "", true)}</div><div class="delta">${this._escape(this._fmtDate(lastPaymentDate) || "—")}</div></div>
       </div>
     `;
+    if (pending) el.setAttribute("aria-busy", "true");
+    else el.removeAttribute("aria-busy");
     this._bindGlanceKpiClipboard(el);
     const story = this.shadowRoot.getElementById("story");
     if (story) {
@@ -3724,6 +3791,8 @@ class PgeEnergyPanel extends HTMLElement {
     const period = overview ? "hour" : this._period || range.period;
     const ids = account.statistic_ids;
     const colors = seriesColors(this);
+    // Download ECharts alongside the recorder reads instead of after them.
+    ensureEcharts().catch(() => {});
     const raw = await this._fetchUsageSeries(
       ids,
       range.start,

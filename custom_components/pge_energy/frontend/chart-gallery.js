@@ -14,8 +14,8 @@ import {
   createThemeRiver,
   createTreemap,
   createWaterfall,
-} from "./charts.js?v=0.12.9";
-import { billFamilyColors, todColors } from "./theme.js?v=0.12.9";
+} from "./charts.js?v=0.12.10";
+import { billFamilyColors, todColors } from "./theme.js?v=0.12.10";
 import {
   estimatePlanCostSeries,
   fetchStatisticSeries,
@@ -26,7 +26,7 @@ import {
   TOD_PERIOD_LABELS,
   todPeriodForPacific,
   isTodOffPeakDay,
-} from "./data.js?v=0.12.9";
+} from "./data.js?v=0.12.10";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const HOURS = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0"));
@@ -199,6 +199,15 @@ export async function rerenderFactoryHosts(panel, stale) {
   return true;
 }
 
+function hostIntersectsViewport(host) {
+  if (typeof host.getBoundingClientRect !== "function") return false;
+  const rect = host.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  const viewH = globalThis.innerHeight || 0;
+  const viewW = globalThis.innerWidth || 0;
+  return rect.bottom > 0 && rect.right > 0 && rect.top < viewH && rect.left < viewW;
+}
+
 export async function mountHost(panel, id, factory, stamp, { defer = true } = {}) {
   if (galleryStale(panel, stamp)) return;
   const host = panel.shadowRoot?.getElementById(id);
@@ -215,7 +224,7 @@ export async function mountHost(panel, id, factory, stamp, { defer = true } = {}
   }
   if (host.closest("[data-explore-hosts]")) return;
   host.classList.add("chart-skeleton");
-  if (defer && panel._lazyObserver) {
+  if (defer && panel._lazyObserver && !hostIntersectsViewport(host)) {
     panel._pendingMounts.set(host, record);
     panel._lazyObserver.observe(host);
     return;
@@ -705,19 +714,11 @@ export async function renderWeatherMoney(panel, fns) {
   const end = publishedDataEnd();
   const start5 = pacificRangeStart(end, { years: -5 });
   const startBills = new Date("2019-01-01T00:00:00.000Z");
-  const [kwhDay, costDay, tempDay, billAmount, billKwh, costHour, kwhHour, savings, balance, due] =
-    await Promise.all([
-      fetchRole(panel, "consumption", { start: start5, end, period: "day" }),
-      fetchRole(panel, "cost", { start: start5, end, period: "day" }),
-      fetchRole(panel, "temperature", { start: start5, end, period: "day", field: "means" }),
-      fetchRole(panel, "bill_amount", { start: startBills, end, period: "hour" }),
-      fetchRole(panel, "bill_kwh", { start: startBills, end, period: "hour" }),
-      fetchRole(panel, "cost", { start: startBills, end, period: "hour" }),
-      fetchRole(panel, "consumption", { start: startBills, end, period: "hour" }),
-      fetchRole(panel, "ytd_program_savings", { start: start5, end, period: "hour", field: "means" }),
-      fetchRole(panel, "account_balance", { start: start5, end, period: "hour", field: "means" }),
-      fetchRole(panel, "amount_due", { start: start5, end, period: "hour", field: "means" }),
-    ]);
+  const [kwhDay, costDay, tempDay] = await Promise.all([
+    fetchRole(panel, "consumption", { start: start5, end, period: "day" }),
+    fetchRole(panel, "cost", { start: start5, end, period: "day" }),
+    fetchRole(panel, "temperature", { start: start5, end, period: "day", field: "means" }),
+  ]);
   if (galleryStale(panel, stamp)) return;
   const days = joinSamples([
     { key: "kwh", ...kwhDay },
@@ -752,6 +753,23 @@ export async function renderWeatherMoney(panel, fns) {
 
   if (galleryStale(panel, stamp)) return;
   panel._galleryDays = days;
+  // Let the in-view charts build before the 2019 hourly rows are parsed.
+  // That parse is synchronous and would otherwise block the lazy mount.
+  await new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(resolve);
+    else resolve();
+  });
+  if (galleryStale(panel, stamp)) return;
+  const [billAmount, billKwh, costHour, kwhHour, savings, balance, due] = await Promise.all([
+    fetchRole(panel, "bill_amount", { start: startBills, end, period: "hour" }),
+    fetchRole(panel, "bill_kwh", { start: startBills, end, period: "hour" }),
+    fetchRole(panel, "cost", { start: startBills, end, period: "hour" }),
+    fetchRole(panel, "consumption", { start: startBills, end, period: "hour" }),
+    fetchRole(panel, "ytd_program_savings", { start: start5, end, period: "hour", field: "means" }),
+    fetchRole(panel, "account_balance", { start: start5, end, period: "hour", field: "means" }),
+    fetchRole(panel, "amount_due", { start: start5, end, period: "hour", field: "means" }),
+  ]);
+  if (galleryStale(panel, stamp)) return;
   panel._galleryBillAmount = billAmount;
 
   if (!panel.shadowRoot?.getElementById("chart-statement-portal")) return;
