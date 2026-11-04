@@ -1,0 +1,29 @@
+---
+description: Every merge to main publishes a new HACS release
+alwaysApply: true
+---
+
+# HACS release on merge
+
+A merge to `main` must produce a new HACS Latest release. The merge is the approval to publish. Do not wait for a second publish approval, and do not leave the merge on a version HACS already has.
+
+## Before the merge
+
+- Bump SemVer in the pull request. Use PATCH unless the change adds a feature (MINOR) or breaks existing users (MAJOR).
+- Set that same version in `custom_components/pge_energy/const.py`, `manifest.json`, every frontend `?v=`, and the README version example.
+- Add `release_notes_vX.Y.Z.md`.
+- Do not merge without an explicit merge approval in the current conversation.
+
+## After the merge
+
+The Release workflow runs on the push to `main`. It waits until the latest CI and Prek push runs for that SHA succeeded, then publishes `vX.Y.Z` as Latest. If that tag already points at an older commit, the same job bumps the patch, pushes `Release vX.Y.Z`, and publishes that commit.
+
+```text
+# BAD — merge while VERSION is still 0.12.9 and v0.12.9 already exists
+# HACS has nothing new to install
+
+# GOOD — the pull request sets VERSION to 0.12.10
+# the merge push publishes v0.12.10
+```
+
+Do not publish a SHA whose CI or Prek run failed. The tag and `manifest.json` version must match.

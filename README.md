@@ -17,7 +17,7 @@ Home Assistant custom integration for **Portland General Electric (PGE)** — im
 ### HACS (recommended)
 
 1. HACS → **⋯** → **Custom repositories**, add `https://github.com/spencerthayer/homeassistant-pge` with category **Integration**.
-2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.12.9`).
+2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.12.10`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -755,7 +755,7 @@ bash scripts/run_tests.sh
 
 Local CLI testing reuses the production `api` / `auth` / `portal_auth` modules with an opt-in `.env` (gitignored, never auto-loaded): [`docs/LIVE_TESTING.md`](docs/LIVE_TESTING.md).
 
-HACS publication is the manual `Release` workflow after the change is on `main`. Dispatch it with the approved full commit SHA and version. It publishes only when the latest push runs of CI and Prek succeeded for that SHA. Merging and publishing need separate approval.
+A merge to `main` publishes the HACS release. The Release workflow waits until CI and Prek succeeded for that push, then publishes the manifest version as Latest. The pull request must bump that version first, because HACS will not offer a tag that already exists.
 
 ## Security
 

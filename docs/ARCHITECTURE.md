@@ -114,7 +114,7 @@ Bare `homeassistant.restart` from the UI **exits** this process (no Supervisor) 
 
 | Module | Role |
 | ------ | ---- |
-| `.github/workflows/release.yml` | Manual HACS publication on `main`. Inputs are the approved full SHA and version. `scripts/check_release_ci.py` requires the latest push CI and Prek runs for that SHA to be successful. Merge approval and publish approval are separate. |
+| `.github/workflows/release.yml` | Publishes a HACS Latest release on every push to `main`. It waits for green CI and Prek on that SHA. A new manifest version is published at that commit. An already-published version is bumped one patch and published by the next run. |
 | `portal_auth.py` | Email/password login/refresh (Cognito + Apigee) |
 | `auth.py` | Auth manager, snapshots, immutable account key + encrypted billing ids |
 | `api.py` | GraphQL client + monthly paging + error classification |
