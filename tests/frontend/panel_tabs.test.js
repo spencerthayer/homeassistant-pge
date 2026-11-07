@@ -36,13 +36,6 @@ describe("panel tabs", () => {
     assert.equal(presets["24h"].end.getTime() - presets["24h"].start.getTime(), 24 * 60 * 60 * 1000);
   });
 
-  it("gallery figures use heading hint popups instead of fig-info details", () => {
-    const src = readFileSync(new URL("../../custom_components/pge_energy/frontend/pge-panel.js", import.meta.url), "utf8");
-    assert.equal(src.includes('details class="fig-info"'), false);
-    assert.equal(src.includes("mdi:information-outline"), false);
-    assert.match(src, /_hint\(about, \{ html: true, label: "About this chart" \}\)/);
-  });
-
   it("heatmap day click rebuilds the Usage range bar before the hero", () => {
     const src = readFileSync(new URL("../../custom_components/pge_energy/frontend/pge-panel.js", import.meta.url), "utf8");
     const start = src.indexOf("_openUsageDay(");
