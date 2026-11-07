@@ -61,7 +61,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.12.12";
+} from "./data.js?v=0.12.13";
 import {
   baseloadFloor,
   cycleCumulative,
@@ -103,8 +103,8 @@ import {
   lineItemShares,
   treemapSlices,
   waterfallSteps,
-} from "./chart-series.js?v=0.12.12";
-import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.12";
+} from "./chart-series.js?v=0.12.13";
+import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.13";
 import {
   createBarChart,
   createLineChart,
@@ -115,9 +115,9 @@ import {
   ensureEcharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.12.12";
-import { sparklineSvg } from "./svg-helpers.js?v=0.12.12";
-import { applyPanelTheme, todColors } from "./theme.js?v=0.12.12";
+} from "./charts.js?v=0.12.13";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.13";
+import { applyPanelTheme, todColors } from "./theme.js?v=0.12.13";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -250,7 +250,7 @@ const STYLE = `
   background: var(--pge-surface); color: var(--primary-text-color); padding: 6px 12px; cursor: pointer;
   touch-action: manipulation;
 }
-.sync-pill-icon { display: block; width: 16px; height: 16px; flex: 0 0 auto; pointer-events: none; }
+.sync-pill-icon { display: grid; place-items: center; width: 16px; height: 16px; flex: 0 0 auto; pointer-events: none; --mdc-icon-size: 16px; }
 .sync-pill-text { display: inline; }
 .sync-pill.good { color: var(--pge-status-good); }
 .sync-pill.warn { color: var(--pge-status-warn); }
@@ -1854,19 +1854,37 @@ class PgeEnergyPanel extends HTMLElement {
       panel.hidden = panel.dataset.tab !== tab;
     }
     if (writeHistory && location.hash !== panelTabHash(tab)) history.pushState(null, "", panelTabHash(tab));
-    const panel = this.shadowRoot.getElementById("panel-" + tab);
-    requestAnimationFrame(() => this._resizeChartsUnder(panel));
+    this._afterTabPaint(tab, () => {
+      const visiblePanel = this.shadowRoot.getElementById("panel-" + tab);
+      if (visiblePanel) this._resizeChartsUnder(visiblePanel);
+    });
 
-    // Paint only the visible primary chart; the other range loads when its tab opens.
+    // Let the browser paint the selected tab before recorder or chart work runs.
     if (galleries && this._primaryReady && changed && !this._loading && (tab === "glance" || tab === "usage")) {
-      void this._softGallery(() => this._renderHero());
+      this._afterTabPaint(tab, () => void this._softGallery(() => this._renderHero()));
     }
 
-    // Lazy-render galleries for this tab on first visit.
+    // First-visit galleries can do substantial work; run them only after the
+    // selected panel has had a frame to paint, and only if it is still active.
     if (galleries && this._primaryReady && firstVisit && !this._loading) {
-      this._renderedTabs.add(tab);
-      void this._renderTabGalleries(tab);
+      const renderGen = this._galleryRenderGen;
+      const entryId = this._activeEntryId;
+      this._afterTabPaint(tab, () => {
+        if (renderGen !== this._galleryRenderGen || entryId !== this._activeEntryId || this._renderedTabs.has(tab)) {
+          return;
+        }
+        this._renderedTabs.add(tab);
+        void this._renderTabGalleries(tab);
+      });
     }
+  }
+
+  _afterTabPaint(tab, callback) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (this._activeTab === tab && !this._loading) callback();
+      });
+    });
   }
 
   /** Render galleries for a specific tab (lazy-loaded on first visit). */
@@ -1925,6 +1943,12 @@ class PgeEnergyPanel extends HTMLElement {
 
   _scheduleDefaultLandingScroll() {
     if (this._landingApplied || this._error || !this._accounts.length) {
+      return;
+    }
+    // On phones this scroll can race a finger tap on the tab row,
+    // retargeting the synthesized click into the panel content.
+    if (window.matchMedia?.("(pointer: coarse), (max-width: 720px)").matches) {
+      this._landingApplied = true;
       return;
     }
     const root = this.shadowRoot;
