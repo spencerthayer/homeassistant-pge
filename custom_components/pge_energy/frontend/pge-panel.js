@@ -61,7 +61,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.12.13";
+} from "./data.js?v=0.12.14";
 import {
   baseloadFloor,
   cycleCumulative,
@@ -103,8 +103,8 @@ import {
   lineItemShares,
   treemapSlices,
   waterfallSteps,
-} from "./chart-series.js?v=0.12.13";
-import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.13";
+} from "./chart-series.js?v=0.12.14";
+import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.14";
 import {
   createBarChart,
   createLineChart,
@@ -115,9 +115,9 @@ import {
   ensureEcharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.12.13";
-import { sparklineSvg } from "./svg-helpers.js?v=0.12.13";
-import { applyPanelTheme, todColors } from "./theme.js?v=0.12.13";
+} from "./charts.js?v=0.12.14";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.14";
+import { applyPanelTheme, todColors } from "./theme.js?v=0.12.14";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -314,16 +314,28 @@ dialog.chart-dialog {
   color: var(--primary-text-color);
 }
 dialog.drawer {
-  margin: 0 0 0 auto; height: 100%; max-height: none; width: min(480px, 100vw);
-  border: 0; padding: var(--pge-space-4); background: var(--pge-surface);
+  position: fixed; inset: 0 0 0 auto; box-sizing: border-box;
+  width: min(480px, 100vw); max-width: none; height: 100vh; height: 100dvh; max-height: none;
+  margin: 0; overflow: auto; overscroll-behavior: contain; touch-action: pan-y;
+  border: 0;
+  padding: calc(var(--pge-space-4) + env(safe-area-inset-top, 0px))
+    calc(var(--pge-space-4) + env(safe-area-inset-right, 0px))
+    calc(var(--pge-space-4) + env(safe-area-inset-bottom, 0px))
+    calc(var(--pge-space-4) + env(safe-area-inset-left, 0px));
+  background: var(--pge-surface);
   color: var(--primary-text-color); box-shadow: var(--pge-shadow-2);
 }
+.drawer-swipe-hint { display: none; }
 .drawer-head { padding-right: 36px; }
+.drawer-swipe-hint { margin: -8px 36px 12px 0; color: var(--secondary-text-color); font-size: 0.82rem; }
+@media (max-width: 600px) and (pointer: coarse) {
+  .drawer-swipe-hint { display: block; }
+}
 .drawer-head h2 { margin: 4px 0 12px; }
 .drawer-close {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  right: calc(env(safe-area-inset-right, 0px) + 8px);
   z-index: 1;
   display: grid;
   place-items: center;
@@ -2120,6 +2132,7 @@ class PgeEnergyPanel extends HTMLElement {
       </dialog>
       <dialog id="sync-drawer" class="drawer" aria-labelledby="sync-drawer-title">
         <div class="drawer-head"><h2 id="sync-drawer-title">Sync and diagnostics</h2>
+          <p class="drawer-swipe-hint">Swipe right to close</p>
           <button type="button" class="drawer-close" aria-label="Close">×</button></div>
         <div class="sync-strip" id="sync"></div>
         <div class="data-gaps" id="data-gaps"></div>
@@ -3151,10 +3164,42 @@ class PgeEnergyPanel extends HTMLElement {
     if (!wrap || !pill || wrap.dataset.bound === "1") return;
     wrap.dataset.bound = "1";
     if (this._onSyncPopOutside) document.removeEventListener("click", this._onSyncPopOutside);
+    const drawer = this.shadowRoot.getElementById("sync-drawer");
+    const openDrawer = () => {
+      if (!drawer) return;
+      wrap.classList.remove("open");
+      pill.setAttribute("aria-expanded", "true");
+      if (!drawer.open) drawer.showModal();
+    };
+    drawer?.addEventListener("close", () => pill.setAttribute("aria-expanded", "false"));
+
+    let swipeStart = null;
+    drawer?.addEventListener("pointerdown", (ev) => {
+      swipeStart = null;
+      if (
+        ev.pointerType !== "touch" ||
+        ev.button !== 0 ||
+        ev.target?.closest?.("button, a, input, select, textarea, [contenteditable='true']")
+      ) return;
+      swipeStart = { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY };
+    });
+    drawer?.addEventListener("pointerup", (ev) => {
+      if (!swipeStart || ev.pointerId !== swipeStart.pointerId) return;
+      const dx = ev.clientX - swipeStart.x;
+      const dy = ev.clientY - swipeStart.y;
+      swipeStart = null;
+      if (dx >= 80 && dx > Math.abs(dy) * 1.25) drawer.close();
+    });
+    const cancelSwipe = (ev) => {
+      if (!swipeStart || ev.pointerId === swipeStart.pointerId) swipeStart = null;
+    };
+    drawer?.addEventListener("pointercancel", cancelSwipe);
+    drawer?.addEventListener("lostpointercapture", cancelSwipe);
+
     const fine = window.matchMedia("(hover: hover) and (pointer: fine)");
     pill.addEventListener("click", (ev) => {
       if (fine.matches) {
-        this.shadowRoot.getElementById("sync-drawer")?.showModal();
+        openDrawer();
         return;
       }
       ev.stopPropagation();
@@ -3164,9 +3209,7 @@ class PgeEnergyPanel extends HTMLElement {
     wrap.addEventListener("click", (ev) => {
       if (!ev.target.closest("[data-open-sync]")) return;
       ev.preventDefault();
-      wrap.classList.remove("open");
-      pill.setAttribute("aria-expanded", "false");
-      this.shadowRoot.getElementById("sync-drawer")?.showModal();
+      openDrawer();
     });
     this._onSyncPopOutside = (ev) => {
       if (!wrap.classList.contains("open")) return;
