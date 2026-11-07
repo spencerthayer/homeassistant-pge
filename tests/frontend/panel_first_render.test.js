@@ -260,6 +260,61 @@ it("does not scroll the phone landing section over the tab controls", () => {
   }
 });
 
+it("dismisses the sync drawer on a rightward touch swipe but preserves vertical scroll", () => {
+  const oldWindow = globalThis.window;
+  const oldDocument = globalThis.document;
+  class Target extends EventTarget {}
+  const pill = new Target();
+  pill.attributes = {};
+  pill.setAttribute = (name, value) => { pill.attributes[name] = value; };
+  const wrap = new Target();
+  wrap.dataset = {};
+  wrap.classList = {
+    remove() {},
+    toggle() { return false; },
+    contains() { return false; },
+  };
+  wrap.querySelector = () => pill;
+  const drawer = new Target();
+  drawer.open = true;
+  drawer.closeCount = 0;
+  drawer.close = () => {
+    drawer.closeCount += 1;
+    drawer.open = false;
+    drawer.dispatchEvent(new Event("close"));
+  };
+  const panel = panelWith({
+    shadowRoot: {
+      querySelector: () => wrap,
+      getElementById: () => drawer,
+    },
+  });
+  globalThis.window = { matchMedia: () => ({ matches: false }) };
+  globalThis.document = { addEventListener() {}, removeEventListener() {} };
+  const pointer = (type, x, y) => {
+    const event = new Event(type);
+    Object.assign(event, {
+      pointerType: "touch", pointerId: 1, button: 0, clientX: x, clientY: y,
+    });
+    drawer.dispatchEvent(event);
+  };
+  try {
+    panel._bindSyncPill();
+    pointer("pointerdown", 20, 20);
+    pointer("pointerup", 120, 22);
+    assert.equal(drawer.closeCount, 1);
+    assert.equal(pill.attributes["aria-expanded"], "false");
+    pointer("pointerdown", 20, 20);
+    pointer("pointerup", 22, 120);
+    assert.equal(drawer.closeCount, 1);
+  } finally {
+    if (oldWindow === undefined) delete globalThis.window;
+    else globalThis.window = oldWindow;
+    if (oldDocument === undefined) delete globalThis.document;
+    else globalThis.document = oldDocument;
+  }
+});
+
 it("disconnect invalidates deferred work and releases lazy records", () => {
   let disconnected = 0;
   const panel = panelWith({
