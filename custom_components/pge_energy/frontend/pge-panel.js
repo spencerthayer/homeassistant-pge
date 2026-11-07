@@ -61,7 +61,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.12.10";
+} from "./data.js?v=0.12.11";
 import {
   baseloadFloor,
   cycleCumulative,
@@ -103,8 +103,8 @@ import {
   lineItemShares,
   treemapSlices,
   waterfallSteps,
-} from "./chart-series.js?v=0.12.10";
-import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.10";
+} from "./chart-series.js?v=0.12.11";
+import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.11";
 import {
   createBarChart,
   createLineChart,
@@ -115,9 +115,9 @@ import {
   ensureEcharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.12.10";
-import { sparklineSvg } from "./svg-helpers.js?v=0.12.10";
-import { applyPanelTheme, todColors } from "./theme.js?v=0.12.10";
+} from "./charts.js?v=0.12.11";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.11";
+import { applyPanelTheme, todColors } from "./theme.js?v=0.12.11";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -234,6 +234,7 @@ const STYLE = `
   border: 0; background: transparent; color: var(--primary-text-color);
   padding: 8px 10px; cursor: pointer; border-bottom: 2px solid transparent;
   white-space: nowrap;
+  touch-action: manipulation;
 }
 .section-tabs [role="tab"] span { white-space: nowrap; }
 .section-tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--primary-color); }
@@ -419,14 +420,16 @@ details { interpolate-size: allow-keywords; }
     .kpi-grid > .kpi:nth-child(13),
     .kpi-grid > .kpi:nth-child(14) { grid-column: span 2; }
   }
-  @container (min-width: 1300px) {
-    .kpi-grid {
-      grid-template-columns: repeat(7, minmax(0, 1fr));
-      grid-template-rows: auto auto;
-      grid-auto-flow: column;
+  @media (min-width: 1680px) {
+    @container (min-width: 1300px) {
+      .kpi-grid {
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        grid-template-rows: auto auto;
+        grid-auto-flow: column;
+      }
+      .kpi-grid > .kpi:nth-child(13),
+      .kpi-grid > .kpi:nth-child(14) { grid-column: auto; }
     }
-    .kpi-grid > .kpi:nth-child(13),
-    .kpi-grid > .kpi:nth-child(14) { grid-column: auto; }
   }
 }
 .kpi .label { text-transform: none; letter-spacing: 0; }
@@ -1806,10 +1809,11 @@ class PgeEnergyPanel extends HTMLElement {
     const nav = this.shadowRoot.querySelector("[role=tablist]");
     if (!nav || nav.dataset.bound === "1") return;
     nav.dataset.bound = "1";
-    nav.addEventListener("click", (ev) => {
-      const button = ev.target.closest("[role=tab]");
-      if (button) this._selectPanelTab(button.dataset.tab, { writeHistory: true });
-    });
+    for (const button of nav.querySelectorAll("[role=tab]")) {
+      button.addEventListener("click", () =>
+        this._selectPanelTab(button.dataset.tab, { writeHistory: true }),
+      );
+    }
     nav.addEventListener("keydown", (ev) => {
       const button = ev.target.closest("[role=tab]");
       if (!button) return;
