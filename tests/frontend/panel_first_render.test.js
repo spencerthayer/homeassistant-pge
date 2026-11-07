@@ -190,6 +190,76 @@ it("a shell selection cannot start a primary or a gallery", () => {
   assert.equal(panel._renderedTabs.has("analytics"), false);
 });
 
+
+it("paints a selected tab before starting its first-visit gallery", () => {
+  const frames = [];
+  const oldRequestAnimationFrame = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (callback) => {
+    frames.push(callback);
+    return frames.length;
+  };
+  const calls = [];
+  const billingButton = {
+    dataset: { tab: "billing" }, attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+  };
+  const glanceButton = {
+    dataset: { tab: "glance" }, attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+  };
+  const billingPanel = { dataset: { tab: "billing" }, hidden: true };
+  const glancePanel = { dataset: { tab: "glance" }, hidden: false };
+  const panel = panelWith({
+    _activeTab: "glance", _renderedTabs: new Set(), _loading: false,
+    shadowRoot: {
+      getElementById: (id) => id === "panel-billing" ? billingPanel : null,
+      querySelector: () => null,
+      querySelectorAll: (selector) =>
+        selector === ".section-tabs [role=tab]"
+          ? [glanceButton, billingButton]
+          : selector === ".tab-panel" ? [glancePanel, billingPanel] : [],
+    },
+    _attachRangeBar() {},
+    _resizeChartsUnder() { calls.push("resize"); },
+    _renderTabGalleries(tab) { calls.push(`gallery:${tab}`); },
+  });
+  const runFrame = () => {
+    for (const callback of frames.splice(0)) callback();
+  };
+  try {
+    panel._selectPanelTab("billing");
+    assert.equal(panel._activeTab, "billing");
+    assert.equal(billingButton.attributes["aria-selected"], "true");
+    assert.equal(billingPanel.hidden, false);
+    assert.deepEqual(calls, []);
+    runFrame();
+    assert.deepEqual(calls, []);
+    runFrame();
+    assert.deepEqual(calls, ["resize", "gallery:billing"]);
+    assert.equal(panel._renderedTabs.has("billing"), true);
+  } finally {
+    globalThis.requestAnimationFrame = oldRequestAnimationFrame;
+  }
+});
+
+it("does not scroll the phone landing section over the tab controls", () => {
+  const oldWindow = globalThis.window;
+  let scrolls = 0;
+  globalThis.window = { matchMedia: () => ({ matches: true }) };
+  const panel = panelWith({
+    _landingApplied: false, _accounts: [{}], _defaultSection: "glance",
+    shadowRoot: { querySelector: () => ({ scrollIntoView: () => { scrolls += 1; } }) },
+  });
+  try {
+    panel._scheduleDefaultLandingScroll();
+    assert.equal(panel._landingApplied, true);
+    assert.equal(scrolls, 0);
+  } finally {
+    if (oldWindow === undefined) delete globalThis.window;
+    else globalThis.window = oldWindow;
+  }
+});
+
 it("disconnect invalidates deferred work and releases lazy records", () => {
   let disconnected = 0;
   const panel = panelWith({
