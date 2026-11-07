@@ -61,7 +61,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.12.11";
+} from "./data.js?v=0.12.12";
 import {
   baseloadFloor,
   cycleCumulative,
@@ -103,8 +103,8 @@ import {
   lineItemShares,
   treemapSlices,
   waterfallSteps,
-} from "./chart-series.js?v=0.12.11";
-import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.11";
+} from "./chart-series.js?v=0.12.12";
+import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.12";
 import {
   createBarChart,
   createLineChart,
@@ -115,9 +115,9 @@ import {
   ensureEcharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.12.11";
-import { sparklineSvg } from "./svg-helpers.js?v=0.12.11";
-import { applyPanelTheme, todColors } from "./theme.js?v=0.12.11";
+} from "./charts.js?v=0.12.12";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.12";
+import { applyPanelTheme, todColors } from "./theme.js?v=0.12.12";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -218,7 +218,7 @@ const STYLE = `
   padding: var(--pge-space-2) var(--pge-space-4) 0;
 }
 .hdr-row { display: flex; align-items: center; gap: var(--pge-space-3); }
-.section-tabs { display: flex; align-items: center; gap: var(--pge-space-2); overflow: hidden; }
+.section-tabs { display: flex; align-items: center; gap: var(--pge-space-2); overflow: visible; }
 .section-tab-scroll {
   display: flex;
   flex-wrap: nowrap;
@@ -245,9 +245,12 @@ const STYLE = `
   border-color: color-mix(in srgb, var(--app-header-text-color, #fff) 40%, transparent);
 }
 .sync-pill {
+  display: inline-flex; align-items: center; gap: 6px;
   border: 1px solid var(--pge-border); border-radius: 999px;
   background: var(--pge-surface); color: var(--primary-text-color); padding: 6px 12px; cursor: pointer;
+  touch-action: manipulation;
 }
+.sync-pill-icon { display: block; width: 16px; height: 16px; flex: 0 0 auto; pointer-events: none; }
 .sync-pill-text { display: inline; }
 .sync-pill.good { color: var(--pge-status-good); }
 .sync-pill.warn { color: var(--pge-status-warn); }
@@ -1182,7 +1185,8 @@ details.usage-accounting .usage-accounting-body { padding: 0 0 4px; }
     margin-left: 4px;
   }
   .sync-pill {
-    display: block;
+    display: grid;
+    place-items: center;
     width: 28px;
     height: 28px;
     min-width: 28px;
@@ -1202,6 +1206,7 @@ details.usage-accounting .usage-accounting-body { padding: 0 0 4px; }
     background: var(--pge-status-critical);
     border-color: var(--pge-status-critical);
   }
+  .sync-pill-icon { color: var(--primary-text-color); }
   .sync-pill::before { display: none; }
   .sync-pill-text {
     position: absolute;
@@ -2006,7 +2011,7 @@ class PgeEnergyPanel extends HTMLElement {
         <div class="section-tabs">
           <nav class="section-tab-scroll" role="tablist" aria-label="PGE sections">${tabButtons}</nav>
           <div class="sync-pill-wrap">
-            <button type="button" class="sync-pill" id="sync-pill" aria-haspopup="dialog" aria-controls="sync-pop" aria-expanded="false" aria-label="Sync status"><span class="sync-pill-text">Sync status</span></button>
+            <button type="button" class="sync-pill" id="sync-pill" aria-haspopup="dialog" aria-controls="sync-pop sync-drawer" aria-expanded="false" aria-label="Sync information"><ha-icon class="sync-pill-icon" icon="mdi:information-outline" aria-hidden="true"></ha-icon><span class="sync-pill-text">Sync status</span></button>
             <div id="sync-pop" class="sync-pop" role="dialog" aria-label="Last sync"></div>
           </div>
         </div>
