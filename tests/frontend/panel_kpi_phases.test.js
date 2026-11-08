@@ -80,7 +80,7 @@ it("phase 1 paints before a pending hero and phase 2 waits", async () => {
   const panel = Object.assign(Object.create(Panel.prototype), {
     _fetchCache: new Map(), _galleryRenderGen: 1, _activeEntryId: "a",
     _activeTab: "glance", _renderedTabs: new Set(), _charts: [],
-    _pendingMounts: new Map(), _chartFactories: new Map(),
+    _pendingTabRenders: new Map(), _pendingMounts: new Map(), _chartFactories: new Map(),
     _rangeKey: "24h", _availablePresets: ["24h"],
     _renderSync() {}, _billBounds: () => null, _renderFilters() {},
     _renderDiagnostics() {}, _renderDataGaps: async () => {},

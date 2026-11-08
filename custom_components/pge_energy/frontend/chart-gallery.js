@@ -14,8 +14,8 @@ import {
   createThemeRiver,
   createTreemap,
   createWaterfall,
-} from "./charts.js?v=0.12.15";
-import { billFamilyColors, todColors } from "./theme.js?v=0.12.15";
+} from "./charts.js?v=0.12.19";
+import { billFamilyColors, todColors } from "./theme.js?v=0.12.19";
 import {
   estimatePlanCostSeries,
   fetchStatisticSeries,
@@ -26,7 +26,7 @@ import {
   TOD_PERIOD_LABELS,
   todPeriodForPacific,
   isTodOffPeakDay,
-} from "./data.js?v=0.12.15";
+} from "./data.js?v=0.12.19";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const HOURS = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0"));
@@ -154,6 +154,7 @@ function galleryStamp(panel) {
   return {
     entryId: panel._activeEntryId ?? null,
     gen: panel._galleryRenderGen ?? 0,
+    tabRun: panel._tabRenderContext ?? null,
   };
 }
 
@@ -161,7 +162,8 @@ function galleryStale(panel, stamp) {
   if (!stamp) return false;
   return (panel._activeEntryId ?? null) !== stamp.entryId
     || (panel._galleryRenderGen ?? 0) !== stamp.gen
-    || (stamp.rangeGen != null && (panel._rangeRenderGen ?? 0) !== stamp.rangeGen);
+    || (stamp.rangeGen != null && (panel._rangeRenderGen ?? 0) !== stamp.rangeGen)
+    || !!stamp.tabRun?.cancelled;
 }
 
 export function galleryRecordCurrent(panel, record) {
@@ -224,15 +226,25 @@ export async function mountHost(panel, id, factory, stamp, { defer = true } = {}
   }
   if (host.closest("[data-explore-hosts]")) return;
   host.classList.add("chart-skeleton");
+  host.setAttribute("role", "status");
+  host.setAttribute("aria-busy", "true");
+  host.setAttribute("aria-label", "Loading chart data");
   if (defer && panel._lazyObserver && !hostIntersectsViewport(host)) {
     panel._pendingMounts.set(host, record);
     panel._lazyObserver.observe(host);
     return;
   }
+  await new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(resolve);
+    else resolve();
+  });
+  if (!galleryRecordCurrent(panel, record)) return;
   await panel._mountDeferred?.(record);
   if (typeof panel._mountDeferred !== "function") {
     const chart = await factory(host);
     host.classList.remove("chart-skeleton");
+    host.removeAttribute("aria-busy");
+    host.removeAttribute("aria-label");
     if (!chart) host.closest("figure")?.setAttribute("hidden", "");
     else panel._charts?.push(chart);
   }
@@ -458,6 +470,63 @@ export async function renderLoadShape(panel, fns) {
       dimensions: ["kWh", "Peak hour", "Mean °F", "On-peak share", "Portal ¢/kWh"],
       rows: prints.map((row) => [row.kwh, row.peakHour, row.tempF, row.onPeakShare, row.centsPerKwh]),
     }),
+  );
+}
+export async function renderBaseloadHistory(panel, fns) {
+  const stamp = galleryStamp(panel);
+  const host = panel.shadowRoot?.getElementById("chart-baseload-history");
+  if (!host || !panel._account) return;
+  const end = publishedDataEnd();
+  const recentStart = pacificRangeStart(end, { days: -365 });
+  const [hourlyKwh, recentKwh, recentCost] = await Promise.all([
+    fetchRole(panel, "consumption", { start: new Date("2019-01-01T00:00:00.000Z"), end, period: "hour" }),
+    fetchRole(panel, "consumption", { start: recentStart, end, period: "day" }),
+    fetchRole(panel, "cost", { start: recentStart, end, period: "day" }),
+  ]);
+  if (galleryStale(panel, stamp)) return;
+  await new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(resolve);
+    else resolve();
+  });
+  if (galleryStale(panel, stamp)) return;
+  const days = fns.overnightFloorDays(joinSamples([{ key: "kwh", ...hourlyKwh }]));
+  if (!days.length) {
+    hideFigure(panel, "chart-baseload-history", true);
+    return;
+  }
+  const recent = joinSamples([
+    { key: "kwh", ...recentKwh },
+    { key: "cost", ...recentCost },
+  ]);
+  const rateRows = fns.centsPerKwh(recent);
+  const kwhTotal = rateRows.reduce((sum, row) => sum + row.kwh, 0);
+  const costTotal = rateRows.reduce((sum, row) => sum + row.cost, 0);
+  const cents = kwhTotal > 0 ? (costTotal / kwhTotal) * 100 : null;
+  const startYmd = pacificYmd(recentStart);
+  const floorRows = days.filter((row) => row.ymd >= startYmd);
+  const meanFloor = floorRows.length
+    ? floorRows.reduce((sum, row) => sum + row.kwh, 0) / floorRows.length
+    : null;
+  const annualCost = cents != null && meanFloor != null ? meanFloor * 24 * 365 * cents / 100 : null;
+  const values = days.map((row) => row.kwh);
+  const markers = Array(values.length).fill(null);
+  for (const step of fns.baseloadSteps(values)) markers[step.index] = values[step.index];
+  const note = host.closest("figure")?.querySelector(".fig-note");
+  if (note) {
+    note.textContent = annualCost == null
+      ? "Trailing-year PGE usage estimate unavailable."
+      : `Estimated always-on cost: $${annualCost.toFixed(0)}/year using the trailing 365-day PGE usage estimate.`;
+  }
+  await mountHost(panel, "chart-baseload-history", (target) =>
+    createGalleryChart(target, {
+      categories: days.map((row) => row.ymd),
+      yName: "Minimum overnight kWh per hour",
+      series: [
+        { name: "Overnight floor", values },
+        { name: "Detected step", values: markers, type: "scatter" },
+      ],
+    }),
+    stamp,
   );
 }
 
@@ -713,7 +782,6 @@ export async function renderWeatherMoney(panel, fns) {
   if (!panel._account) return;
   const end = publishedDataEnd();
   const start5 = pacificRangeStart(end, { years: -5 });
-  const startBills = new Date("2019-01-01T00:00:00.000Z");
   const [kwhDay, costDay, tempDay] = await Promise.all([
     fetchRole(panel, "consumption", { start: start5, end, period: "day" }),
     fetchRole(panel, "cost", { start: start5, end, period: "day" }),
@@ -725,66 +793,82 @@ export async function renderWeatherMoney(panel, fns) {
     { key: "cost", ...costDay },
     { key: "tempF", ...tempDay },
   ]);
-  await mount( "chart-degree-days", (host) =>
+  panel._galleryDays = days;
+  await mount("chart-degree-days", (host) =>
     createGalleryChart(host, {
       categories: days.map((row) => row.ts),
       yName: "kWh or degree days",
       series: [
         { name: "kWh", values: days.map((row) => row.kwh) },
-        {
-          name: "Heating degree days",
-          values: days.map((row) => fns.degreeDayPoint(row.tempF)?.heating ?? null),
-        },
-        {
-          name: "Cooling degree days",
-          values: days.map((row) => fns.degreeDayPoint(row.tempF)?.cooling ?? null),
-        },
+        { name: "Heating degree days", values: days.map((row) => fns.degreeDayPoint(row.tempF)?.heating ?? null) },
+        { name: "Cooling degree days", values: days.map((row) => fns.degreeDayPoint(row.tempF)?.cooling ?? null) },
       ],
     }),
   );
   const bins = fns.tempBins(days);
-  await mount( "chart-temp-bins", (host) =>
+  await mount("chart-temp-bins", (host) =>
     createGalleryChart(host, {
       categories: bins.map((row) => row.label),
       yName: "Mean kWh",
       series: [{ name: "Mean kWh", values: bins.map((row) => row.meanKwh), type: "bar" }],
     }),
   );
-
-  if (galleryStale(panel, stamp)) return;
-  panel._galleryDays = days;
-  // Let the in-view charts build before the 2019 hourly rows are parsed.
-  // That parse is synchronous and would otherwise block the lazy mount.
-  await new Promise((resolve) => {
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(resolve);
-    else resolve();
+  const savings = await fetchRole(panel, "ytd_program_savings", {
+    start: start5,
+    end,
+    period: "day",
+    field: "means",
   });
   if (galleryStale(panel, stamp)) return;
-  const [billAmount, billKwh, costHour, kwhHour, savings, balance, due] = await Promise.all([
+  await mount("chart-program-savings", (host) =>
+    createGalleryChart(host, {
+      categories: savings.xs,
+      yName: "Dollars",
+      series: [{ name: "YTD program savings", values: savings.values }],
+    }),
+  );
+}
+
+export async function renderBillingCharts(panel, fns) {
+  const stamp = galleryStamp(panel);
+  const mount = (id, factory) => mountHost(panel, id, factory, stamp);
+  if (!panel._account) return;
+  const end = publishedDataEnd();
+  const start5 = pacificRangeStart(end, { years: -5 });
+  const startBills = new Date("2019-01-01T00:00:00.000Z");
+  let days = panel._galleryDays;
+  const daily = days ? Promise.resolve(null) : Promise.all([
+    fetchRole(panel, "consumption", { start: start5, end, period: "day" }),
+    fetchRole(panel, "temperature", { start: start5, end, period: "day", field: "means" }),
+  ]);
+  const [dailyRows, billAmount, billKwh, costHour, kwhHour, balance, due] = await Promise.all([
+    daily,
     fetchRole(panel, "bill_amount", { start: startBills, end, period: "hour" }),
     fetchRole(panel, "bill_kwh", { start: startBills, end, period: "hour" }),
     fetchRole(panel, "cost", { start: startBills, end, period: "hour" }),
     fetchRole(panel, "consumption", { start: startBills, end, period: "hour" }),
-    fetchRole(panel, "ytd_program_savings", { start: start5, end, period: "hour", field: "means" }),
-    fetchRole(panel, "account_balance", { start: start5, end, period: "hour", field: "means" }),
-    fetchRole(panel, "amount_due", { start: start5, end, period: "hour", field: "means" }),
+    fetchRole(panel, "account_balance", { start: start5, end, period: "day", field: "means" }),
+    fetchRole(panel, "amount_due", { start: start5, end, period: "day", field: "means" }),
   ]);
   if (galleryStale(panel, stamp)) return;
+  if (!days) {
+    days = joinSamples([
+      { key: "kwh", ...dailyRows[0] },
+      { key: "tempF", ...dailyRows[1] },
+    ]);
+    panel._galleryDays = days;
+  }
   panel._galleryBillAmount = billAmount;
-
   if (!panel.shadowRoot?.getElementById("chart-statement-portal")) return;
-  const bounds = billBoundsSeconds(panel);
   const amountRows = sparseChanges(billAmount, { keepZero: true });
   const kwhRows = sparseChanges(billKwh, { keepZero: true });
-  const windows = fns.statementWindows(amountRows, bounds);
-  const costSamples = joinSamples([{ key: "cost", ...costHour }]);
-  const kwhSamples = joinSamples([{ key: "kwh", ...kwhHour }]);
-  const costGaps = fns.statementGap(windows, costSamples);
-  const kwhGaps = fns.billVsImported(windows, kwhSamples);
+  const windows = fns.statementWindows(amountRows, billBoundsSeconds(panel));
+  const costGaps = fns.statementGap(windows, joinSamples([{ key: "cost", ...costHour }]));
+  const kwhGaps = fns.billVsImported(windows, joinSamples([{ key: "kwh", ...kwhHour }]));
   const labels = windows.map((window) => pacificYmd(new Date(window.end * 1000)));
   const amountByTs = new Map(amountRows.map((row) => [row.ts, row.value]));
   const kwhByTs = new Map(kwhRows.map((row) => [row.ts, row.value]));
-  await mount( "chart-statement-portal", (host) =>
+  await mount("chart-statement-portal", (host) =>
     createGalleryChart(host, {
       categories: labels,
       yName: "Dollars",
@@ -794,7 +878,7 @@ export async function renderWeatherMoney(panel, fns) {
       ],
     }),
   );
-  await mount( "chart-bill-imported", (host) =>
+  await mount("chart-bill-imported", (host) =>
     createGalleryChart(host, {
       categories: labels,
       yName: "kWh",
@@ -804,14 +888,7 @@ export async function renderWeatherMoney(panel, fns) {
       ],
     }),
   );
-  await mount( "chart-program-savings", (host) =>
-    createGalleryChart(host, {
-      categories: savings.xs,
-      yName: "Dollars",
-      series: [{ name: "YTD program savings", values: savings.values }],
-    }),
-  );
-  await mount( "chart-balance-due", (host) =>
+  await mount("chart-balance-due", (host) =>
     createGalleryChart(host, {
       categories: balance.xs.length ? balance.xs : due.xs,
       yName: "Dollars",
@@ -821,8 +898,6 @@ export async function renderWeatherMoney(panel, fns) {
       ],
     }),
   );
-
-  if (galleryStale(panel, stamp)) return;
 }
 
 function hideFigure(panel, id, hidden) {
@@ -1023,10 +1098,7 @@ export async function renderInsights(panel, fns) {
   const end = publishedDataEnd();
   const start366 = pacificRangeStart(end, { days: -366 });
   let sourceDays = panel._galleryDays;
-  const hourlyFetches = [
-    fetchRole(panel, "consumption", { start: start366, end, period: "hour" }),
-    fetchRole(panel, "consumption", { start: new Date("2019-01-01T00:00:00.000Z"), end, period: "hour" }),
-  ];
+  const hourlyFetches = [fetchRole(panel, "consumption", { start: start366, end, period: "hour" })];
   if (!sourceDays) {
     const start5 = pacificRangeStart(end, { years: -5 });
     hourlyFetches.unshift(
@@ -1045,6 +1117,8 @@ export async function renderInsights(panel, fns) {
     ]);
   }
   const hourSeries = sourceDays === panel._galleryDays ? fetched : fetched.slice(3);
+  const hourly = joinSamples([{ key: "kwh", ...hourSeries[0] }]);
+
   const days = sourceDays.map((day) => ({
     ...day,
     offPeakDay: isTodOffPeakDay(pacificYmd(day.ts)) ? 1 : 0,
@@ -1052,15 +1126,7 @@ export async function renderInsights(panel, fns) {
   const usable = days.filter((day) => day.kwh != null && day.tempF != null);
   const trailing = usable.slice(-365);
   const model = fns.weatherModel(trailing);
-  const [kwhHour, kwhAll] = hourSeries;
-  const hourly = joinSamples([{ key: "kwh", ...kwhHour }]);
-  const allHourly = joinSamples([{ key: "kwh", ...kwhAll }]);
-
-  const modelHosts = [
-    "chart-bill-explainer",
-    "chart-weather-counterfactual",
-    "chart-daypart-stream",
-  ];
+  const modelHosts = ["chart-weather-counterfactual", "chart-daypart-stream"];
   let centsValue = null;
   if (!model) {
     for (const id of modelHosts) hideFigure(panel, id, true);
@@ -1103,104 +1169,69 @@ export async function renderInsights(panel, fns) {
         : "";
     }
 
-    const billAmount = panel._galleryBillAmount || (await fetchRole(panel, "bill_amount", {
-      start: new Date("2019-01-01T00:00:00.000Z"),
-      end,
-      period: "hour",
-    }));
-    const ordered = sparseChanges(billAmount, { keepZero: true }).sort((a, b) => a.ts - b.ts);
-    const windows = fns.statementWindows(ordered, billBoundsSeconds(panel));
-    const stats = windows
-      .map((window, index) => {
-        const rows = usable.filter((day) => day.ts >= window.start && day.ts < window.end);
-        if (!rows.length) return null;
-        const amount = ordered[index + 1]?.value ?? null;
-        if (amount == null) return null;
-        return {
-          window,
-          days: rows.length,
-          kwh: rows.reduce((sum, row) => sum + row.kwh, 0),
-          pred: rows.reduce((sum, row) => sum + (model.predict(row) || 0), 0),
-          amount,
-        };
-      })
-      .filter(Boolean);
-    hideFigure(panel, "chart-bill-explainer", stats.length < 2);
-    if (stats.length >= 2) {
-      const previous = stats[stats.length - 2];
-      const current = stats[stats.length - 1];
-      const bars = fns.billExplainer({
-        amount0: previous.amount,
-        amount1: current.amount,
-        kwh0: previous.kwh,
-        kwh1: current.kwh,
-        days0: previous.days,
-        days1: current.days,
-        pred0: previous.pred,
-        pred1: current.pred,
-      });
-      const delta = current.amount - previous.amount;
-      await mount( "chart-bill-explainer", (host) =>
-        createWaterfall(host, {
-          unit: "$",
-          steps: [
-            { label: "Days", value: bars.days },
-            { label: "Weather", value: bars.weather },
-            { label: "Rate", value: bars.rate },
-            { label: "Usage", value: bars.usage },
-            { label: "Change in amount due", value: delta, total: true },
-          ],
-        }),
-      );
-    }
-
     await mount( "chart-daypart-stream", (host) =>
       createThemeRiver(host, { data: fns.daypartDays(hourly) }),
     );
   }
+}
 
-  const overnight = typeof fns.overnightFloorDays === "function" ? fns.overnightFloorDays(allHourly) : [];
-  const overnightByDay = new Map(overnight.map((row) => [row.ymd, row.kwh]));
-  const overnightCategories = [];
-  const overnightValues = [];
-  if (overnight.length) {
-    for (
-      let cursor = overnight[0].ymd;
-      cursor <= overnight[overnight.length - 1].ymd;
-      cursor = nextPacificYmd(cursor)
-    ) {
-      overnightCategories.push(cursor);
-      overnightValues.push(overnightByDay.has(cursor) ? overnightByDay.get(cursor) : null);
-    }
+export async function renderBillExplainer(panel, fns) {
+  const stamp = galleryStamp(panel);
+  const days = panel._galleryDays;
+  const amount = panel._galleryBillAmount;
+  if (!days || !amount || galleryStale(panel, stamp)) {
+    hideFigure(panel, "chart-bill-explainer", true);
+    return;
   }
-  const steps = (fns.baseloadSteps?.(overnight.map((row) => row.kwh)) || []).slice(-3);
-  const dollarsPerKwh = centsValue == null ? null : centsValue / 100;
-  await mount("chart-baseload-history", (host) =>
-    createGalleryChart(host, {
-      categories: overnightCategories,
-      yName: "kWh/h",
-      series: [{ name: "Overnight minimum", values: overnightValues, connectNulls: false }],
+  const usable = days.filter((day) => day.kwh != null && day.tempF != null);
+  const model = fns.weatherModel(usable.slice(-365));
+  const ordered = sparseChanges(amount, { keepZero: true }).sort((a, b) => a.ts - b.ts);
+  const windows = fns.statementWindows(ordered, billBoundsSeconds(panel));
+  const stats = windows.map((window, index) => {
+    const rows = usable.filter((day) => day.ts >= window.start && day.ts < window.end);
+    const total = ordered[index + 1]?.value;
+    if (!rows.length || total == null || !model) return null;
+    return {
+      days: rows.length,
+      kwh: rows.reduce((sum, row) => sum + row.kwh, 0),
+      predicted: rows.reduce((sum, row) => sum + (model.predict(row) || 0), 0),
+      amount: total,
+    };
+  }).filter(Boolean);
+  hideFigure(panel, "chart-bill-explainer", stats.length < 2);
+  if (stats.length < 2) return;
+
+  const previous = stats[stats.length - 2];
+  const current = stats[stats.length - 1];
+  const bars = fns.billExplainer({
+    amount0: previous.amount,
+    amount1: current.amount,
+    kwh0: previous.kwh,
+    kwh1: current.kwh,
+    days0: previous.days,
+    days1: current.days,
+    pred0: previous.predicted,
+    pred1: current.predicted,
+  });
+  await mountHost(panel, "chart-bill-explainer", (host) =>
+    createWaterfall(host, {
+      unit: "$",
+      steps: [
+        { label: "Days", value: bars.days },
+        { label: "Weather", value: bars.weather },
+        { label: "Rate", value: bars.rate },
+        { label: "Usage", value: bars.usage },
+        { label: "Change in amount due", value: current.amount - previous.amount, total: true },
+      ],
     }),
+    stamp,
   );
-  const historyFigure = panel.shadowRoot.getElementById("chart-baseload-history")?.closest("figure");
-  const historyNote = historyFigure?.querySelector(".fig-note");
-  if (historyNote) {
-    historyNote.textContent = steps.length
-      ? steps
-          .map((step) => {
-            const signed = step.delta > 0 ? "+" : "";
-            const yearlyDollars = dollarsPerKwh == null ? null : step.delta * 24 * 365 * dollarsPerKwh;
-            const yearly =
-              yearlyDollars == null
-                ? ""
-                : `, ${yearlyDollars > 0 ? "+" : yearlyDollars < 0 ? "-" : ""}$${Math.abs(yearlyDollars).toFixed(0)}/year`;
-            return `${signed}${step.delta.toFixed(2)} kWh/h since ${overnight[step.index]?.ymd || "that day"}${yearly}, PGE usage estimate`;
-          })
-          .join(". ")
-      : "";
-  }
+}
 
-  if (galleryStale(panel, stamp)) return;
+export async function renderShiftSimulator(panel, fns) {
+  const stamp = galleryStamp(panel);
+  const mount = (id, factory) => mountHost(panel, id, factory, stamp);
+  const end = publishedDataEnd();
   const ymd = pacificYmd(end);
   const { todCatalog, basicCatalog, overrideRates } = catalogBundle(panel);
   let rates = {
@@ -1222,48 +1253,49 @@ export async function renderInsights(panel, fns) {
     };
     basicRate = overrideRates.basic_service;
   }
-  const shiftFigure = panel.shadowRoot.getElementById("chart-shift-sim")?.closest("figure");
+  const figure = panel.shadowRoot.getElementById("chart-shift-sim")?.closest("figure");
   const covered = rates.off_peak != null && rates.mid_peak != null && rates.on_peak != null && basicRate != null;
-  if (shiftFigure) shiftFigure.hidden = !covered;
-  if (covered) {
-    const drawShift = async () => {
-      const kw = finiteNumber(panel.shadowRoot.getElementById("chart-shift-kw")?.value);
-      const hours = finiteNumber(panel.shadowRoot.getElementById("chart-shift-hours")?.value);
-      const runs = finiteNumber(panel.shadowRoot.getElementById("chart-shift-runs")?.value);
-      if (kw == null || hours == null || runs == null) return;
-      const rows = fns.shiftCostByStartHour({ kw, hours, runsPerMonth: runs, rates, basicRate });
-      await mount( "chart-shift-sim", (host) =>
-        createGalleryChart(host, {
-          categories: rows.map((row) => String(row.startHour).padStart(2, "0")),
-          yName: "Dollars per month",
-          markLines: [{ y: rows[0]?.basic, name: "Basic rate" }],
-          series: [{ name: "Local TOD imported-energy estimate", values: rows.map((row) => row.tod), type: "bar" }],
-        }),
-      );
+  if (figure) figure.hidden = !covered;
+  if (!covered) return;
+
+  const draw = async () => {
+    const kw = finiteNumber(panel.shadowRoot.getElementById("chart-shift-kw")?.value);
+    const hours = finiteNumber(panel.shadowRoot.getElementById("chart-shift-hours")?.value);
+    const runs = finiteNumber(panel.shadowRoot.getElementById("chart-shift-runs")?.value);
+    if (kw == null || hours == null || runs == null || galleryStale(panel, stamp)) return;
+    const rows = fns.shiftCostByStartHour({ kw, hours, runsPerMonth: runs, rates, basicRate });
+    await mount("chart-shift-sim", (host) =>
+      createGalleryChart(host, {
+        categories: rows.map((row) => String(row.startHour).padStart(2, "0")),
+        yName: "Dollars per month",
+        markLines: [{ y: rows[0]?.basic, name: "Basic rate" }],
+        series: [{ name: "Local TOD imported-energy estimate", values: rows.map((row) => row.tod), type: "bar" }],
+      }),
+    );
+  };
+
+  const preset = panel.shadowRoot.getElementById("chart-shift-preset");
+  const applyPreset = () => {
+    const chosen = SHIFT_PRESETS[preset?.value];
+    if (!chosen) return;
+    panel.shadowRoot.getElementById("chart-shift-kw").value = String(chosen.kw);
+    panel.shadowRoot.getElementById("chart-shift-hours").value = String(chosen.hours);
+    panel.shadowRoot.getElementById("chart-shift-runs").value = String(chosen.runs);
+  };
+  if (preset) {
+    preset.onchange = () => {
+      applyPreset();
+      void draw();
     };
-    const preset = panel.shadowRoot.getElementById("chart-shift-preset");
-    const applyPreset = () => {
-      const chosen = SHIFT_PRESETS[preset?.value];
-      if (!chosen) return;
-      panel.shadowRoot.getElementById("chart-shift-kw").value = String(chosen.kw);
-      panel.shadowRoot.getElementById("chart-shift-hours").value = String(chosen.hours);
-      panel.shadowRoot.getElementById("chart-shift-runs").value = String(chosen.runs);
-    };
-    if (preset) {
-      preset.onchange = () => {
-        applyPreset();
-        void drawShift();
+  }
+  for (const id of ["chart-shift-kw", "chart-shift-hours", "chart-shift-runs"]) {
+    const input = panel.shadowRoot.getElementById(id);
+    if (input) {
+      input.oninput = () => {
+        if (preset) preset.value = "custom";
+        void draw();
       };
     }
-    for (const id of ["chart-shift-kw", "chart-shift-hours", "chart-shift-runs"]) {
-      const input = panel.shadowRoot.getElementById(id);
-      if (input) {
-        input.oninput = () => {
-          if (preset) preset.value = "custom";
-          void drawShift();
-        };
-      }
-    }
-    void drawShift();
   }
+  await draw();
 }

@@ -4,6 +4,7 @@
  */
 
 const _cache = new Map();
+let _cacheGeneration = 0;
 
 function _cacheKey(statisticId, period, start, end, maxPoints) {
   return `${statisticId}|${period}|${start}|${end}|${maxPoints}`;
@@ -66,6 +67,7 @@ export async function lttb(xs, ys, threshold) {
 }
 
 export function invalidateStatsCache() {
+  _cacheGeneration += 1;
   _cache.clear();
 }
 
@@ -110,64 +112,73 @@ export async function fetchStatisticSeries(hass, statisticId, { start, end, peri
   const startIso = start instanceof Date ? start.toISOString() : start;
   const endIso = end instanceof Date ? end.toISOString() : end;
   const key = _cacheKey(statisticId, period, startIso, endIso, maxPoints);
-  if (_cache.has(key)) {
-    return _cache.get(key);
-  }
+  const cached = _cache.get(key);
+  if (cached) return cached;
 
-  const raw = await hass.callWS({
-    type: "recorder/statistics_during_period",
-    start_time: startIso,
-    end_time: endIso,
-    statistic_ids: [statisticId],
-    period,
-    types: ["sum", "state", "mean", "change"],
-  });
+  const generation = _cacheGeneration;
+  const promise = (async () => {
+    const raw = await hass.callWS({
+      type: "recorder/statistics_during_period",
+      start_time: startIso,
+      end_time: endIso,
+      statistic_ids: [statisticId],
+      period,
+      types: ["sum", "state", "mean", "change"],
+    });
 
-  const rows = (raw && raw[statisticId]) || [];
-  await yieldBeforeLargeWalk(rows.length);
-  const xs = [];
-  const sums = [];
-  const means = [];
-  const states = [];
-  const changes = [];
-  for (const row of rows) {
-    const t = row.start;
-    xs.push(typeof t === "number" ? Math.floor(t / 1000) : Math.floor(new Date(t).getTime() / 1000));
-    sums.push(row.sum ?? null);
-    means.push(row.mean ?? null);
-    states.push(row.state ?? null);
-    changes.push(row.change ?? null);
-  }
+    const rows = (raw && raw[statisticId]) || [];
+    await yieldBeforeLargeWalk(rows.length);
+    const xs = [];
+    const sums = [];
+    const means = [];
+    const states = [];
+    const changes = [];
+    for (const row of rows) {
+      const t = row.start;
+      xs.push(typeof t === "number" ? Math.floor(t / 1000) : Math.floor(new Date(t).getTime() / 1000));
+      sums.push(row.sum ?? null);
+      means.push(row.mean ?? null);
+      states.push(row.state ?? null);
+      changes.push(row.change ?? null);
+    }
 
-  // Prefer change for cumulative series bars; fall back to delta of sum.
-  let values = changes;
-  if (!values.some((v) => v != null)) {
-    values = [];
-    for (let i = 0; i < sums.length; i++) {
-      if (i === 0 || sums[i] == null || sums[i - 1] == null) {
-        values.push(sums[i]);
-      } else {
-        values.push(sums[i] - sums[i - 1]);
+    // Prefer change for cumulative series bars; fall back to delta of sum.
+    let values = changes;
+    if (!values.some((v) => v != null)) {
+      values = [];
+      for (let i = 0; i < sums.length; i++) {
+        if (i === 0 || sums[i] == null || sums[i - 1] == null) {
+          values.push(sums[i]);
+        } else {
+          values.push(sums[i] - sums[i - 1]);
+        }
       }
     }
-  }
 
-  let out = { xs, sums, means, states, changes: values, values };
-  if (xs.length > maxPoints) {
-    const dSum = await lttb(xs, values, maxPoints);
-    const dMean = await lttb(xs, means, maxPoints);
-    out = {
-      xs: dSum.xs,
-      values: dSum.ys,
-      changes: dSum.ys,
-      means: dMean.ys,
-      sums: dSum.ys,
-      states: dSum.ys,
-    };
-  }
+    let out = { xs, sums, means, states, changes: values, values };
+    if (xs.length > maxPoints) {
+      const dSum = await lttb(xs, values, maxPoints);
+      const dMean = await lttb(xs, means, maxPoints);
+      out = {
+        xs: dSum.xs,
+        values: dSum.ys,
+        changes: dSum.ys,
+        means: dMean.ys,
+        sums: dSum.ys,
+        states: dSum.ys,
+      };
+    }
 
-  _cache.set(key, out);
-  return out;
+    if (generation === _cacheGeneration) _cache.set(key, out);
+    return out;
+  })();
+  _cache.set(key, promise);
+  try {
+    return await promise;
+  } catch (err) {
+    if (_cache.get(key) === promise) _cache.delete(key);
+    throw err;
+  }
 }
 
 /** Coerce epoch-seconds / ms / ISO string / Date into a Date. */
@@ -177,14 +188,21 @@ function _asDate(t = new Date()) {
   return new Date(t);
 }
 
+const _PACIFIC_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Los_Angeles",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+const _PACIFIC_HOUR_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Los_Angeles",
+  hour: "2-digit",
+  hour12: false,
+});
+
 /** Pacific calendar YYYY-MM-DD for an instant. */
 export function pacificYmd(date = new Date()) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(_asDate(date));
+  return _PACIFIC_DATE_FORMATTER.format(_asDate(date));
 }
 
 /** UTC instant of Pacific local midnight for YYYY-MM-DD. */
@@ -193,11 +211,7 @@ export function pacificMidnightUtc(ymd) {
     const candidate = new Date(`${ymd}T${offset}`);
     if (Number.isNaN(candidate.getTime())) continue;
     if (pacificYmd(candidate) !== ymd) continue;
-    const hour = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/Los_Angeles",
-      hour: "2-digit",
-      hour12: false,
-    }).format(candidate);
+    const hour = _PACIFIC_HOUR_FORMATTER.format(candidate);
     // Midnight can format as "24" or "00" depending on engine.
     if (hour === "00" || hour === "24") return candidate;
   }
@@ -1186,12 +1200,7 @@ export const TOD_PERIOD_LABELS = {
 
 /** 0-23 Pacific-local hour for an epoch-seconds / ms / ISO / Date instant. */
 export function pacificHour(t) {
-  const d = _asDate(t);
-  const raw = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
-    hour: "2-digit",
-    hour12: false,
-  }).format(d);
+  const raw = _PACIFIC_HOUR_FORMATTER.format(_asDate(t));
   // Midnight can format as "24" depending on the engine.
   const n = Number(raw);
   return n === 24 ? 0 : n;
@@ -1199,7 +1208,12 @@ export function pacificHour(t) {
 
 /** Pacific YYYY-MM-DD + hour for an instant (single helper for TOD bucketing). */
 export function pacificParts(t) {
-  return { ymd: pacificYmd(t), hour: pacificHour(t) };
+  const date = _asDate(t);
+  const rawHour = Number(_PACIFIC_HOUR_FORMATTER.format(date));
+  return {
+    ymd: _PACIFIC_DATE_FORMATTER.format(date),
+    hour: rawHour === 24 ? 0 : rawHour,
+  };
 }
 
 function _observedIso(date) {

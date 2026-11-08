@@ -23,7 +23,9 @@ function deferred() {
 function panelWith(fields = {}) {
   return Object.assign(Object.create(Panel.prototype), {
     _fetchCache: new Map(), _galleryRenderGen: 1, _todRenderGen: 0,
-    _rangeRenderGen: 0, _presetProbeGen: 0, _activeEntryId: "a", _activeTab: "analytics",
+    _rangeRenderGen: 0, _presetProbeGen: 0, _tabRenderGeneration: 0,
+    _pendingTabRenders: new Map(), _tabRenderContext: null,
+    _activeEntryId: "a", _activeTab: "analytics",
     _charts: [], _pendingMounts: new Map(), _chartFactories: new Map(),
     _renderedTabs: new Set(["usage"]), _primaryReady: true,
     _rangeKey: "24h", _availablePresets: ["24h"],
@@ -163,15 +165,21 @@ it("first visits build ToD, Billing, and Programs bodies", async () => {
   const calls = [];
   const panel = panelWith({
     shadowRoot: root(),
-    _renderTod: async () => { calls.push("tod-body"); },
+    _renderTodMain: async () => { calls.push("tod-body"); },
     _renderTodGallery: async () => { calls.push("tod-gallery"); },
     _renderBillingPrograms: () => { calls.push("account-body"); },
     _renderLedgerCharts: async () => { calls.push("ledger"); },
+    _renderBillingCharts: async () => { calls.push("billing-charts"); },
+    _renderBillExplainer: async () => { calls.push("bill-explainer"); },
+    _renderPdfSolar: async () => { calls.push("pdf"); },
   });
   await panel._renderTabGalleries("tod");
   await panel._renderTabGalleries("billing");
   await panel._renderTabGalleries("programs");
-  assert.deepEqual(calls, ["tod-body", "account-body", "ledger", "account-body"]);
+  assert.deepEqual(calls, [
+    "tod-body", "tod-gallery", "account-body", "ledger", "billing-charts",
+    "bill-explainer", "pdf", "account-body",
+  ]);
   calls.length = 0;
   panel.shadowRoot = root({ "chart-tod-stacked": {} });
   await panel._renderTabGalleries("tod");
@@ -191,7 +199,7 @@ it("a shell selection cannot start a primary or a gallery", () => {
 });
 
 
-it("paints a selected tab before starting its first-visit gallery", () => {
+it("selects a tab synchronously and paints its chart skeleton before gallery work", () => {
   const frames = [];
   const oldRequestAnimationFrame = globalThis.requestAnimationFrame;
   globalThis.requestAnimationFrame = (callback) => {
@@ -207,7 +215,20 @@ it("paints a selected tab before starting its first-visit gallery", () => {
     dataset: { tab: "glance" }, attributes: {},
     setAttribute(name, value) { this.attributes[name] = value; },
   };
-  const billingPanel = { dataset: { tab: "billing" }, hidden: true };
+  const classes = new Set();
+  const host = {
+    hidden: false,
+    classList: { add: (value) => classes.add(value), remove: (value) => classes.delete(value) },
+    querySelector: () => null,
+    replaceChildren() {},
+    setAttribute(name, value) { this[name] = value; },
+  };
+  const billingPanel = {
+    dataset: { tab: "billing" }, hidden: true, attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+    removeAttribute(name) { delete this.attributes[name]; },
+    querySelectorAll: (selector) => selector === ".chart-host" ? [host] : [],
+  };
   const glancePanel = { dataset: { tab: "glance" }, hidden: false };
   const panel = panelWith({
     _activeTab: "glance", _renderedTabs: new Set(), _loading: false,
@@ -221,7 +242,7 @@ it("paints a selected tab before starting its first-visit gallery", () => {
     },
     _attachRangeBar() {},
     _resizeChartsUnder() { calls.push("resize"); },
-    _renderTabGalleries(tab) { calls.push(`gallery:${tab}`); },
+    _startTabGalleries(tab) { calls.push(`gallery:${tab}`); this._renderedTabs.add(tab); },
   });
   const runFrame = () => {
     for (const callback of frames.splice(0)) callback();
@@ -231,12 +252,62 @@ it("paints a selected tab before starting its first-visit gallery", () => {
     assert.equal(panel._activeTab, "billing");
     assert.equal(billingButton.attributes["aria-selected"], "true");
     assert.equal(billingPanel.hidden, false);
+    assert.equal(billingPanel.attributes["aria-busy"], "true");
+    assert.ok(classes.has("chart-skeleton"));
     assert.deepEqual(calls, []);
     runFrame();
     assert.deepEqual(calls, []);
     runFrame();
     assert.deepEqual(calls, ["resize", "gallery:billing"]);
     assert.equal(panel._renderedTabs.has("billing"), true);
+  } finally {
+    globalThis.requestAnimationFrame = oldRequestAnimationFrame;
+  }
+});
+
+it("cancels a first-visit gallery when another tab is selected", async () => {
+  const frames = [];
+  const oldRequestAnimationFrame = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (callback) => { frames.push(callback); return frames.length; };
+  const gate = deferred();
+  const buttons = ["glance", "billing", "programs"].map((tab) => ({
+    dataset: { tab },
+    setAttribute() {},
+  }));
+  const panels = buttons.map((button) => ({ dataset: { tab: button.dataset.tab }, hidden: false }));
+  const panel = panelWith({
+    _activeTab: "glance",
+    _renderedTabs: new Set(),
+    _loading: false,
+    shadowRoot: {
+      getElementById: (id) => panels.find((item) => `panel-${item.dataset.tab}` === id) || null,
+      querySelector: () => null,
+      querySelectorAll: (selector) =>
+        selector === ".section-tabs [role=tab]" ? buttons :
+          selector === ".tab-panel" ? panels : [],
+    },
+    _attachRangeBar() {},
+    _prepareTabLoading() {},
+    _finishTabLoading() {},
+    _resizeChartsUnder() {},
+    _renderTabGalleries: () => gate.promise,
+  });
+  const runFrames = () => {
+    for (const callback of frames.splice(0)) callback();
+  };
+  try {
+    panel._selectPanelTab("billing");
+    runFrames();
+    runFrames();
+    const run = panel._tabRenderContext;
+    assert.equal(run.tab, "billing");
+    assert.equal(panel._pendingTabRenders.has("billing"), true);
+    panel._selectPanelTab("programs");
+    assert.equal(run.cancelled, true);
+    assert.equal(panel._pendingTabRenders.has("billing"), false);
+    gate.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(panel._renderedTabs.has("billing"), false);
   } finally {
     globalThis.requestAnimationFrame = oldRequestAnimationFrame;
   }

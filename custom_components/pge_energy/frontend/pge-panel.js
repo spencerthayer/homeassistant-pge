@@ -61,7 +61,7 @@ import {
   todHolidays,
   todPeriodForPacific,
   todWeekDays,
-} from "./data.js?v=0.12.15";
+} from "./data.js?v=0.12.19";
 import {
   baseloadFloor,
   cycleCumulative,
@@ -103,8 +103,8 @@ import {
   lineItemShares,
   treemapSlices,
   waterfallSteps,
-} from "./chart-series.js?v=0.12.15";
-import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderInsights, renderLoadShape, renderPdfSolar, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.15";
+} from "./chart-series.js?v=0.12.19";
+import { FACTORY_RENDERERS, galleryRecordCurrent, openChartDialog, renderBaseloadHistory, renderBillExplainer, renderBillingCharts, renderInsights, renderLoadShape, renderPdfSolar, renderShiftSimulator, renderTodCharts, renderWeatherMoney, rerenderFactoryHosts, resumeChartDialog, runGalleryFactory, suspendChartDialog } from "./chart-gallery.js?v=0.12.19";
 import {
   createBarChart,
   createLineChart,
@@ -115,9 +115,9 @@ import {
   ensureEcharts,
   renderHeatmap,
   seriesColors,
-} from "./charts.js?v=0.12.15";
-import { sparklineSvg } from "./svg-helpers.js?v=0.12.15";
-import { applyPanelTheme, todColors } from "./theme.js?v=0.12.15";
+} from "./charts.js?v=0.12.19";
+import { sparklineSvg } from "./svg-helpers.js?v=0.12.19";
+import { applyPanelTheme, todColors } from "./theme.js?v=0.12.19";
 
 /** @type {Record<string, string>} */
 export const PANEL_SECTION_ANCHORS = {
@@ -194,7 +194,33 @@ const STYLE = `
 :host([data-dark]) {
   color-scheme: dark;
 }
-.chart-skeleton { min-height: 160px; }
+.chart-skeleton {
+  position: relative; overflow: hidden; min-height: 160px; border-radius: 12px;
+  background: linear-gradient(100deg, var(--pge-surface-2) 20%, color-mix(in srgb, var(--pge-surface-2) 72%, var(--primary-text-color)) 38%, var(--pge-surface-2) 58%);
+  background-size: 220% 100%;
+  animation: pge-chart-loading 1.4s ease-in-out infinite;
+}
+.chart-skeleton::after {
+  content: "Loading chart data…"; position: absolute; inset: auto 12px 12px;
+  color: var(--secondary-text-color); font: 500 0.82rem/1.3 var(--ha-font-family-body, Roboto, system-ui);
+}
+@keyframes pge-chart-loading { to { background-position-x: -220%; } }
+.chart-empty { min-height: 48px; color: var(--secondary-text-color); padding: 14px; }
+.tab-panel { position: relative; }
+.tab-panel[aria-busy="true"]::before {
+  content: ""; position: absolute; z-index: 2; inset: 0 0 auto; height: 3px;
+  background: linear-gradient(90deg, transparent, var(--primary-color), transparent);
+  background-size: 200% 100%; animation: pge-chart-loading 1.1s linear infinite;
+}
+.tab-panel[aria-busy="true"] > #tod:empty {
+  min-height: 240px; border-radius: 14px;
+  background: linear-gradient(100deg, var(--pge-surface-2) 20%, color-mix(in srgb, var(--pge-surface-2) 72%, var(--primary-text-color)) 38%, var(--pge-surface-2) 58%);
+  background-size: 220% 100%; animation: pge-chart-loading 1.4s ease-in-out infinite;
+}
+.tab-panel[aria-busy="true"] > #tod:empty::after {
+  content: "Loading Time of Day…"; display: block; padding: 24px 16px;
+  color: var(--secondary-text-color);
+}
 .kpi .kpi-pending { color: var(--secondary-text-color); }
 @media (prefers-reduced-motion: reduce) {
   :host * { transition: none !important; animation: none !important; }
@@ -313,6 +339,30 @@ dialog.chart-dialog {
   background: var(--pge-surface);
   color: var(--primary-text-color);
 }
+.chart-dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pge-space-2, 8px);
+}
+.chart-dialog #chart-dialog-title { min-width: 0; margin: 0; }
+.chart-dialog #chart-dialog-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--primary-text-color);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+}
 dialog.drawer {
   position: fixed; inset: 0 0 0 auto; box-sizing: border-box;
   width: min(480px, 100vw); max-width: none; height: 100vh; height: 100dvh; max-height: none;
@@ -328,8 +378,18 @@ dialog.drawer {
 .drawer-swipe-hint { display: none; }
 .drawer-head { padding-right: 36px; }
 .drawer-swipe-hint { margin: -8px 36px 12px 0; color: var(--secondary-text-color); font-size: 0.82rem; }
-@media (max-width: 600px) and (pointer: coarse) {
+@media (max-width: 870px) and (pointer: coarse) {
   .drawer-swipe-hint { display: block; }
+  dialog.drawer {
+    inset: 0;
+    width: 100vw;
+    padding-top: calc(var(--pge-space-4) + max(env(safe-area-inset-top, 0px), 52px));
+    padding-right: calc(var(--pge-space-4) + max(env(safe-area-inset-right, 0px), 8px));
+  }
+  dialog.drawer .drawer-close {
+    top: calc(max(env(safe-area-inset-top, 0px), 52px) + 8px);
+    right: calc(max(env(safe-area-inset-right, 0px), 8px) + 8px);
+  }
 }
 .drawer-head h2 { margin: 4px 0 12px; }
 .drawer-close {
@@ -453,6 +513,11 @@ details { interpolate-size: allow-keywords; }
   font-size: 0.68rem;
   font-weight: 600;
   color: var(--secondary-text-color);
+}
+@media (min-width: 871px) {
+  @container (min-width: 600px) {
+    .kpi-grid .kpi .group { display: inline; margin-right: 0.3em; }
+  }
 }
 .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px; }
 #kpis .kpi { padding: 10px 12px; }
@@ -813,7 +878,18 @@ details.sync-gaps-panel {
   font: var(--pge-text-headline);
 }
 .fig-title-text { flex: 1; min-width: 0; }
-@container pge (max-width: 640px) { .fig-expand { display: none; } }
+@container pge (max-width: 640px) {
+  .fig-expand {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border-radius: 50%;
+  }
+}
 .fig-head > .hint { margin-left: auto; }
 .fig-head > .hint .hint-pop { left: auto; right: 0; }
 .fig-expand { border: 0; background: transparent; color: var(--primary-text-color); cursor: pointer; }
@@ -1613,6 +1689,9 @@ class PgeEnergyPanel extends HTMLElement {
     this._themeRefreshPending = false;
     this._chartFactories = new Map();
     this._pendingMounts = new Map();
+    this._tabRenderGeneration = 0;
+    this._pendingTabRenders = new Map();
+    this._tabRenderContext = null;
     this._lazyObserver = typeof IntersectionObserver === "function"
       ? new IntersectionObserver((entries) => {
           for (const entry of entries) {
@@ -1853,8 +1932,24 @@ class PgeEnergyPanel extends HTMLElement {
 
   _selectPanelTab(tab, { writeHistory = false, focus = false, galleries = true } = {}) {
     if (!PANEL_TABS.includes(tab)) return;
-    const changed = this._activeTab !== tab;
+    const previousTab = this._activeTab;
+    const changed = previousTab !== tab;
     const firstVisit = !this._renderedTabs.has(tab);
+    if (changed) {
+      this._tabRenderGeneration += 1;
+      if (this._tabRenderContext?.tab === previousTab) this._tabRenderContext.cancelled = true;
+      if (previousTab === "tod") this._todRenderGen += 1;
+      if (previousTab === "analytics" && this._weatherMoneyRun && !this._weatherMoneyRun.completed) {
+        this._weatherMoneyRun.cancelled = true;
+        this._weatherMoneyRun = null;
+        this._weatherMoney = null;
+      }
+      if (this._pendingTabRenders.has(previousTab)) {
+        this._pendingTabRenders.delete(previousTab);
+        this._renderedTabs.delete(previousTab);
+        this._finishTabLoading(previousTab);
+      }
+    }
     this._activeTab = tab;
     for (const button of this.shadowRoot.querySelectorAll(".section-tabs [role=tab]")) {
       const active = button.dataset.tab === tab;
@@ -1866,19 +1961,16 @@ class PgeEnergyPanel extends HTMLElement {
     for (const panel of this.shadowRoot.querySelectorAll(".tab-panel")) {
       panel.hidden = panel.dataset.tab !== tab;
     }
+    if (firstVisit && !this._loading) this._prepareTabLoading(tab);
     if (writeHistory && location.hash !== panelTabHash(tab)) history.pushState(null, "", panelTabHash(tab));
     this._afterTabPaint(tab, () => {
       const visiblePanel = this.shadowRoot.getElementById("panel-" + tab);
       if (visiblePanel) this._resizeChartsUnder(visiblePanel);
     });
 
-    // Let the browser paint the selected tab before recorder or chart work runs.
     if (galleries && this._primaryReady && changed && !this._loading && (tab === "glance" || tab === "usage")) {
       this._afterTabPaint(tab, () => void this._softGallery(() => this._renderHero()));
     }
-
-    // First-visit galleries can do substantial work; run them only after the
-    // selected panel has had a frame to paint, and only if it is still active.
     if (galleries && this._primaryReady && firstVisit && !this._loading) {
       const renderGen = this._galleryRenderGen;
       const entryId = this._activeEntryId;
@@ -1886,8 +1978,7 @@ class PgeEnergyPanel extends HTMLElement {
         if (renderGen !== this._galleryRenderGen || entryId !== this._activeEntryId || this._renderedTabs.has(tab)) {
           return;
         }
-        this._renderedTabs.add(tab);
-        void this._renderTabGalleries(tab);
+        this._startTabGalleries(tab);
       });
     }
   }
@@ -1900,30 +1991,92 @@ class PgeEnergyPanel extends HTMLElement {
     });
   }
 
+  _prepareTabLoading(tab) {
+    const panel = this.shadowRoot.getElementById(`panel-${tab}`);
+    if (!panel) return;
+    panel.setAttribute("aria-busy", "true");
+    for (const host of panel.querySelectorAll(".chart-host")) {
+      if (host.hidden || host.querySelector("canvas, svg")) continue;
+      host.replaceChildren();
+      host.classList.remove("chart-empty");
+      host.classList.add("chart-skeleton");
+      host.setAttribute("role", "status");
+      host.setAttribute("aria-busy", "true");
+      host.setAttribute("aria-label", "Loading chart data");
+    }
+  }
+
+  _finishTabLoading(tab) {
+    const panel = this.shadowRoot?.getElementById(`panel-${tab}`);
+    if (!panel) return;
+    panel.removeAttribute("aria-busy");
+    for (const host of panel.querySelectorAll(".chart-host.chart-skeleton")) {
+      if (this._pendingMounts.has(host) || this._chartFactories.has(host.id)) continue;
+      host.classList.remove("chart-skeleton");
+      host.removeAttribute("aria-busy");
+      host.removeAttribute("aria-label");
+      if (host.closest("figure")?.hidden || host.querySelector("canvas, svg") || host.textContent.trim()) continue;
+      host.classList.add("chart-empty");
+      host.setAttribute("role", "status");
+      host.textContent = "No chart data available yet.";
+    }
+  }
+
+  _startTabGalleries(tab, { primaryRendered = false } = {}) {
+    if (this._pendingTabRenders.has(tab)) return;
+    const token = ++this._tabRenderGeneration;
+    this._pendingTabRenders.set(tab, token);
+    this._tabRenderContext = { tab, token };
+    void this._softGallery(async () => {
+      await this._renderTabGalleries(tab, { primaryRendered });
+      if (this._tabRenderGeneration === token && this._activeTab === tab) this._renderedTabs.add(tab);
+    }).finally(() => {
+      if (this._pendingTabRenders.get(tab) === token) this._pendingTabRenders.delete(tab);
+      if (this._tabRenderContext?.token === token) this._tabRenderContext = null;
+      this._finishTabLoading(tab);
+    });
+  }
+
+
   /** Render galleries for a specific tab (lazy-loaded on first visit). */
   async _renderTabGalleries(tab, { primaryRendered = false } = {}) {
     this._clearFetchCache();
     const gen = this._galleryRenderGen;
     const entryId = this._activeEntryId;
-    const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
+    const tabRun = this._tabRenderContext?.tab === tab ? this._tabRenderContext : null;
+    const stale = () =>
+      this._galleryRenderGen !== gen || this._activeEntryId !== entryId || !!tabRun?.cancelled;
 
     switch (tab) {
       case "usage":
         await this._softGallery(() => this._renderLoadShapeGallery());
         break;
       case "analytics":
-        if (primaryRendered) break;
+        if (primaryRendered) {
+          if (this._weatherMoney) await this._weatherMoney;
+          if (stale()) return;
+          await this._softGallery(() => this._renderInsightCharts());
+          break;
+        }
         {
           const weather = this._weatherMoney || this._softGallery(() => this._renderWeatherMoney());
           this._weatherMoney = null;
           await this._softGallery(() => this._renderInsights());
           if (stale()) return;
           await weather;
+          if (stale()) return;
+          await this._softGallery(() => this._renderInsightCharts());
         }
         break;
       case "billing":
         if (!primaryRendered) this._renderBillingPrograms(false);
         await this._softGallery(() => this._renderLedgerCharts());
+        if (stale()) return;
+        await this._softGallery(() => this._renderBillingCharts());
+        if (stale()) return;
+        await this._softGallery(() => this._renderBillExplainer());
+        if (stale()) return;
+        await this._softGallery(() => this._renderPdfSolar());
         break;
       case "programs":
         if (!primaryRendered) this._renderBillingPrograms(false);
@@ -1932,7 +2085,9 @@ class PgeEnergyPanel extends HTMLElement {
         if (primaryRendered || this.shadowRoot.getElementById("chart-tod-stacked")) {
           await this._softGallery(() => this._renderTodGallery());
         } else {
-          await this._renderTod();
+          await this._renderTodMain();
+          if (stale()) return;
+          await this._softGallery(() => this._renderTodGallery());
         }
         break;
     }
@@ -2173,6 +2328,7 @@ class PgeEnergyPanel extends HTMLElement {
     this._bindFilterInteractionGuard();
     this._bindTodInteractionGuard();
     this._selectPanelTab(resolvePanelTab(location.hash, this._defaultSection), { galleries: false });
+    this._prepareTabLoading(this._activeTab);
     content.querySelector(".drawer-close")?.addEventListener("click", () => {
       this.shadowRoot.getElementById("sync-drawer")?.close();
     });
@@ -2206,6 +2362,11 @@ class PgeEnergyPanel extends HTMLElement {
   async _renderAll() {
     this._primaryReady = false;
     this._renderedTabs = new Set();
+    this._tabRenderContext && (this._tabRenderContext.cancelled = true);
+    if (this._weatherMoneyRun && !this._weatherMoneyRun.completed) this._weatherMoneyRun.cancelled = true;
+    this._weatherMoneyRun = null;
+    this._pendingTabRenders.clear();
+    this._tabRenderGeneration += 1;
     this._clearFetchCache();
     const gen = ++this._galleryRenderGen;
     const entryId = this._activeEntryId;
@@ -2229,30 +2390,38 @@ class PgeEnergyPanel extends HTMLElement {
     do {
       tab = this._activeTab;
       this._themeRefreshPending = false;
+      const tabToken = ++this._tabRenderGeneration;
+      const tabRun = { tab, token: tabToken, cancelled: false };
+      this._tabRenderContext = tabRun;
       if (tab === "glance" || tab === "usage") {
         if (tab === "glance") void this._renderKpis({ recorder: false });
         await this._softGallery(() => this._renderHero());
       } else if (tab === "analytics") {
         if (Array.isArray(this._accounts)) {
-          this._weatherMoney = this._softGallery(() => this._renderWeatherMoney());
+          this._weatherMoneyRun = tabRun;
+          this._weatherMoney = this._softGallery(() => this._renderWeatherMoney()).finally(() => {
+            tabRun.completed = true;
+            if (this._weatherMoneyRun === tabRun) this._weatherMoneyRun = null;
+          });
         }
         await this._softGallery(() => this._renderInsights());
-        // Weather keeps running. Its hourly history must not hold primary readiness.
       } else if (tab === "tod") {
         await this._renderTodMain();
       } else {
         this._renderBillingPrograms(false);
       }
       if (stale()) return;
+      if (tabRun.cancelled) continue;
       await yieldFrame();
       if (stale()) return;
       await yieldFrame();
       if (stale()) return;
     } while (tab !== this._activeTab || this._themeRefreshPending);
 
+    this._tabRenderContext = null;
     this._primaryReady = true;
-    this._renderedTabs.add(tab);
-    void this._softGallery(() => this._renderTabGalleries(tab, { primaryRendered: true }));
+    this._startTabGalleries(tab, { primaryRendered: true });
+
 
     const initialRange = this._normalizeRangeKey(this._rangeKey);
     const background = await Promise.allSettled([
@@ -2549,7 +2718,15 @@ class PgeEnergyPanel extends HTMLElement {
     const gen = this._galleryRenderGen || 0;
     const entryId = this._activeEntryId;
     const stale = () => this._galleryRenderGen !== gen || this._activeEntryId !== entryId;
+    this._galleryDays = null;
+    this._galleryBillAmount = null;
     await this._softGallery(() => this._renderLedgerCharts());
+    if (stale()) return;
+    await this._softGallery(() => this._renderBillingCharts());
+    if (stale()) return;
+    await this._softGallery(() => this._renderBillExplainer());
+    if (stale()) return;
+    await this._softGallery(() => this._renderPdfSolar());
     if (stale()) return;
     await this._softGallery(() => this._renderWeatherMoney());
   }
@@ -3803,6 +3980,12 @@ class PgeEnergyPanel extends HTMLElement {
     if (stale()) return;
     await this._softGallery(() => this._renderLedgerCharts());
     if (stale()) return;
+    await this._softGallery(() => this._renderBillingCharts());
+    if (stale()) return;
+    await this._softGallery(() => this._renderBillExplainer());
+    if (stale()) return;
+    await this._softGallery(() => this._renderPdfSolar());
+    if (stale()) return;
     await this._softGallery(() => this._renderTodGallery());
     if (stale()) return;
     await this._softGallery(() => this._renderWeatherMoney());
@@ -3821,6 +4004,36 @@ class PgeEnergyPanel extends HTMLElement {
     try { localStorage.setItem("pge_chapter_view_" + chapter.dataset.chapter, id); }
     catch (_err) { /* storage can be unavailable */ }
     this._resizeChartsUnder(target);
+
+    if (id === "chart-baseload-history" && !this._chartFactories.has(id)) {
+      const host = target.querySelector(`#${id}`);
+      if (host) {
+        host.replaceChildren();
+        host.classList.remove("chart-empty");
+        host.classList.add("chart-skeleton");
+        host.setAttribute("role", "status");
+        host.setAttribute("aria-busy", "true");
+        host.setAttribute("aria-label", "Loading overnight history");
+        const run = this._tabRenderContext?.tab === "usage" && !this._tabRenderContext.cancelled
+          ? this._tabRenderContext
+          : { tab: "usage", token: ++this._tabRenderGeneration, cancelled: false };
+        this._tabRenderContext = run;
+        void this._softGallery(() => this._renderBaseloadHistory()).finally(() => {
+          if (this._tabRenderContext === run && !this._pendingTabRenders.has("usage")) {
+            this._tabRenderContext = null;
+          }
+          if (!host.isConnected) return;
+          if (this._chartFactories.has(id) || host.closest("figure")?.hidden) return;
+          host.classList.remove("chart-skeleton");
+          host.removeAttribute("aria-busy");
+          host.removeAttribute("aria-label");
+          host.setAttribute("role", "status");
+          host.textContent = run.cancelled
+            ? "Loading paused. Select Always-on power to retry."
+            : "No complete overnight history is available.";
+        });
+      }
+    }
   }
 
   _mountDeferred(record) {
@@ -3838,7 +4051,11 @@ class PgeEnergyPanel extends HTMLElement {
           console.warn("PGE chart initialization failed", err);
         }
       } finally {
-        if (galleryRecordCurrent(this, record)) host.classList.remove("chart-skeleton");
+        if (galleryRecordCurrent(this, record)) {
+          host.classList.remove("chart-skeleton");
+          host.removeAttribute("aria-busy");
+          host.removeAttribute("aria-label");
+        }
       }
     })();
     return record.promise;
@@ -4081,6 +4298,10 @@ class PgeEnergyPanel extends HTMLElement {
       gapDailyRows,
     });
   }
+  async _renderBaseloadHistory() {
+    await renderBaseloadHistory(this, { baseloadSteps, centsPerKwh, overnightFloorDays });
+  }
+
 
   _todGalleryHtml() {
     const wide = new Set(["chart-tod-stacked"]);
@@ -4134,9 +4355,7 @@ class PgeEnergyPanel extends HTMLElement {
       sankeyFlows,
       todMinusBasicByMonth,
     });
-    if (this.shadowRoot?.getElementById("chart-bill-explainer")) {
-      await this._renderInsightCharts();
-    }
+    await renderShiftSimulator(this, { shiftCostByStartHour });
   }
 
   _weatherGalleryHtml() {
@@ -4185,20 +4404,11 @@ class PgeEnergyPanel extends HTMLElement {
   }
 
   async _renderWeatherMoney() {
-    const stamp = { entryId: this._activeEntryId, gen: this._galleryRenderGen || 0 };
-    const stale = () =>
-      stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0);
-    await renderWeatherMoney(this, {
-      billVsImported,
-      degreeDayPoint,
-      statementGap,
-      statementWindows,
-      tempBins,
-    });
-    if (stale()) return;
-    await this._renderPdfSolar();
-    if (stale()) return;
-    await this._renderInsightCharts();
+    await renderWeatherMoney(this, { degreeDayPoint, tempBins });
+  }
+
+  async _renderBillingCharts() {
+    await renderBillingCharts(this, { billVsImported, statementGap, statementWindows });
   }
 
   async _renderInsightCharts() {
@@ -4215,6 +4425,14 @@ class PgeEnergyPanel extends HTMLElement {
       overnightFloorDays,
     });
   }
+  async _renderBillExplainer() {
+    await renderBillExplainer(this, { billExplainer, statementWindows, weatherModel });
+  }
+
+  async _renderShiftSimulator() {
+    await renderShiftSimulator(this, { shiftCostByStartHour });
+  }
+
 
   async _renderPdfSolar() {
     await renderPdfSolar(this, {
@@ -5025,13 +5243,24 @@ class PgeEnergyPanel extends HTMLElement {
   async _renderInsights() {
     const account = this._account;
     if (!account) return;
-    const stamp = { entryId: this._activeEntryId, gen: this._galleryRenderGen || 0 };
-    this._disposeHostCharts(
+    const generation = (this._insightsRenderGeneration || 0) + 1;
+    this._insightsRenderGeneration = generation;
+    const stamp = { entryId: this._activeEntryId, gen: this._galleryRenderGen || 0, tabRun: this._tabRenderContext };
+    const stale = () =>
+      this._insightsRenderGeneration !== generation ||
+      stamp.entryId !== this._activeEntryId ||
+      stamp.gen !== (this._galleryRenderGen || 0) ||
+      stamp.tabRun?.cancelled;
+    const insightHosts = [
       this.shadowRoot.getElementById("scatter"),
       this.shadowRoot.getElementById("cost-per-kwh"),
       this.shadowRoot.getElementById("heatmap-kwh"),
-      this.shadowRoot.getElementById("heatmap-temp")
-    );
+      this.shadowRoot.getElementById("heatmap-temp"),
+    ];
+    for (const host of insightHosts) {
+      if (host) host._pgeMountToken = (host._pgeMountToken || 0) + 1;
+    }
+    this._disposeHostCharts(...insightHosts);
     // Weather vs usage and the monthly rate use a fixed year. The header range
     // is hidden on Analytics, and a 24h chip would leave the scatter empty.
     const costRange = rangePresets()["12mo"];
@@ -5106,7 +5335,7 @@ class PgeEnergyPanel extends HTMLElement {
         maxPoints: heatMaxPoints,
       }),
     ]);
-    if (stamp.entryId !== this._activeEntryId || stamp.gen !== (this._galleryRenderGen || 0)) return;
+    if (stale()) return;
 
     const scatterHost = this.shadowRoot.getElementById("scatter");
     if (scatterHost) {
@@ -5131,6 +5360,10 @@ class PgeEnergyPanel extends HTMLElement {
         dates: sDates,
         color: colors.kwh,
       });
+      if (stale()) {
+        chart?.destroy?.();
+        return;
+      }
       if (chart) this._charts.push(chart);
       else scatterHost.hidden = true;
     }
@@ -5146,6 +5379,10 @@ class PgeEnergyPanel extends HTMLElement {
         unit: "",
         monthly: true,
       });
+      if (stale()) {
+        chart?.destroy?.();
+        return;
+      }
       if (chart) this._charts.push(chart);
     }
 
@@ -5158,12 +5395,21 @@ class PgeEnergyPanel extends HTMLElement {
       title: "Daily kWh (imported history)",
       onClick: (ymd) => this._openUsageDay(ymd),
     });
+    if (stale()) {
+      hmKwh?.destroy?.();
+      return;
+    }
     const hmTemp = await renderHeatmap(this.shadowRoot.getElementById("heatmap-temp"), {
       xs: tempWindow.xs,
       ys: tempWindow.ys,
       diverging: true,
       title: "Daily avg temperature (imported history)",
     });
+    if (stale()) {
+      hmKwh?.destroy?.();
+      hmTemp?.destroy?.();
+      return;
+    }
     if (hmKwh) this._charts.push(hmKwh);
     if (hmTemp) this._charts.push(hmTemp);
   }
