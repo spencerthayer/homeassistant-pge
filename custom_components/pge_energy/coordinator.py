@@ -46,6 +46,7 @@ from .const import (
 from .day_validation import clip_hourly_to_local_day, is_invalid_closed_day, validate_hourly_day
 from .exceptions import (
     PGEAuthenticationError,
+    PGECaptchaUnsupportedError,
     PGEConnectionError,
     PGEDiscoveryIncompleteError,
     PGEGraphQLError,
@@ -835,6 +836,8 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.persist_auth_to_entry()
         try:
             return await self.client.get_usage(resolution, start, end, self.account_key)
+        except PGECaptchaUnsupportedError:
+            raise
         except PGEAuthenticationError:
             if self.auth_manager.auth_mode != "credential":
                 raise
@@ -852,6 +855,8 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.persist_auth_to_entry()
         try:
             return await self.client.get_monthly_usage_paged(start, end, self.account_key)
+        except PGECaptchaUnsupportedError:
+            raise
         except PGEAuthenticationError:
             if self.auth_manager.auth_mode != "credential":
                 raise
@@ -914,6 +919,10 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         When retained usage/billing/history exists, return the previous payload
         so entities stay available. Only raise when there is nothing to show yet
         (first setup) or MFA permanently blocks the account.
+
+        CAPTCHA passes auth_failed=False. A device challenge stops this attempt
+        but is not evidence the stored password is wrong, so it must not open
+        a credential reauth flow or clear one that is already pending.
         """
         self._last_api_error = message
         if tracking:
@@ -946,6 +955,15 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Safe cause plus class. Integration-authored messages only; no traceback."""
         reason = str(exc).strip() or type(exc).__name__
         return f"Authentication failed: {reason} [{type(exc).__name__}]"
+
+    @staticmethod
+    def _captcha_failure_message(exc: BaseException) -> str:
+        reason = str(exc).strip() or type(exc).__name__
+        return (
+            "Automated login cannot complete this CAPTCHA/device challenge; "
+            "re-entering the same password will not resolve it. "
+            f"{reason} [{type(exc).__name__}]"
+        )
 
     def _apply_post_poll_update_interval(self) -> None:
         """Prefer configured schedule, catch-up, or Cognito cooldown — whichever is later."""
@@ -1007,6 +1025,15 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.fail_sync_job(str(exc))
                 await self.async_persist_sync_progress()
             raise ConfigEntryAuthFailed(str(exc)) from exc
+        except PGECaptchaUnsupportedError as exc:
+            # Challenge blocks authenticated progress. It does not prove the
+            # password is wrong, so keep history and do not prompt for it.
+            return await self._async_soft_fail_poll(
+                self._captcha_failure_message(exc),
+                tracking=tracking,
+                auth_failed=False,
+                hard_exc=exc,
+            )
         except PGEDiscoveryIncompleteError as exc:
             return await self._async_soft_fail_poll(
                 str(exc),
@@ -1066,6 +1093,13 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             iso = day.isoformat()
             try:
                 response = await self.async_get_usage_with_auth_retry(day_start, request_end)
+            except PGECaptchaUnsupportedError as exc:
+                return await self._async_soft_fail_poll(
+                    self._captcha_failure_message(exc),
+                    tracking=tracking,
+                    auth_failed=False,
+                    hard_exc=exc,
+                )
             except PGEAuthenticationError as exc:
                 return await self._async_soft_fail_poll(
                     self._auth_failure_message(exc),

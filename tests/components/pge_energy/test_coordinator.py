@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 from custom_components.pge_energy.coordinator import PGECoordinator
 from custom_components.pge_energy.exceptions import (
     PGEAuthenticationError,
+    PGECaptchaUnsupportedError,
     PGEConnectionError,
     PGESchemaError,
 )
@@ -1088,3 +1089,67 @@ async def test_poll_graphql_auth_error_does_not_expose_server_secrets(caplog):
         assert sentinel not in exposed
     assert coord.client.get_usage.await_count == 2
     coord.auth_manager.force_renew.assert_awaited_once()
+
+
+_CAPTCHA_REASON = "PGE login requires CAPTCHA/device challenge; unsupported"
+_CAPTCHA_DETAIL = (
+    "Automated login cannot complete this CAPTCHA/device challenge; "
+    "re-entering the same password will not resolve it. "
+    f"{_CAPTCHA_REASON} [PGECaptchaUnsupportedError]"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("where", ["initial", "proactive", "renew", "usage"])
+async def test_poll_captcha_keeps_data_without_reauth(where):
+    """CAPTCHA stops the attempt, keeps retained data, and does not ask for a password."""
+    coord = _make_coordinator(auth_mode="credential")
+    prior = _retain_usage(coord)
+    tasks = _bind_reauth(coord)
+    challenge = PGECaptchaUnsupportedError(_CAPTCHA_REASON)
+    if where == "initial":
+        coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=challenge)
+    elif where == "proactive":
+        coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=["tok", challenge])
+    elif where == "renew":
+        coord.client.get_usage = AsyncMock(side_effect=PGEAuthenticationError("Token expired or invalid"))
+        coord.auth_manager.force_renew = AsyncMock(side_effect=challenge)
+    else:
+        coord.client.get_usage = AsyncMock(side_effect=challenge)
+
+    try:
+        data = await coord._async_update_data()
+    finally:
+        await _drain(tasks)
+
+    assert data["stale"] is True
+    assert data["intervals"] == prior
+    assert coord.recent_intervals == prior
+    assert coord.lifetime_energy_kwh == 123.0
+    assert tasks == []
+    coord.hass.config_entries.flow.async_init.assert_not_called()
+    assert _CAPTCHA_DETAIL in (coord._last_api_error or "")
+    assert coord._reauth_requested is False
+    if where == "initial":
+        coord.client.get_usage.assert_not_called()
+        coord.auth_manager.force_renew.assert_not_called()
+    elif where == "proactive":
+        assert coord.auth_manager.ensure_valid_token.await_count == 2
+        coord.client.get_usage.assert_not_called()
+        coord.auth_manager.force_renew.assert_not_called()
+    elif where == "renew":
+        assert coord.client.get_usage.await_count == 1
+        coord.auth_manager.force_renew.assert_awaited_once()
+    else:
+        assert coord.client.get_usage.await_count == 1
+        coord.auth_manager.force_renew.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_monthly_captcha_does_not_force_renew():
+    coord = _make_coordinator(auth_mode="credential")
+    coord.client.get_monthly_usage_paged = AsyncMock(side_effect=PGECaptchaUnsupportedError(_CAPTCHA_REASON))
+    with pytest.raises(PGECaptchaUnsupportedError):
+        await coord.async_get_monthly_usage_with_auth_retry(datetime.now(UTC), datetime.now(UTC))
+    assert coord.client.get_monthly_usage_paged.await_count == 1
+    coord.auth_manager.force_renew.assert_not_called()
