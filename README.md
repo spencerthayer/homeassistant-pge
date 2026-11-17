@@ -6,7 +6,7 @@ Home Assistant custom integration for **Portland General Electric (PGE)** — im
 
 > **Not Pacific Gas & Electric (PG&E).** This is for [Portland General Electric](https://portlandgeneral.com/) in Oregon. It does **not** work with California PG&E / Opower integrations.
 >
-> **Unsupported / unofficial:** MFA- and CAPTCHA-enabled PGE accounts are not supported (fail closed). The portal API is unofficial and may change without notice. Not affiliated with or endorsed by Portland General Electric.
+> **Unsupported / unofficial:** MFA- and CAPTCHA-enabled PGE accounts are not supported. Setup fails closed. If a later poll hits a CAPTCHA, already downloaded data stays and Home Assistant does not ask for the password again. The portal API is unofficial and may change without notice. Not affiliated with or endorsed by Portland General Electric.
 
 **Requires Home Assistant 2026.7.0+.**
 
@@ -17,7 +17,7 @@ Home Assistant custom integration for **Portland General Electric (PGE)** — im
 ### HACS (recommended)
 
 1. HACS → **⋯** → **Custom repositories**, add `https://github.com/spencerthayer/homeassistant-pge` with category **Integration**.
-2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.12.19`).
+2. Install **Portland General Electric Energy Usage** (version matches the latest GitHub Release, e.g. `0.12.20`).
 3. Restart Home Assistant.
 
 ### Manual
@@ -30,7 +30,7 @@ Home Assistant custom integration for **Portland General Electric (PGE)** — im
 1. Settings → Devices & Services → **Add Integration** → _Portland General Electric Energy Usage_.
 2. Enter PGE **email**, **password**, and **account number** (one entry per account).
 3. The same login can own multiple entries with different account numbers; each login's password is stored in that entry.
-4. **MFA-enabled PGE accounts are not supported** — if PGE requires MFA or CAPTCHA, setup fails closed.
+4. **MFA-enabled PGE accounts are not supported** — if PGE requires MFA or CAPTCHA, setup fails closed. A poll that later hits CAPTCHA keeps downloaded data and does not open a password prompt.
 
 Setup validates connectivity with an hourly request for yesterday, then the first sync backfills history.
 
@@ -110,7 +110,7 @@ sequenceDiagram
         A-->>U: parsed intervals / billing
     end
 
-    Note over U,G: MFA / CAPTCHA → fail closed<br/>Rate limit → soft-fail with cooldown<br/>401 → force renew once, then fail
+    Note over U,G: Setup MFA / CAPTCHA → fail closed<br/>Poll CAPTCHA → keep data, no password prompt<br/>Rate limit → soft-fail with cooldown<br/>401 → force renew once, then fail
 ```
 
 ### Data extraction pipeline
@@ -727,7 +727,7 @@ Time-of-Day rates are resolved per poll: manual overrides → effective-dated on
 
 ## Known limitations
 
-- **MFA / CAPTCHA accounts are unsupported** by design (fail closed).
+- **MFA / CAPTCHA accounts are unsupported** by design. Setup fails closed. A runtime CAPTCHA keeps retained data and does not request the password again.
 - Cognito login throttle / temporary password lockout is rate-limited with a shared per-email cooldown and soft-failed — the integration never hammers `InitiateAuth`.
 - **PGE publishes once overnight.** Hourly intervals for a Pacific day appear after midnight; a stuck `Latest available interval` near `01:00` PT during the day is expected. Polling is 4-hourly on a Pacific clock grid by default.
 - Hourly day responses include a +1 boundary hour at `day_end`; the integration clips to `[day_start, day_end)`.
