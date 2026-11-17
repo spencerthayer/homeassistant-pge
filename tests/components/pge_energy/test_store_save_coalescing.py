@@ -72,8 +72,12 @@ def _reset_registry():
             # Real teardown never cancels executor-backed writes, but tests must
             # not leak pending tasks into a closing event loop.
             state.inflight.cancel()
+        follow = state.follow_task
+        if follow is not None and not follow.done():
+            follow.cancel()
     store_mod._SAVE_STATES.clear()
     store_mod._STORES.clear()
+    store_mod._RETIRED_OBJECTS.clear()
 
 
 @pytest.fixture
@@ -437,9 +441,16 @@ async def test_next_write_awaits_parked_inflight_before_writing(monkeypatch):
         assert ordered.order == ["start:1"]
 
         data.sync_done = 2
-        await async_save_import_state(hass, "entry1", data, critical=True)
+        started = asyncio.get_running_loop().time()
+        with pytest.raises(TimeoutError):
+            await async_save_import_state(hass, "entry1", data, critical=True)
+        assert asyncio.get_running_loop().time() - started < 0.03
+        follow = store_mod._SAVE_STATES["entry1"].follow_task
+        assert follow is not None
+        await follow
 
     # Payload 1 finished BEFORE payload 2 started: strict on-disk ordering.
+    # The second save deferred immediately and one follower wrote it.
     assert ordered.order == ["start:1", "done:1", "start:2", "done:2"]
     assert ordered.saves[-1]["sync_done"] == 2
     assert store_mod._SAVE_STATES["entry1"].inflight is None
@@ -462,6 +473,9 @@ async def test_clear_lands_after_parked_stale_write(monkeypatch):
             await async_save_import_state(hass, "entry1", data, critical=True)
         assert ordered.order == ["start:7"]
 
+        with pytest.raises(TimeoutError):
+            await async_clear_import_state(hass, "entry1")
+        await asyncio.sleep(0.08)
         await async_clear_import_state(hass, "entry1")
 
     last = ordered.saves[-1]
@@ -624,8 +638,13 @@ async def test_discard_keeps_coordination_until_parked_write_drains(monkeypatch)
         assert store_mod._SAVE_STATES.get("entry1") is state
 
         # A prompt reload starts fresh saves that must order behind the old write.
+        # The known stall defers immediately; the follower lands payload 2 after it.
         data.sync_done = 2
-        await async_save_import_state(hass, "entry1", data, critical=True)
+        with pytest.raises(TimeoutError):
+            await async_save_import_state(hass, "entry1", data, critical=True)
+        follow = store_mod._SAVE_STATES["entry1"].follow_task
+        assert follow is not None
+        await follow
         assert ordered.order == ["start:1", "done:1", "start:2", "done:2"]
 
         await asyncio.sleep(0.01)  # drain callback fires — but the reload SAVED,
@@ -641,7 +660,9 @@ async def test_concurrent_timeout_keeps_single_tracked_write(monkeypatch):
     """Per-entry lock: a second concurrent save reconciles instead of overlapping."""
     monkeypatch.setattr(store_mod, "IMPORT_STATE_SAVE_TIMEOUT", 0.06)
     ordered = _OrderedStore()
-    ordered.delays = [0.15, 0.15]
+    # The parked write outlives the timeout. The follower's write must not,
+    # or this test waits forever on the next retry.
+    ordered.delays = [0.15, 0.0]
     hass = _FakeHass()
     with patch.object(store_mod, "_store_for_entry", return_value=ordered):
         data_a = ImportStoreData(account_key="k")
@@ -661,9 +682,10 @@ async def test_concurrent_timeout_keeps_single_tracked_write(monkeypatch):
         # caller deferred behind it instead of overwriting state.inflight.
         assert ordered.calls == 1
         assert state.inflight is not None and not state.inflight.done()
-
-        await asyncio.sleep(0.06)  # let the parked write drain
-        assert ordered.order == ["start:1", "done:1"]
+        follow = state.follow_task
+        assert follow is not None
+        await follow
+        assert ordered.order == ["start:1", "done:1", "start:2", "done:2"]
 
 
 async def test_load_awaits_parked_write_before_hydrating(monkeypatch):
@@ -679,6 +701,9 @@ async def test_load_awaits_parked_write_before_hydrating(monkeypatch):
             await async_save_import_state(hass, "entry1", data, critical=True)
         assert ordered.saves == []  # write still parked
 
+        with pytest.raises(TimeoutError):
+            await async_load_import_state(hass, "entry1")
+        await asyncio.sleep(0.08)
         loaded = await async_load_import_state(hass, "entry1")
         assert loaded.sync_done == 9  # hydrated AFTER the parked write landed
         assert ordered.order == ["start:9", "done:9"]
@@ -759,7 +784,11 @@ async def test_critical_save_snapshots_before_lock_wait(monkeypatch):
         saver = asyncio.create_task(async_save_import_state(hass, "entry1", shared, critical=True))
         await asyncio.sleep(0.005)
         shared.dirty_from = None
-        await saver
+        with pytest.raises(TimeoutError):
+            await saver
+        follow = store_mod._SAVE_STATES["entry1"].follow_task
+        assert follow is not None
+        await follow
 
     assert ordered.saves[-1]["dirty_from"] == "2024-03-01T00:00:00-08:00"
 
@@ -1036,7 +1065,7 @@ async def test_deferred_write_keeps_dirty_for_retry(monkeypatch):
 
 
 async def test_load_serializes_with_queued_critical_write(monkeypatch):
-    """A reload waits out queued writes instead of hydrating mid-flight."""
+    """A known stall fails the reload immediately; the read happens after it lands."""
     monkeypatch.setattr(store_mod, "IMPORT_STATE_SAVE_TIMEOUT", 0.06)
     ordered = _OrderedStore()
     ordered.delays = [0.09, 0.02]
@@ -1049,13 +1078,16 @@ async def test_load_serializes_with_queued_critical_write(monkeypatch):
 
         second = ImportStoreData(account_key="k")
         second.sync_done = 2
-        saver = asyncio.create_task(async_save_import_state(hass, "entry1", second, critical=True))
-        await asyncio.sleep(0.001)  # saver takes the per-entry lock first
-        loader = asyncio.create_task(async_load_import_state(hass, "entry1"))
-        loaded = await loader
-        await saver
+        with pytest.raises(TimeoutError):
+            await async_save_import_state(hass, "entry1", second, critical=True)
+        with pytest.raises(TimeoutError):
+            await async_load_import_state(hass, "entry1")
+        assert ordered.saves == []
+        follow = store_mod._SAVE_STATES["entry1"].follow_task
+        assert follow is not None
+        await follow
+        loaded = await async_load_import_state(hass, "entry1")
 
-    # The read happened after the queued critical write landed, not mid-flight.
     assert loaded.sync_done == 2
     assert ordered.order == ["start:1", "done:1", "start:2", "done:2"]
 
@@ -1108,11 +1140,14 @@ async def test_load_claims_state_against_drain_callback(monkeypatch):
         discard_store_cache("entry1")  # arms the drain callback (draining=True)
         assert store_mod._SAVE_STATES["entry1"].draining is True
 
-        # The load claims the state; the drain callback must leave it alone.
+        # The load claims the state before refusing the stalled read, so the
+        # drain callback must not drop coordination the reload is using.
+        with pytest.raises(TimeoutError):
+            await async_load_import_state(hass, "entry1")
+        await asyncio.sleep(0.03)
+        assert store_mod._SAVE_STATES.get("entry1") is not None
         loaded = await async_load_import_state(hass, "entry1")
         assert loaded.sync_done == 1
-        await asyncio.sleep(0.01)
-        assert store_mod._SAVE_STATES.get("entry1") is not None
 
         # And the claimed state still cleans up on unload.
         discard_store_cache("entry1")
@@ -1348,3 +1383,91 @@ async def test_timed_out_clear_schedules_restore_and_stays_bounded(monkeypatch):
     assert [s.get("account_key") for s in gated.saves] == ["k", "", "k"]
     assert gated.saves[-1]["completed_local_dates"] == ["2024-01-01"]
     assert gated.saves[-1]["sync_status"] == "complete"
+
+
+async def test_parked_write_retries_defer_promptly(monkeypatch):
+    """Ten saves behind one stalled write must not each open a fresh timeout window."""
+    monkeypatch.setattr(store_mod, "IMPORT_STATE_SAVE_TIMEOUT", 0.05)
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    class _Held(_OrderedStore):
+        async def async_save(self, payload):
+            self.calls += 1
+            self.order.append(f"start:{payload.get('sync_done')}")
+            started.set()
+            await release.wait()
+            self.saves.append(payload)
+            self.order.append(f"done:{payload.get('sync_done')}")
+
+    held = _Held()
+    hass = _FakeHass()
+    with patch.object(store_mod, "_store_for_entry", return_value=held):
+        first = ImportStoreData(account_key="k")
+        first.sync_done = 1
+        saver = asyncio.create_task(async_save_import_state(hass, "entry1", first, critical=True))
+        await started.wait()
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(saver, 1.0)
+        assert held.calls == 1
+
+        begun = asyncio.get_running_loop().time()
+        for index in range(10):
+            later = ImportStoreData(account_key="k")
+            later.sync_done = index + 2
+            with pytest.raises(TimeoutError):
+                await async_save_import_state(hass, "entry1", later, critical=True)
+        elapsed = asyncio.get_running_loop().time() - begun
+        assert elapsed < 0.05
+        assert held.calls == 1
+        state = store_mod._SAVE_STATES["entry1"]
+        assert state.inflight is not None and not state.inflight.done()
+        assert state.deferred_snapshot is not None
+        assert state.deferred_snapshot["sync_done"] == 11
+
+        release.set()
+        follow = state.follow_task
+        assert follow is not None
+        await follow
+        assert held.calls == 2
+        assert held.order == ["start:1", "done:1", "start:11", "done:11"]
+        assert held.saves[-1]["sync_done"] == 11
+
+
+async def test_storage_cooldown_survives_reload(monkeypatch):
+    """Unload keeps the stall, and the next save still defers until that write finishes."""
+    monkeypatch.setattr(store_mod, "IMPORT_STATE_SAVE_TIMEOUT", 0.05)
+    release = asyncio.Event()
+
+    class _Held(_OrderedStore):
+        async def async_save(self, payload):
+            self.calls += 1
+            self.order.append("start")
+            await release.wait()
+            self.saves.append(payload)
+            self.order.append("done")
+
+    held = _Held()
+    hass = _FakeHass()
+    with patch.object(store_mod, "_store_for_entry", return_value=held):
+        data = ImportStoreData(account_key="k")
+        data.sync_done = 1
+        with pytest.raises(TimeoutError):
+            await async_save_import_state(hass, "entry1", data, critical=True)
+        discard_store_cache("entry1")
+        assert "entry1" in store_mod._SAVE_STATES
+        assert store_mod.import_state_backoff_remaining("entry1") > 0
+
+        begun = asyncio.get_running_loop().time()
+        data.sync_done = 2
+        with pytest.raises(TimeoutError):
+            await async_save_import_state(hass, "entry1", data, critical=True)
+        assert asyncio.get_running_loop().time() - begun < 0.03
+        assert held.calls == 1
+
+        release.set()
+        follow = store_mod._SAVE_STATES["entry1"].follow_task
+        assert follow is not None
+        await follow
+        assert held.calls == 2
+        assert held.saves[-1]["sync_done"] == 2

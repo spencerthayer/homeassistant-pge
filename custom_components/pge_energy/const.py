@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 
 DOMAIN = "pge_energy"
-VERSION = "0.12.19"
+VERSION = "0.12.20"
 PLATFORMS = ["sensor", "binary_sensor"]
 
 # Custom panel (registered once per HA instance, not per entry).
@@ -190,6 +190,9 @@ BACKFILL_CANCEL_GRACE = 30.0  # seconds to honour cancel before orphaning the ta
 IMPORT_STATE_SAVE_TIMEOUT = 60.0
 # Non-critical import-state saves coalesce into one debounced background write.
 IMPORT_STATE_SAVE_DEBOUNCE_SECONDS = 3.0
+# Rapid config-entry reloads share one network refresh per entry per window.
+# A second setup inside the window keeps hydrated entities and retries once.
+RELOAD_REFRESH_COOLDOWN_SECONDS = 60.0
 # Recorder ack: verify, then re-issue the write on mismatch (dropped import jobs).
 STATISTICS_ACK_WRITE_ATTEMPTS = 3
 STATISTIC_ID_SUFFIX_CONSUMPTION = "_consumption"

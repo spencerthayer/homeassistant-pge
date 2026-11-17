@@ -4,8 +4,19 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from custom_components.pge_energy import coordinator as coordinator_mod
 from custom_components.pge_energy.api import PGEApiClient
 from custom_components.pge_energy.auth import PGEAuthManager
+from custom_components.pge_energy.coordinator import clear_refresh_admission
+
+
+@pytest.fixture(autouse=True)
+def _reset_reload_admission():
+    """Reload admission is process-global so one poll cannot suppress the next test."""
+    clear_refresh_admission()
+    coordinator_mod._REFRESH_NEXT_MONOTONIC.clear()
+    yield
+    clear_refresh_admission()
 
 
 @pytest.fixture

@@ -36,6 +36,7 @@ from .const import (
     DEFAULT_CORRECTION_WINDOW,
     DEFAULT_INCLUDE_COST,
     DOMAIN,
+    RELOAD_REFRESH_COOLDOWN_SECONDS,
     SYNC_PHASE_CORRECTION,
     SYNC_PHASE_IDLE,
     SYNC_STATUS_BACKFILLING,
@@ -77,6 +78,9 @@ from .store import (
     async_load_import_state,
     async_save_import_state,
     bind_import_state_object,
+    import_state_backoff_remaining,
+    invalidate_import_state_object,
+    restore_import_state_object,
 )
 from .sync_progress import (
     apply_progress_math,
@@ -121,6 +125,39 @@ class _CorrectionImportError(Exception):
 
 class _RecoveryPendingError(Exception):
     """Internal control flow: a retained dirty_from blocks a new import."""
+
+
+# Per-entry monotonic deadline for the next admitted network refresh.
+# Survives coordinator replacement because it is not stored on the instance.
+_REFRESH_NEXT_MONOTONIC: dict[str, float] = {}
+
+
+def _monotonic() -> float:
+    return time.monotonic()
+
+
+def refresh_admission_remaining(entry_id: str) -> float:
+    """Seconds until this entry may start another network refresh."""
+    deadline = _REFRESH_NEXT_MONOTONIC.get(entry_id)
+    if deadline is None:
+        return 0.0
+    return max(0.0, deadline - _monotonic())
+
+
+def claim_refresh_admission(entry_id: str) -> bool:
+    """Admit one refresh and start the cooldown. False when the window is still open."""
+    if refresh_admission_remaining(entry_id) > 0:
+        return False
+    _REFRESH_NEXT_MONOTONIC[entry_id] = _monotonic() + RELOAD_REFRESH_COOLDOWN_SECONDS
+    return True
+
+
+def clear_refresh_admission(entry_id: str | None = None) -> None:
+    """Drop admission state for one entry, or every entry on HA shutdown."""
+    if entry_id is None:
+        _REFRESH_NEXT_MONOTONIC.clear()
+        return
+    _REFRESH_NEXT_MONOTONIC.pop(entry_id, None)
 
 
 def _parse_store_dt(raw: str | None) -> datetime | None:
@@ -199,8 +236,13 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.tod_snapshot: TodSnapshot | None = None
         self.net_metering_snapshot: NetMeteringSnapshot | None = None
         self.rate_compare_snapshot: RateCompareSnapshot | None = None
-        # async_update_entry for token persistence must not trigger options reload.
-        self._skip_reload_on_next_update = False
+        # Set for the whole unload, including the gap before a replacement is registered.
+        self._retired = False
+        self._post_setup_task: asyncio.Task | None = None
+        # One post-setup claim covers the first refresh without consuming the window twice.
+        self._setup_refresh_claimed = False
+        self._refresh_suppressed = False
+        self._initial_refresh_suppressed = False
         # Debounce reauth flows so a flapping Cognito blip does not spam the UI.
         self._reauth_requested = False
 
@@ -299,8 +341,93 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ranges.append((day_start, day_end))
         return ranges
 
+    @property
+    def retired(self) -> bool:
+        return self._retired
+
+    def bind_post_setup_task(self, task: asyncio.Task | None) -> None:
+        self._post_setup_task = task
+
+    def cancel_post_setup_task(self) -> None:
+        task = self._post_setup_task
+        if task is not None and not task.done():
+            task.cancel()
+
+    def retire(self) -> None:
+        """Reject token and checkpoint writes from this coordinator.
+
+        Called at the start of unload, before any await, so a task that is
+        still between cancellation points cannot update the live entry.
+        """
+        self._retired = True
+        invalidate_import_state_object(self.entry.entry_id, self._import_store)
+
+    def unretire(self) -> None:
+        """Platform unload failed; this coordinator is still the live one."""
+        self._retired = False
+        restore_import_state_object(self.entry.entry_id, self._import_store)
+
+    def network_refresh_delay(self) -> tuple[float, bool]:
+        """Seconds to wait, and whether the reload breaker is one of the reasons."""
+        reload_wait = refresh_admission_remaining(self.entry.entry_id)
+        storage_wait = import_state_backoff_remaining(self.entry.entry_id)
+        raw_cognito = self.auth_manager.cognito_rate_limit_remaining_seconds()
+        cognito_wait = raw_cognito if isinstance(raw_cognito, (int, float)) else 0.0
+        return max(reload_wait, storage_wait, cognito_wait), reload_wait > 0
+
+    def claim_network_refresh(self) -> bool:
+        """True when this call may perform network work. Starts the cooldown.
+
+        Cognito backoff is not a reason to drop the poll. The post-poll
+        interval uses whichever deadline is later, so a short Cognito wait
+        cannot pull a multi-hour schedule forward.
+        """
+        if self._retired:
+            return False
+        if refresh_admission_remaining(self.entry.entry_id) > 0:
+            return False
+        if import_state_backoff_remaining(self.entry.entry_id) > 0:
+            return False
+        return claim_refresh_admission(self.entry.entry_id)
+
+    def note_refresh_suppressed(self) -> float:
+        """Log a suppressed refresh and return how many seconds to wait.
+
+        This does not change ``update_interval``. Post-setup schedules one
+        resume from the returned delay. A suppressed poll sets
+        ``_refresh_suppressed`` itself so only that poll's finally waits out
+        the deadline.
+        """
+        delay, reload_blocked = self.network_refresh_delay()
+        entry_id = str(self.entry.entry_id)
+        if reload_blocked:
+            _LOGGER.error(
+                "PGE reload loop detected for %s; next refresh in %.0fs",
+                entry_id[:8],
+                delay,
+            )
+        elif import_state_backoff_remaining(self.entry.entry_id) > 0:
+            _LOGGER.warning(
+                "PGE import state save still stalled for %s; next refresh in %.0fs",
+                entry_id[:8],
+                delay,
+            )
+        self._initial_refresh_suppressed = True
+        # The poll sets ``_refresh_suppressed`` itself so its finally can
+        # shorten that one retry. Post-setup must not, or the next admitted
+        # refresh would inherit the short interval.
+        return delay
+
     def try_reserve_backfill(self) -> bool:
         """Synchronously reserve the backfill job slot (check-and-set)."""
+        if self._retired:
+            return False
+        # A stalled checkpoint write must not start another importer. Reload
+        # admission is enforced before post-setup reaches backfill; checking
+        # it here would also skip the backfill that belongs to the one
+        # admitted setup.
+        if import_state_backoff_remaining(self.entry.entry_id) > 0:
+            return False
         if self._refresh_job_active or self._backfill_in_progress or self._backfill_reserved:
             return False
         self._backfill_reserved = True
@@ -515,6 +642,8 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_persist_sensor_snapshots(self, *, critical: bool = False) -> None:
         """Persist tip/billing snapshots used to keep sensors warm across restarts."""
+        if self._retired:
+            return
         self._apply_sensor_snapshots_to_store()
         await async_save_import_state(self.hass, self.entry.entry_id, self._import_store, critical=critical)
 
@@ -584,6 +713,8 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Returns False when the state could not be landed durably; callers that
         need a crash-recovery marker must not mutate recorder data afterwards.
         """
+        if self._retired:
+            return False
         try:
             result = await async_save_import_state(self.hass, self.entry.entry_id, self._import_store)
         except TimeoutError:
@@ -591,7 +722,7 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return result is not False
 
     async def async_persist_sync_progress(self) -> None:
-        if self._is_stale_backfill_generation():
+        if self._retired or self._is_stale_backfill_generation():
             return
         self._apply_sync_progress_to_store()
         if self._sync_progress.status in (SYNC_STATUS_COMPLETE, SYNC_STATUS_FAILED):
@@ -803,21 +934,16 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.release_backfill_reservation()
 
     def persist_auth_to_entry(self) -> None:
+        if self._retired:
+            return
         if self.auth_manager.auth_mode != "credential":
             return
         merged = {**self.entry.data, **self.auth_manager.persistable_auth_data()}
         if merged == dict(self.entry.data):
             return
-        # Token writes must not bounce the integration via the update listener.
-        self._skip_reload_on_next_update = True
+        # Token fields live in entry data. The update listener reloads only when
+        # options change, so this write does not schedule another setup.
         self.hass.config_entries.async_update_entry(self.entry, data=merged)
-
-    def consume_skip_reload(self) -> bool:
-        """Return True once when the next update-listener should not reload."""
-        if self._skip_reload_on_next_update:
-            self._skip_reload_on_next_update = False
-            return True
-        return False
 
     async def async_get_usage_with_auth_retry(
         self,
@@ -957,22 +1083,42 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             cooldown = timedelta(seconds=cognito_remaining)
             if cooldown > base:
                 self.update_interval = cooldown
+                base = cooldown
                 _LOGGER.info(
                     "Deferring next PGE poll for Cognito cooldown (%.0fs)",
                     cognito_remaining,
                 )
-            return
-        if self._catchup_retry and not self._refresh_job_active:
+        elif self._catchup_retry and not self._refresh_job_active:
             self.update_interval = base
+        # Reload admission and a stalled import-state write wait out their
+        # deadlines too. The later of those and the schedule above wins.
+        extra = max(
+            refresh_admission_remaining(self.entry.entry_id),
+            import_state_backoff_remaining(self.entry.entry_id),
+        )
+        if extra > 0 and timedelta(seconds=extra) > base:
+            self.update_interval = timedelta(seconds=extra)
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             return await self._async_poll_usage()
         finally:
-            self._apply_post_poll_update_interval()
+            if self._refresh_suppressed:
+                # This poll was the deferred retry. Come back at the deadline
+                # instead of waiting out the full schedule. A successful poll
+                # below restores the longer interval, so this does not stick.
+                delay, _reload_blocked = self.network_refresh_delay()
+                if delay > 0:
+                    self.update_interval = timedelta(seconds=delay)
+                self._refresh_suppressed = False
+            else:
+                self._apply_post_poll_update_interval()
 
     async def _async_poll_usage(self) -> dict[str, Any]:
-        # Recover from a backfill task that died without clearing flags.
+        if self._retired:
+            return self._retained_poll_payload()
+        # Recover a dead backfill before admission. Suppression must not leave
+        # the stuck flag in place for the whole cooldown.
         if (
             self._backfill_task is not None
             and self._backfill_task.done()
@@ -981,6 +1127,15 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning("PGE backfill task finished outside the normal path; releasing stuck state")
             await self.force_release_backfill("Backfill task terminated unexpectedly")
             return self._retained_poll_payload()
+        if self._setup_refresh_claimed:
+            self._setup_refresh_claimed = False
+            self._initial_refresh_suppressed = False
+        elif not self.claim_network_refresh():
+            self.note_refresh_suppressed()
+            self._refresh_suppressed = True
+            return self._retained_poll_payload()
+        else:
+            self._initial_refresh_suppressed = False
 
         # Correction-window polls still run during history backfill. Skipping them
         # froze latest_available_interval for hours while hourly backfill walked

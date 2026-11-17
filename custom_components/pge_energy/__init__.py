@@ -3,16 +3,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Callable
 from datetime import date, datetime
 
 import voluptuous as vol
 from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.core import Event, HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.event import async_call_later
 
 from .api import PGEApiClient
 from .api_host import apply_configured_host, forget_resolver
@@ -52,7 +55,7 @@ from .const import (
     SYNC_PHASE_HOURLY,
     SYNC_STATUS_BACKFILLING,
 )
-from .coordinator import PGECoordinator
+from .coordinator import PGECoordinator, clear_refresh_admission
 from .day_validation import clip_hourly_to_local_day, is_invalid_closed_day, validate_hourly_day
 from .device_lookup import async_device_for_entry
 from .options import (
@@ -73,6 +76,7 @@ from .statistics import (
 from .store import (
     async_flush_import_state,
     async_save_import_state,
+    clear_retired_import_object,
     discard_store_cache,
 )
 from .tariff_updater import TariffUpdaterCoordinator
@@ -82,6 +86,77 @@ from .websocket import async_setup_websocket
 _LOGGER = logging.getLogger(__name__)
 
 type PGEConfigEntry = ConfigEntry[PGECoordinator]
+
+# Generation of the update listener that is allowed to reload this entry.
+# A queued listener from a previous setup sees a mismatched generation and returns.
+_UPDATE_LISTENER_GENERATION: dict[str, int] = {}
+_POST_SETUP_RESUMES: dict[str, Callable[[], None]] = {}
+_RELOAD_GUARD_STOP = f"{DOMAIN}_reload_guard_stop"
+
+
+def _cancel_post_setup_resume(entry_id: str) -> None:
+    unsub = _POST_SETUP_RESUMES.pop(entry_id, None)
+    if unsub is not None:
+        unsub()
+
+
+def _schedule_post_setup_resume(hass: HomeAssistant, entry_id: str, delay: float) -> None:
+    """One deferred post-setup per entry. A newer reload replaces the timer."""
+    _cancel_post_setup_resume(entry_id)
+
+    async def _resume(_now: datetime) -> None:
+        _POST_SETUP_RESUMES.pop(entry_id, None)
+        coordinator = _coordinator_for_entry(hass, entry_id)
+        if coordinator is None or coordinator.retired:
+            return
+        entry = coordinator.entry
+        task = entry.async_create_background_task(
+            hass,
+            _async_post_setup_body(hass, entry, coordinator),
+            name=f"{DOMAIN}_post_setup_{entry_id[:8]}",
+        )
+        coordinator.bind_post_setup_task(task)
+
+    _POST_SETUP_RESUMES[entry_id] = async_call_later(hass, max(delay, 0.0), _resume)
+
+
+def _install_reload_guard_stop(hass: HomeAssistant) -> None:
+    if hass.data.get(_RELOAD_GUARD_STOP):
+        return
+    hass.data[_RELOAD_GUARD_STOP] = True
+
+    async def _stop(_event: Event) -> None:
+        for entry_id in list(_POST_SETUP_RESUMES):
+            _cancel_post_setup_resume(entry_id)
+        clear_refresh_admission()
+
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop)
+
+
+def _attach_update_listener(entry: PGEConfigEntry) -> None:
+    """Reload only when options change. Token writes touch entry data and do not."""
+    generation = _UPDATE_LISTENER_GENERATION.get(entry.entry_id, 0) + 1
+    _UPDATE_LISTENER_GENERATION[entry.entry_id] = generation
+    seen_options = dict(entry.options)
+
+    async def _listener(hass: HomeAssistant, updated: PGEConfigEntry) -> None:
+        nonlocal seen_options
+        if _UPDATE_LISTENER_GENERATION.get(updated.entry_id) != generation:
+            return
+        current = dict(updated.options)
+        if current == seen_options:
+            return
+        # Advance before the await so a second queued callback cannot reload again.
+        seen_options = current
+        await hass.config_entries.async_reload(updated.entry_id)
+
+    entry.async_on_unload(entry.add_update_listener(_listener))
+
+    def _retire_generation() -> None:
+        if _UPDATE_LISTENER_GENERATION.get(entry.entry_id) == generation:
+            _UPDATE_LISTENER_GENERATION[entry.entry_id] = generation + 1
+
+    entry.async_on_unload(_retire_generation)
 
 BACKFILL_SCHEMA = vol.Schema(
     {
@@ -202,7 +277,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
     if device is not None and device.name_by_user is None and device.name != desired_title:
         device_registry.async_update_device(device.id, name=desired_title)
 
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    _attach_update_listener(entry)
+    _install_reload_guard_stop(hass)
 
     if not hass.services.has_service(DOMAIN, "refresh"):
         _async_setup_services(hass)
@@ -220,60 +296,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
 
     # Never await PGE network / recorder drains inside async_setup_entry —
     # that deadlocks HA bootstrap (entry waits on I/O; bootstrap waits on entry).
-    async def _async_post_setup() -> None:
-        try:
-            await coordinator.async_start_tod()
-            await coordinator.async_start_ptr()
-            await coordinator.async_config_entry_first_refresh()
-        except ConfigEntryAuthFailed:
-            _LOGGER.error("PGE authentication failed during initial refresh — update credentials")
-            return
-        except Exception as exc:
-            _LOGGER.error("Failed initial PGE data refresh: %s", exc)
-            # Continue to repair/backfill attempts only after a successful refresh.
-
-        await coordinator.async_repair_dirty_if_needed()
-        await coordinator.async_repair_coarse_fine_if_needed()
-        await async_cleanup_orphaned_billing_entity_mirrors(
-            hass,
-            entry_id=entry.entry_id,
-            account_key=coordinator.account_key,
-            store=coordinator.import_store,
-        )
-        await async_clear_bill_avg_temp_entity_statistics(
-            hass,
-            entry_id=entry.entry_id,
-            account_key=coordinator.account_key,
-            store=coordinator.import_store,
-        )
-        await async_migrate_signed_usage_split(
-            hass,
-            coordinator.account_key,
-            coordinator.import_store,
-            account_id=coordinator.account_id,
-            entry_id=entry.entry_id,
-        )
-        await coordinator.async_refresh_lifetime_totals()
-        if (
-            coordinator.import_store.target_start
-            and coordinator.import_store.target_end
-            and coordinator.try_reserve_backfill()
-        ):
-            _start_backfill_task(
-                hass,
-                entry.entry_id,
-                coordinator,
-                coroutine=_async_resume_backfill(hass, entry.entry_id, coordinator),
-                name_suffix="resume",
-            )
-            return
-        await _async_maybe_start_auto_backfill(hass, entry, coordinator)
-
-    # Background task so bootstrap does not wait on PGE login / first refresh.
-    hass.async_create_background_task(
-        _async_post_setup(),
+    # The task is owned by the config entry so unload cancels it with the entry.
+    task = entry.async_create_background_task(
+        hass,
+        _async_post_setup_body(hass, entry, coordinator),
         name=f"{DOMAIN}_post_setup_{entry.entry_id[:8]}",
     )
+    coordinator.bind_post_setup_task(task)
 
     return True
 
@@ -829,13 +858,20 @@ async def _async_retry_failed_ranges(
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool:
+    _cancel_post_setup_resume(entry.entry_id)
     coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if coordinator is not None:
+        # Retire before the first await so a still-running post-setup cannot
+        # persist a token onto the entry this unload is replacing.
+        coordinator.retire()
+        coordinator.cancel_post_setup_task()
         await coordinator.async_stop_tod()
         await coordinator.async_stop_ptr()
         await coordinator.async_cancel_backfill()
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if coordinator is not None and not unload_ok:
+        coordinator.unretire()
     if unload_ok:
         # Stop domain-global tariff updater after platforms unload successfully.
         tariff_key = f"{DOMAIN}_tariff_updater"
@@ -877,18 +913,79 @@ async def async_unload_entry(hass: HomeAssistant, entry: PGEConfigEntry) -> bool
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Purge this entry's external statistics so delete/re-add does not orphan history."""
+    _cancel_post_setup_resume(entry.entry_id)
+    clear_refresh_admission(entry.entry_id)
+    clear_retired_import_object(entry.entry_id)
+    _UPDATE_LISTENER_GENERATION.pop(entry.entry_id, None)
     account_key = entry.data.get(CONF_ACCOUNT_KEY)
     if not account_key:
         return
     await async_clear_entry_statistics(hass, str(account_key))
 
 
-async def _async_update_listener(hass: HomeAssistant, entry: PGEConfigEntry) -> None:
-    """Reload on options/settings changes — not on routine token persistence."""
-    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if coordinator is not None and coordinator.consume_skip_reload():
+async def _async_post_setup_body(
+    hass: HomeAssistant,
+    entry: PGEConfigEntry,
+    coordinator: PGECoordinator,
+) -> None:
+    """First refresh, repair, and backfill for one coordinator lifetime."""
+    if coordinator.retired:
         return
-    await hass.config_entries.async_reload(entry.entry_id)
+    if not coordinator.claim_network_refresh():
+        delay = coordinator.note_refresh_suppressed()
+        _schedule_post_setup_resume(hass, entry.entry_id, delay)
+        return
+    coordinator._setup_refresh_claimed = True
+    try:
+        await coordinator.async_start_tod()
+        await coordinator.async_start_ptr()
+        await coordinator.async_config_entry_first_refresh()
+    except ConfigEntryAuthFailed:
+        _LOGGER.error("PGE authentication failed during initial refresh — update credentials")
+        return
+    except Exception as exc:
+        _LOGGER.error("Failed initial PGE data refresh: %s", exc)
+        # Continue to repair/backfill attempts only after a successful refresh.
+
+    if coordinator.retired or coordinator._initial_refresh_suppressed:
+        return
+
+    await coordinator.async_repair_dirty_if_needed()
+    await coordinator.async_repair_coarse_fine_if_needed()
+    await async_cleanup_orphaned_billing_entity_mirrors(
+        hass,
+        entry_id=entry.entry_id,
+        account_key=coordinator.account_key,
+        store=coordinator.import_store,
+    )
+    await async_clear_bill_avg_temp_entity_statistics(
+        hass,
+        entry_id=entry.entry_id,
+        account_key=coordinator.account_key,
+        store=coordinator.import_store,
+    )
+    await async_migrate_signed_usage_split(
+        hass,
+        coordinator.account_key,
+        coordinator.import_store,
+        account_id=coordinator.account_id,
+        entry_id=entry.entry_id,
+    )
+    await coordinator.async_refresh_lifetime_totals()
+    if (
+        coordinator.import_store.target_start
+        and coordinator.import_store.target_end
+        and coordinator.try_reserve_backfill()
+    ):
+        _start_backfill_task(
+            hass,
+            entry.entry_id,
+            coordinator,
+            coroutine=_async_resume_backfill(hass, entry.entry_id, coordinator),
+            name_suffix="resume",
+        )
+        return
+    await _async_maybe_start_auto_backfill(hass, entry, coordinator)
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
