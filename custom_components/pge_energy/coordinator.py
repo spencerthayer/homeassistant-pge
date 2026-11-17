@@ -941,6 +941,12 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise ConfigEntryAuthFailed(message) from hard_exc
         raise UpdateFailed(message) from hard_exc
 
+    @staticmethod
+    def _auth_failure_message(exc: BaseException) -> str:
+        """Safe cause plus class. Integration-authored messages only; no traceback."""
+        reason = str(exc).strip() or type(exc).__name__
+        return f"Authentication failed: {reason} [{type(exc).__name__}]"
+
     def _apply_post_poll_update_interval(self) -> None:
         """Prefer configured schedule, catch-up, or Cognito cooldown — whichever is later."""
         cognito_remaining = self.auth_manager.cognito_rate_limit_remaining_seconds()
@@ -1018,7 +1024,7 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         except PGEAuthenticationError as exc:
             return await self._async_soft_fail_poll(
-                "Authentication failed",
+                self._auth_failure_message(exc),
                 tracking=tracking,
                 auth_failed=True,
                 hard_exc=exc,
@@ -1062,7 +1068,7 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 response = await self.async_get_usage_with_auth_retry(day_start, request_end)
             except PGEAuthenticationError as exc:
                 return await self._async_soft_fail_poll(
-                    "Authentication failed",
+                    self._auth_failure_message(exc),
                     tracking=tracking,
                     auth_failed=True,
                     hard_exc=exc,

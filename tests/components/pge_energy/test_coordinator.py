@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -950,3 +951,140 @@ async def test_repair_rereads_marker_under_lock_and_clears_exactly_it():
     # The NEWER boundary is what got repaired and cleared — not the stale one.
     assert repaired == [newer_boundary]
     assert coord._import_store.dirty_from is None
+
+
+def _retain_usage(coord: PGECoordinator) -> list[UsageInterval]:
+    yesterday = today_local() - timedelta(days=1)
+    prior = _full_day_intervals(yesterday)
+    coord._recent_intervals = list(prior)
+    coord._lifetime_energy_kwh = 123.0
+    coord.data = {"intervals": list(prior), "failed_days": []}
+    return prior
+
+
+def _bind_reauth(coord: PGECoordinator) -> list[asyncio.Task]:
+    """Schedule reauth coroutines on the running loop so tests can drain them."""
+    tasks: list[asyncio.Task] = []
+
+    def _schedule(coro):
+        task = asyncio.get_running_loop().create_task(coro)
+        tasks.append(task)
+        return task
+
+    coord.hass.async_create_task = MagicMock(side_effect=_schedule)
+    coord.hass.config_entries.flow.async_init = AsyncMock()
+    return tasks
+
+
+async def _drain(tasks: list[asyncio.Task]) -> None:
+    if tasks:
+        await asyncio.gather(*tasks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cause", "usage_error", "renew_error"),
+    [
+        (PGEAuthenticationError("PGE password reset required"), None, None),
+        (PGEAuthenticationError("PGE login rejected (incorrect username or password)"), None, None),
+        (PGEAuthenticationError("PGE Cognito login failed (HTTP 503)"), None, None),
+        (None, PGEAuthenticationError("Token expired or invalid"), PGEAuthenticationError("Token expired or invalid")),
+        (
+            None,
+            PGEAuthenticationError("Token expired or invalid"),
+            PGEAuthenticationError("Token expired - reauthentication required"),
+        ),
+    ],
+    ids=["password-reset", "incorrect-credentials", "cognito-http", "apigee-401", "legacy-expired-token"],
+)
+async def test_poll_auth_error_reports_reason_and_type(cause, usage_error, renew_error, caplog):
+    """Initial login and failed renewals must keep the safe cause and class."""
+    coord = _make_coordinator(auth_mode="credential")
+    prior = _retain_usage(coord)
+    coord._refresh_job_active = True
+    coord.async_persist_sync_progress = AsyncMock()
+    tasks = _bind_reauth(coord)
+    exposed = cause or renew_error
+    assert exposed is not None
+    if cause is not None:
+        coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=cause)
+    else:
+        coord.client.get_usage = AsyncMock(side_effect=usage_error)
+        coord.auth_manager.force_renew = AsyncMock(side_effect=renew_error)
+
+    caplog.set_level(logging.ERROR, logger="custom_components.pge_energy.coordinator")
+    try:
+        data = await coord._async_update_data()
+    finally:
+        await _drain(tasks)
+
+    assert data["stale"] is True
+    assert coord.recent_intervals == prior
+    detail = f"Authentication failed: {exposed} [{type(exposed).__name__}]"
+    assert detail in (coord._last_api_error or "")
+    assert detail in caplog.text
+    assert "PGE poll failed (" in caplog.text
+    assert "keeping previously downloaded data" in caplog.text
+    assert "will retry" in caplog.text
+    assert detail in (coord.sync_progress.error or "")
+    assert coord.auth_manager.ensure_valid_token.await_args_list[0].kwargs.get("force") is True
+    assert len(tasks) == 1
+    coord.hass.config_entries.flow.async_init.assert_awaited_once()
+    if usage_error is not None:
+        assert coord.client.get_usage.await_count == 1
+        coord.auth_manager.force_renew.assert_awaited_once()
+
+
+_SECRET_EMAIL = "user@example.com"
+_SECRET_ACCOUNT = "123456789"
+_SECRET_PERSON = "987654321"
+_SECRET_JWT = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+    "dozjgNryP4J3jVmNHl0w5N_Z99UmkT1A1kK2kK2kK2k"
+)
+_SECRET_PASSWORD = "pw-SENTINEL-hunter2"
+_SECRET_OPAQUE = "opaque-SENTINEL-token"
+_SECRET_SENTINELS = (
+    _SECRET_EMAIL,
+    _SECRET_ACCOUNT,
+    _SECRET_PERSON,
+    _SECRET_JWT,
+    _SECRET_PASSWORD,
+    _SECRET_OPAQUE,
+)
+
+
+def _poisoned_graphql_auth_body() -> dict:
+    message = (
+        f"Unauthorized token for {_SECRET_EMAIL} account {_SECRET_ACCOUNT} "
+        f"person {_SECRET_PERSON} jwt {_SECRET_JWT} password={_SECRET_PASSWORD} "
+        f"bearer {_SECRET_OPAQUE}"
+    )
+    return {"errors": [{"message": message}]}
+
+
+@pytest.mark.asyncio
+async def test_poll_graphql_auth_error_does_not_expose_server_secrets(caplog):
+    """Usage GraphQL auth text is classified, then the poll log stays free of secrets."""
+    from custom_components.pge_energy.api import _parse_usage_response
+
+    coord = _make_coordinator(auth_mode="credential")
+    _retain_usage(coord)
+    tasks = _bind_reauth(coord)
+
+    async def _usage(*_args, **_kwargs):
+        _parse_usage_response(_poisoned_graphql_auth_body(), UsageResolution.HOURLY, "key")
+
+    coord.client.get_usage = AsyncMock(side_effect=_usage)
+    caplog.set_level(logging.ERROR, logger="custom_components.pge_energy.coordinator")
+    try:
+        await coord._async_update_data()
+    finally:
+        await _drain(tasks)
+
+    exposed = f"{coord._last_api_error or ''}\n{caplog.text}\n{coord.sync_progress.error or ''}"
+    assert "unauthenticated" in (coord._last_api_error or "").lower()
+    for sentinel in _SECRET_SENTINELS:
+        assert sentinel not in exposed
+    assert coord.client.get_usage.await_count == 2
+    coord.auth_manager.force_renew.assert_awaited_once()

@@ -315,11 +315,20 @@ def _parse_interval(
     )
 
 
+def _graphql_authentication_reason(joined: str) -> str:
+    """Fixed auth category. Server text is only a classifier, never the message."""
+    if "unauthenticated" in joined or "unauthoriz" in joined:
+        return "GraphQL rejected the session as unauthenticated"
+    if "token" in joined:
+        return "GraphQL rejected the access token"
+    return "GraphQL authentication failed"
+
+
 def _classify_graphql_errors(errors: list[dict[str, Any]]) -> None:
     messages = " | ".join(str(e.get("message", e)) for e in errors)
     joined = messages.lower()
     if any(x in joined for x in ("unauthoriz", "unauthenticated", "token", "auth")):
-        raise PGEAuthenticationError(f"GraphQL auth error: {messages}")
+        raise PGEAuthenticationError(_graphql_authentication_reason(joined))
     if any(x in joined for x in ("forbidden", "not allowed", "access denied")):
         raise PGEAuthorizationError(f"GraphQL authorization error: {messages}")
     raise PGEGraphQLError(f"GraphQL errors: {messages}", errors)
