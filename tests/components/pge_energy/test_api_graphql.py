@@ -33,7 +33,7 @@ class TestGraphQLErrors:
         person = "987654321"
         jwt = (
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0."
-            "dozjgNryP4J3jVmNHl0w5N_Z99UmkT1A1kK2kK2k"
+            + "dozjgNryP4J3jVmNHl0w5N_Z99UmkT1A1kK2kK2k"
         )
         password = "pw-SENTINEL-hunter2"
         opaque = "opaque-SENTINEL-token"
