@@ -36,7 +36,7 @@ from .options import (
     iter_month_windows,
 )
 from .statistics import async_import_with_baseline
-from .store import ImportStoreData, async_save_import_state
+from .store import ImportStoreData, async_save_import_state, import_state_backoff_remaining
 from .time_util import PGE_TZ, iter_local_days, local_day_bounds, today_local
 from .usage_direction import explicit_gap_intervals, importable_energy_intervals
 
@@ -197,6 +197,10 @@ async def _async_save_checkpoint(
         try:
             result = await async_save_import_state(hass, entry_id, store)
         except TimeoutError:
+            # A known-stalled write already parked this payload or queued one
+            # follower. A second attempt would only reopen the same window.
+            if import_state_backoff_remaining(entry_id) > 0:
+                return False
             continue
         # A discarded-as-stale save returns False: the store was replaced by a
         # reset/reload and retrying with the same obsolete object cannot

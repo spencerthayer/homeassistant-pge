@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -64,6 +66,18 @@ class _SaveState:
     # bind_import_state_object). Saves carrying any other object are pre-reset
     # stragglers and are discarded, never resurrecting wiped checkpoint state.
     bound_obj: int | None = None
+    # Monotonic instant before which a still-running timed-out write is known
+    # stalled. Callers defer instead of opening another full timeout window.
+    stalled_until: float | None = None
+    # Newest critical snapshot that arrived during that stall. One follower
+    # writes it after the parked filesystem operation completes.
+    deferred_snapshot: dict[str, Any] | None = None
+    deferred_obj: ImportStoreData | None = None
+    follow_task: asyncio.Task | None = None
+    # ``bound_obj`` captured when a coordinator retires, so a failed unload can
+    # put the same object back. ``None`` means there was no binding.
+    bound_before_retire: int | None = None
+    retire_bound_saved: bool = False
 
 
 class ImportStateStore(Store):
@@ -273,15 +287,34 @@ def discard_store_cache(entry_id: str) -> None:
                 def _release(task: asyncio.Task) -> None:
                     if not task.cancelled():
                         task.exception()  # consume to avoid unretrieved warnings
-                    # Only release an unclaimed drained state: a prompt reload's
-                    # saves mark it claimed (draining=False) before they await.
-                    if state.draining and _SAVE_STATES.get(entry_id) is state:
-                        _SAVE_STATES.pop(entry_id, None)
+                    # The follower may still hold the newer critical snapshot.
+                    # Dropping coordination here lets that snapshot disappear
+                    # and the next save overlap the parked write.
+                    _release_drained_state(entry_id, state)
 
                 inflight.add_done_callback(_release)
                 return  # coordination stays alive until the parked write drains
             if not inflight.cancelled():
                 inflight.exception()  # consume a completed task's result before dropping it
+    _SAVE_STATES.pop(entry_id, None)
+
+
+def _release_drained_state(entry_id: str, state: _SaveState) -> None:
+    """Drop unload coordination once the parked write and its follower are done.
+
+    A prompt reload claims the state (``draining`` becomes false) and must keep
+    it. A follower that has not landed ``deferred_snapshot`` must keep it too.
+    """
+    if not state.draining or _SAVE_STATES.get(entry_id) is not state:
+        return
+    if state.deferred_snapshot is not None:
+        return
+    follow = state.follow_task
+    if follow is not None and not follow.done() and follow is not asyncio.current_task():
+        return
+    inflight = state.inflight
+    if inflight is not None and not inflight.done():
+        return
     _SAVE_STATES.pop(entry_id, None)
 
 
@@ -326,6 +359,169 @@ def _save_state(entry_id: str) -> _SaveState:
     # Any load/save touching the entry claims it back from drain-only status.
     state.draining = False
     return state
+
+
+# Object ids retired by an unloaded coordinator. Survives ``discard_store_cache``
+# so a cancellation-delayed writer cannot persist after the Store cache is gone.
+_RETIRED_OBJECTS: dict[str, int] = {}
+_INVALID_BOUND = -1
+
+
+def invalidate_import_state_object(entry_id: str, obj: ImportStoreData) -> None:
+    """Reject further saves of ``obj`` until ``restore_import_state_object``."""
+    state = _save_state(entry_id)
+    if state.bound_obj not in (None, id(obj), _INVALID_BOUND):
+        return
+    _RETIRED_OBJECTS[entry_id] = id(obj)
+    if not state.retire_bound_saved:
+        state.bound_before_retire = state.bound_obj
+        state.retire_bound_saved = True
+    state.bound_obj = _INVALID_BOUND
+
+
+def restore_import_state_object(entry_id: str, obj: ImportStoreData) -> None:
+    """Undo a retire when platform unload failed and this object is still live."""
+    if _RETIRED_OBJECTS.get(entry_id) != id(obj):
+        return
+    _RETIRED_OBJECTS.pop(entry_id, None)
+    state = _SAVE_STATES.get(entry_id)
+    if state is None or state.bound_obj != _INVALID_BOUND or not state.retire_bound_saved:
+        return
+    state.bound_obj = state.bound_before_retire
+    state.retire_bound_saved = False
+
+
+def clear_retired_import_object(entry_id: str) -> None:
+    _RETIRED_OBJECTS.pop(entry_id, None)
+
+
+def _retired_object(entry_id: str, data: ImportStoreData) -> bool:
+    return _RETIRED_OBJECTS.get(entry_id) == id(data)
+
+
+def _stall_remaining(state: _SaveState) -> float:
+    """Seconds until a known-stalled inflight write may be reconciled again."""
+    inflight = state.inflight
+    if inflight is None or inflight.done() or state.stalled_until is None:
+        return 0.0
+    return max(0.0, state.stalled_until - time.monotonic())
+
+
+def import_state_backoff_remaining(entry_id: str) -> float:
+    """Seconds automatic poll/backfill should wait before touching a stalled write."""
+    state = _SAVE_STATES.get(entry_id)
+    if state is None:
+        return 0.0
+    return _stall_remaining(state)
+
+
+def _known_stalled(state: _SaveState) -> bool:
+    return _stall_remaining(state) > 0.0
+
+
+def _mark_stalled(state: _SaveState) -> None:
+    state.stalled_until = time.monotonic() + IMPORT_STATE_SAVE_TIMEOUT
+
+
+def _queue_deferred_snapshot(
+    hass: HomeAssistant,
+    entry_id: str,
+    state: _SaveState,
+    data: ImportStoreData,
+    snap: dict[str, Any] | None,
+    *,
+    critical: bool,
+    inflight: asyncio.Task | None,
+) -> None:
+    """Remember one critical snapshot and arm a single follower. Does not claim durability."""
+    if not critical or snap is None:
+        return
+    state.deferred_snapshot = snap
+    state.deferred_obj = data
+    _ensure_deferred_follow(hass, entry_id, state, inflight)
+
+
+def _ensure_deferred_follow(
+    hass: HomeAssistant,
+    entry_id: str,
+    state: _SaveState,
+    inflight: asyncio.Task | None,
+) -> None:
+    """One follower per entry waits out the parked write, then lands the snapshot."""
+    current = state.follow_task
+    if current is not None and not current.done():
+        return
+    task = hass.async_create_background_task(
+        _run_deferred_follow(hass, entry_id, inflight),
+        name=f"{DOMAIN}_import_state_follow_{entry_id[:8]}",
+    )
+    state.follow_task = task
+
+    def _retrieve(done: asyncio.Task) -> None:
+        if done.cancelled():
+            return
+        done.exception()
+
+    task.add_done_callback(_retrieve)
+
+
+async def _run_deferred_follow(
+    hass: HomeAssistant,
+    entry_id: str,
+    inflight: asyncio.Task | None,
+) -> None:
+    """Land the deferred critical snapshot after the parked write, without overlapping it."""
+    try:
+        await _run_deferred_follow_body(hass, entry_id, inflight)
+    finally:
+        state = _SAVE_STATES.get(entry_id)
+        if state is not None:
+            _release_drained_state(entry_id, state)
+
+
+async def _run_deferred_follow_body(
+    hass: HomeAssistant,
+    entry_id: str,
+    inflight: asyncio.Task | None,
+) -> None:
+    while True:
+        if inflight is not None and not inflight.done():
+            with contextlib.suppress(Exception):
+                await asyncio.shield(inflight)
+        state = _SAVE_STATES.get(entry_id)
+        if state is None:
+            return
+        async with state.lock:
+            if inflight is not None and state.inflight is inflight and inflight.done():
+                if not inflight.cancelled():
+                    inflight.exception()
+                state.inflight = None
+                state.stalled_until = None
+                state.last_written_hash = None
+            snap = state.deferred_snapshot
+            obj = state.deferred_obj
+            state.deferred_snapshot = None
+            state.deferred_obj = None
+            if snap is None or obj is None:
+                return
+            try:
+                await _write_payload_locked(
+                    hass,
+                    entry_id,
+                    obj,
+                    critical=True,
+                    snapshot=snap,
+                    state=state,
+                    identity_obj=obj,
+                )
+                return
+            except TimeoutError:
+                inflight = state.inflight
+                if state.deferred_snapshot is None:
+                    state.deferred_snapshot = snap
+                    state.deferred_obj = obj
+        remaining = _stall_remaining(state)
+        await asyncio.sleep(remaining if remaining > 0 else 0)
 
 
 def _payload_digest(payload: dict[str, Any]) -> str:
@@ -404,6 +600,12 @@ async def _write_payload_locked(
     # ``identity_obj`` so a stale snapshot cannot ride in behind a newly bound
     # ``state.data``.
     identity_target = identity_obj if identity_obj is not None else data
+    if not identity_exempt and _retired_object(entry_id, identity_target):
+        _LOGGER.info(
+            "Discarding import state save from a retired coordinator for %s",
+            entry_id[:8],
+        )
+        return False
     if not identity_exempt and _stale_object(state, identity_target):
         _LOGGER.info(
             "Discarding import state save from a replaced store object for %s",
@@ -431,12 +633,26 @@ async def _write_payload_locked(
     # phantom recovery marker.
     prior = state.inflight
     if prior is not None:
+        if not prior.done() and _known_stalled(state):
+            # The parked write already used its timeout window. Do not open another.
+            _queue_deferred_snapshot(hass, entry_id, state, data, snap, critical=critical, inflight=prior)
+            _LOGGER.warning(
+                "PGE import state save still in flight for %s; deferring newer write",
+                entry_id[:8],
+            )
+            if critical:
+                raise TimeoutError("PGE import state save still in flight")
+            return None
         try:
             # Await unconditionally: a completed task returns or raises
             # immediately (retrieving its exception), a pending one stays
-            # bounded by the same window.
+            # bounded by the same window. This is the one reconcile allowed
+            # after the previous backoff, not a fresh window per caller.
             await asyncio.wait_for(asyncio.shield(prior), timeout=IMPORT_STATE_SAVE_TIMEOUT)
         except TimeoutError:
+            if not prior.done():
+                _mark_stalled(state)
+                _queue_deferred_snapshot(hass, entry_id, state, data, snap, critical=critical, inflight=prior)
             _LOGGER.warning(
                 "PGE import state save still in flight for %s; deferring newer write",
                 entry_id[:8],
@@ -455,6 +671,7 @@ async def _write_payload_locked(
             # a deferred (still-running) write stays parked for later writers.
             if prior.done() and state.inflight is prior:
                 state.inflight = None
+                state.stalled_until = None
 
     if snap is None:
         # Non-critical debounced saves serialize at fire time: whatever the
@@ -476,6 +693,8 @@ async def _write_payload_locked(
         # overlapping on disk.
         await asyncio.wait_for(asyncio.shield(save_task), timeout=IMPORT_STATE_SAVE_TIMEOUT)
     except TimeoutError:
+        if not save_task.done():
+            _mark_stalled(state)
         _LOGGER.warning("PGE import state save timed out for %s", entry_id[:8])
         if critical:
             raise
@@ -513,9 +732,12 @@ async def _async_debounced_save(hass: HomeAssistant, entry_id: str, *, registere
             return
         if result is not True:
             # Deferred behind a parked timed-out write, or the write itself
-            # timed out: keep dirty so this writer retries the newer payload
-            # once the parked write drains (bounded by the 60s window).
+            # timed out: keep dirty and sleep out the stall backoff. Retrying
+            # immediately would spin, because a known-stalled write returns
+            # without waiting.
             state.dirty = True
+            remaining = _stall_remaining(state)
+            await asyncio.sleep(remaining if remaining > 0 else 0)
 
 
 async def async_flush_import_state(
@@ -658,11 +880,19 @@ async def async_load_import_state(hass: HomeAssistant, entry_id: str) -> ImportS
         # hydrated here cannot be stale relative to in-memory state (a reload
         # that later saves would otherwise overwrite newer persisted state).
         prior = state.inflight
+        if prior is not None and not prior.done() and _known_stalled(state):
+            _LOGGER.warning(
+                "PGE import state save still in flight during reload for %s",
+                entry_id[:8],
+            )
+            raise TimeoutError("PGE import state save still in flight")
         if prior is not None:
             try:
                 # Unconditional: retrieves a completed task's exception too.
                 await asyncio.wait_for(asyncio.shield(prior), timeout=IMPORT_STATE_SAVE_TIMEOUT)
             except TimeoutError:
+                if not prior.done():
+                    _mark_stalled(state)
                 _LOGGER.warning(
                     "PGE import state save still in flight during reload for %s",
                     entry_id[:8],
@@ -821,6 +1051,14 @@ async def _restore_locked(
                     entry_id[:8],
                     attempt,
                 )
+            remaining = _stall_remaining(state)
+            # Release the lock for the backoff. Holding it here would block every
+            # other save for the whole stall and a prompt defer would spin.
+            state.lock.release()
+            try:
+                await asyncio.sleep(remaining if remaining > 0 else 0)
+            finally:
+                await state.lock.acquire()
             continue
         # True: written/dedupe-skipped. False: superseded by a newer binding
         # or crossed reset — either way the restore must not rewrite.
@@ -841,6 +1079,8 @@ async def async_clear_import_state(hass: HomeAssistant, entry_id: str) -> None:
     """
     state = _save_state(entry_id)
     async with state.lock:
+        if _known_stalled(state):
+            raise TimeoutError("PGE import state save still in flight")
         task = state.task
         if task is not None and not task.done():
             task.cancel()

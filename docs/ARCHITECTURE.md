@@ -85,6 +85,16 @@ Auth blips and partial poll failures must **not** blank the panel or erase recor
 - Entities stay `available` while retained state exists (`PGEBaseEntity.available`), so At a glance / billing keep last-known values.
 - Transient credential auth failure requests a single reauth flow; it does not unload the entry or clear statistics. Cognito / GraphQL **rate limits** soft-fail without reauth. Hard `ConfigEntryAuthFailed` only when there is nothing retained yet (first setup) or MFA is permanently unsupported.
 
+### Config-entry reload
+
+Token and title writes update `entry.data` and do not reload. The update listener compares options and reloads once when they change. Reauth and Update credentials already call `async_reload` once; the listener does not add a second reload. A listener left from a previous setup sees a retired generation and returns.
+
+Post-setup (first refresh, repair, backfill) is an entry-owned background task. Unload retires the coordinator before its first await, cancels that task, and rejects later token, checkpoint, and backfill writes from it. A failed platform unload un-retires the same coordinator.
+
+At most one network refresh is admitted per entry per 60 seconds (`RELOAD_REFRESH_COOLDOWN_SECONDS`), including across coordinator replacement. Further attempts log `PGE reload loop detected` and keep the last payload. Post-setup schedules one resume timer for that deferred refresh and does not also shorten the coordinator interval. A suppressed coordinator poll waits out the remaining deadline; the next successful poll restores the configured schedule. Cognito cooldown and a stalled import-state write use the later deadline and do not pull a longer schedule forward. The admission map is in memory and is cleared when the entry is removed or Home Assistant stops.
+
+A known-stalled import-state write — one that already used its 60-second window and is still in flight — makes later critical saves, loads, and clears fail immediately instead of opening another 60-second wait. One follower writes the newest critical snapshot after the parked write finishes. Noncritical saves sleep out the backoff. Loading a known stall raises instead of hydrating a stale file. The coordination record survives `discard_store_cache` until that parked write drains.
+
 ### Tiered history / backfill
 
 1. History start from options: `full` → floor `2019-01-01`, or `start_date`.
