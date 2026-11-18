@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,6 +12,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 from custom_components.pge_energy.coordinator import PGECoordinator
 from custom_components.pge_energy.exceptions import (
     PGEAuthenticationError,
+    PGECaptchaUnsupportedError,
     PGEConnectionError,
     PGESchemaError,
 )
@@ -950,3 +952,463 @@ async def test_repair_rereads_marker_under_lock_and_clears_exactly_it():
     # The NEWER boundary is what got repaired and cleared — not the stale one.
     assert repaired == [newer_boundary]
     assert coord._import_store.dirty_from is None
+
+
+def _retain_usage(coord: PGECoordinator) -> list[UsageInterval]:
+    yesterday = today_local() - timedelta(days=1)
+    prior = _full_day_intervals(yesterday)
+    coord._recent_intervals = list(prior)
+    coord._lifetime_energy_kwh = 123.0
+    coord.data = {"intervals": list(prior), "failed_days": []}
+    return prior
+
+
+def _bind_reauth(coord: PGECoordinator) -> list[asyncio.Task]:
+    """Schedule reauth coroutines on the running loop so tests can drain them."""
+    tasks: list[asyncio.Task] = []
+
+    def _schedule(coro):
+        task = asyncio.get_running_loop().create_task(coro)
+        tasks.append(task)
+        return task
+
+    coord.hass.async_create_task = MagicMock(side_effect=_schedule)
+    coord.hass.config_entries.flow.async_init = AsyncMock()
+    return tasks
+
+
+async def _drain(tasks: list[asyncio.Task]) -> None:
+    if tasks:
+        await asyncio.gather(*tasks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cause", "usage_error", "renew_error"),
+    [
+        (PGEAuthenticationError("PGE password reset required"), None, None),
+        (PGEAuthenticationError("PGE login rejected (incorrect username or password)"), None, None),
+        (PGEAuthenticationError("PGE Cognito login failed (HTTP 503)"), None, None),
+        (None, PGEAuthenticationError("Token expired or invalid"), PGEAuthenticationError("Token expired or invalid")),
+        (
+            None,
+            PGEAuthenticationError("Token expired or invalid"),
+            PGEAuthenticationError("Token expired - reauthentication required"),
+        ),
+    ],
+    ids=["password-reset", "incorrect-credentials", "cognito-http", "apigee-401", "legacy-expired-token"],
+)
+async def test_poll_auth_error_reports_reason_and_type(cause, usage_error, renew_error, caplog):
+    """Initial login and failed renewals must keep the safe cause and class."""
+    coord = _make_coordinator(auth_mode="credential")
+    prior = _retain_usage(coord)
+    coord._refresh_job_active = True
+    coord.async_persist_sync_progress = AsyncMock()
+    tasks = _bind_reauth(coord)
+    exposed = cause or renew_error
+    assert exposed is not None
+    if cause is not None:
+        coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=cause)
+    else:
+        coord.client.get_usage = AsyncMock(side_effect=usage_error)
+        coord.auth_manager.force_renew = AsyncMock(side_effect=renew_error)
+
+    caplog.set_level(logging.ERROR, logger="custom_components.pge_energy.coordinator")
+    try:
+        data = await coord._async_update_data()
+    finally:
+        await _drain(tasks)
+
+    assert data["stale"] is True
+    assert coord.recent_intervals == prior
+    detail = f"Authentication failed: {exposed} [{type(exposed).__name__}]"
+    assert detail in (coord._last_api_error or "")
+    assert detail in caplog.text
+    assert "PGE poll failed (" in caplog.text
+    assert "keeping previously downloaded data" in caplog.text
+    assert "will retry" in caplog.text
+    assert detail in (coord.sync_progress.error or "")
+    assert coord.auth_manager.ensure_valid_token.await_args_list[0].kwargs.get("force") is True
+    assert len(tasks) == 1
+    coord.hass.config_entries.flow.async_init.assert_awaited_once()
+    if usage_error is not None:
+        assert coord.client.get_usage.await_count == 1
+        coord.auth_manager.force_renew.assert_awaited_once()
+
+
+_SECRET_EMAIL = "user@example.com"
+_SECRET_ACCOUNT = "123456789"
+_SECRET_PERSON = "987654321"
+_SECRET_JWT = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0." + "dozjgNryP4J3jVmNHl0w5N_Z99UmkT1A1kK2kK2kK2k"
+)
+_SECRET_PASSWORD = "pw-SENTINEL-hunter2"
+_SECRET_OPAQUE = "opaque-SENTINEL-token"
+_SECRET_SENTINELS = (
+    _SECRET_EMAIL,
+    _SECRET_ACCOUNT,
+    _SECRET_PERSON,
+    _SECRET_JWT,
+    _SECRET_PASSWORD,
+    _SECRET_OPAQUE,
+)
+
+
+def _poisoned_graphql_auth_body() -> dict:
+    message = (
+        f"Unauthorized token for {_SECRET_EMAIL} account {_SECRET_ACCOUNT} "
+        f"person {_SECRET_PERSON} jwt {_SECRET_JWT} password={_SECRET_PASSWORD} "
+        f"bearer {_SECRET_OPAQUE}"
+    )
+    return {"errors": [{"message": message}]}
+
+
+@pytest.mark.asyncio
+async def test_poll_graphql_auth_error_does_not_expose_server_secrets(caplog):
+    """Usage GraphQL auth text is classified, then the poll log stays free of secrets."""
+    from custom_components.pge_energy.api import _parse_usage_response
+
+    coord = _make_coordinator(auth_mode="credential")
+    _retain_usage(coord)
+    tasks = _bind_reauth(coord)
+
+    async def _usage(*_args, **_kwargs):
+        _parse_usage_response(_poisoned_graphql_auth_body(), UsageResolution.HOURLY, "key")
+
+    coord.client.get_usage = AsyncMock(side_effect=_usage)
+    caplog.set_level(logging.ERROR, logger="custom_components.pge_energy.coordinator")
+    try:
+        await coord._async_update_data()
+    finally:
+        await _drain(tasks)
+
+    exposed = f"{coord._last_api_error or ''}\n{caplog.text}\n{coord.sync_progress.error or ''}"
+    assert "unauthenticated" in (coord._last_api_error or "").lower()
+    for sentinel in _SECRET_SENTINELS:
+        assert sentinel not in exposed
+    assert coord.client.get_usage.await_count == 2
+    coord.auth_manager.force_renew.assert_awaited_once()
+
+
+_CAPTCHA_REASON = "PGE login requires CAPTCHA/device challenge; unsupported"
+_CAPTCHA_DETAIL = (
+    "Automated login cannot complete this CAPTCHA/device challenge; "
+    "re-entering the same password will not resolve it. "
+    f"{_CAPTCHA_REASON} [PGECaptchaUnsupportedError]"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("where", ["initial", "proactive", "renew", "usage"])
+async def test_poll_captcha_keeps_data_without_reauth(where):
+    """CAPTCHA stops the attempt, keeps retained data, and does not ask for a password."""
+    coord = _make_coordinator(auth_mode="credential")
+    prior = _retain_usage(coord)
+    tasks = _bind_reauth(coord)
+    challenge = PGECaptchaUnsupportedError(_CAPTCHA_REASON)
+    if where == "initial":
+        coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=challenge)
+    elif where == "proactive":
+        coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=["tok", challenge])
+    elif where == "renew":
+        coord.client.get_usage = AsyncMock(side_effect=PGEAuthenticationError("Token expired or invalid"))
+        coord.auth_manager.force_renew = AsyncMock(side_effect=challenge)
+    else:
+        coord.client.get_usage = AsyncMock(side_effect=challenge)
+
+    try:
+        data = await coord._async_update_data()
+    finally:
+        await _drain(tasks)
+
+    assert data["stale"] is True
+    assert data["intervals"] == prior
+    assert coord.recent_intervals == prior
+    assert coord.lifetime_energy_kwh == 123.0
+    assert tasks == []
+    coord.hass.config_entries.flow.async_init.assert_not_called()
+    assert _CAPTCHA_DETAIL in (coord._last_api_error or "")
+    assert coord._reauth_requested is False
+    if where == "initial":
+        coord.client.get_usage.assert_not_called()
+        coord.auth_manager.force_renew.assert_not_called()
+    elif where == "proactive":
+        assert coord.auth_manager.ensure_valid_token.await_count == 2
+        coord.client.get_usage.assert_not_called()
+        coord.auth_manager.force_renew.assert_not_called()
+    elif where == "renew":
+        assert coord.client.get_usage.await_count == 1
+        coord.auth_manager.force_renew.assert_awaited_once()
+    else:
+        assert coord.client.get_usage.await_count == 1
+        coord.auth_manager.force_renew.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_monthly_captcha_does_not_force_renew():
+    coord = _make_coordinator(auth_mode="credential")
+    coord.client.get_monthly_usage_paged = AsyncMock(side_effect=PGECaptchaUnsupportedError(_CAPTCHA_REASON))
+    with pytest.raises(PGECaptchaUnsupportedError):
+        await coord.async_get_monthly_usage_with_auth_retry(datetime.now(UTC), datetime.now(UTC))
+    assert coord.client.get_monthly_usage_paged.await_count == 1
+    coord.auth_manager.force_renew.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("monthly", [False, True])
+async def test_mfa_usage_does_not_force_renew(monthly):
+    from custom_components.pge_energy.exceptions import PGEMfaUnsupportedError
+
+    coord = _make_coordinator(auth_mode="credential")
+    challenge = PGEMfaUnsupportedError("PGE login requires MFA")
+    if monthly:
+        coord.client.get_monthly_usage_paged = AsyncMock(side_effect=challenge)
+        with pytest.raises(PGEMfaUnsupportedError):
+            await coord.async_get_monthly_usage_with_auth_retry(datetime.now(UTC), datetime.now(UTC))
+        assert coord.client.get_monthly_usage_paged.await_count == 1
+    else:
+        coord.client.get_usage = AsyncMock(side_effect=challenge)
+        with pytest.raises(PGEMfaUnsupportedError):
+            await coord.async_get_usage_with_auth_retry(datetime.now(UTC), datetime.now(UTC))
+        assert coord.client.get_usage.await_count == 1
+    coord.auth_manager.force_renew.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_mfa_during_usage_renewal_raises_config_entry_auth_failed():
+    """A 401 renewal that returns MFA must not open the password reauth flow."""
+    from homeassistant.exceptions import ConfigEntryAuthFailed
+
+    from custom_components.pge_energy.exceptions import PGEMfaUnsupportedError
+
+    coord = _make_coordinator(auth_mode="credential")
+    prior = _retain_usage(coord)
+    coord._backfill_in_progress = True
+    tasks = _bind_reauth(coord)
+    coord.client.get_usage = AsyncMock(side_effect=PGEAuthenticationError("Token expired or invalid"))
+    coord.auth_manager.force_renew = AsyncMock(side_effect=PGEMfaUnsupportedError("PGE login requires MFA"))
+    with pytest.raises(ConfigEntryAuthFailed, match="MFA"):
+        await coord._async_update_data()
+    await _drain(tasks)
+    assert tasks == []
+    coord.hass.config_entries.flow.async_init.assert_not_called()
+    assert coord._reauth_requested is False
+    assert coord.recent_intervals == prior
+    assert coord.auth_manager.ensure_valid_token.await_args_list[0].kwargs.get("force") is False
+    coord.auth_manager.force_renew.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("where", ["initial", "mid-fetch"])
+async def test_captcha_without_retained_state_is_update_failure(where):
+    """A challenge with nothing downloaded is an update failure, not a password prompt."""
+    from homeassistant.exceptions import ConfigEntryAuthFailed
+
+    from custom_components.pge_energy.sensor import PGEYesterdayEnergySensor
+
+    coord = _make_coordinator(auth_mode="credential")
+    tasks = _bind_reauth(coord)
+    coord.entry.async_start_reauth_if_available = MagicMock()
+    challenge = PGECaptchaUnsupportedError(_CAPTCHA_REASON)
+    if where == "initial":
+        coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=challenge)
+    else:
+        coord.client.get_usage = AsyncMock(side_effect=challenge)
+
+    await coord._async_refresh(log_failures=False)
+    await _drain(tasks)
+
+    assert isinstance(coord.last_exception, UpdateFailed)
+    assert not isinstance(coord.last_exception, ConfigEntryAuthFailed)
+    assert _CAPTCHA_DETAIL in str(coord.last_exception)
+    assert tasks == []
+    coord.hass.config_entries.flow.async_init.assert_not_called()
+    coord.entry.async_start_reauth_if_available.assert_not_called()
+    assert coord.last_update_success is False
+    assert coord.recent_intervals == []
+    assert coord.data is None
+    sensor = PGEYesterdayEnergySensor(coord, coord.account_key)
+    assert sensor.available is False
+    assert sensor.native_value is None
+
+
+@pytest.mark.asyncio
+async def test_captcha_with_retained_usage_keeps_yesterday_sensor():
+    from custom_components.pge_energy.sensor import PGEYesterdayEnergySensor
+
+    coord = _make_coordinator(auth_mode="credential")
+    prior = _retain_usage(coord)
+    tasks = _bind_reauth(coord)
+    coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=PGECaptchaUnsupportedError(_CAPTCHA_REASON))
+    await coord._async_refresh(log_failures=False)
+    await _drain(tasks)
+    sensor = PGEYesterdayEnergySensor(coord, coord.account_key)
+    assert sensor.available is True
+    assert sensor.native_value == float(len(prior))
+    assert coord.recent_intervals == prior
+
+
+@pytest.mark.asyncio
+async def test_auth_reauth_debounce_resets_after_success():
+    """One flow for repeated failures, reset only by a real token, then one more flow."""
+    coord = _make_coordinator(auth_mode="credential")
+    _retain_usage(coord)
+    tasks = _bind_reauth(coord)
+    auth_error = PGEAuthenticationError("PGE login rejected (incorrect username or password)")
+    coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=auth_error)
+
+    await coord._async_update_data()
+    await coord._async_update_data()
+    await _drain(tasks)
+    assert len(tasks) == 1
+    assert coord._reauth_requested is True
+
+    coord._reauth_requested = True
+    coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=PGECaptchaUnsupportedError(_CAPTCHA_REASON))
+    await coord._async_update_data()
+    await _drain(tasks)
+    assert len(tasks) == 1
+    assert coord._reauth_requested is True
+
+    coord.auth_manager.ensure_valid_token = AsyncMock(return_value="tok")
+
+    async def _usage(_resolution, start, _end, _account_key):
+        day = start.astimezone(local_day_bounds(today_local())[0].tzinfo).date()
+        return UsageResponse(
+            resolution=UsageResolution.HOURLY,
+            intervals=_full_day_intervals(day) if day != today_local() else [],
+            total_kwh=None,
+            total_cost=None,
+            is_tod=None,
+            acct_type=None,
+        )
+
+    coord.client.get_usage = AsyncMock(side_effect=_usage)
+    with (
+        patch(
+            "custom_components.pge_energy.coordinator.async_import_with_baseline",
+            AsyncMock(return_value=ImportBaselineResult(1)),
+        ),
+        patch("custom_components.pge_energy.coordinator.async_save_import_state", AsyncMock(return_value=True)),
+        patch("custom_components.pge_energy.coordinator.async_run_billing_sync", AsyncMock()),
+    ):
+        await coord._async_update_data()
+    await _drain(tasks)
+    assert coord._reauth_requested is False
+    assert len(tasks) == 1
+    assert coord.auth_manager.ensure_valid_token.await_args_list[0].kwargs.get("force") is True
+
+    coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=auth_error)
+    await coord._async_update_data()
+    await _drain(tasks)
+    assert len(tasks) == 2
+    assert coord._reauth_requested is True
+    assert coord.hass.config_entries.flow.async_init.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_preserves_retained_snapshots():
+    """Auth failure may flag the poll. It must not rewrite downloaded history."""
+    from custom_components.pge_energy.billing_models import (
+        AccountSnapshot,
+        EnergyTrackerEstimates,
+        ProgramsSnapshot,
+    )
+
+    coord = _make_coordinator(auth_mode="credential")
+    prior = _retain_usage(coord)
+    coord._lifetime_return_kwh = 2.5
+    coord._lifetime_cost_usd = 40.0
+    coord._lifetime_compensation_usd = 1.25
+    account = AccountSnapshot(account_number="123", amount_due=19.5)
+    programs = ProgramsSnapshot(time_of_day_enrolled=False, peak_time_rebates_enrolled=True)
+    tracker = EnergyTrackerEstimates(details_available=True, bill_to_date_amount=8.0)
+    coord.account_snapshot = account
+    coord.programs_snapshot = programs
+    coord.tracker_estimates = tracker
+    coord._import_store.completed_local_dates = ["2024-06-01"]
+    coord._import_store.failed_local_dates = ["2024-05-01"]
+    coord._import_store.last_imported_end = "2024-06-02T07:00:00+00:00"
+    before = {
+        "intervals": list(prior),
+        "lifetimes": (123.0, 2.5, 40.0, 1.25),
+        "account": account.to_dict(),
+        "programs": programs.to_dict(),
+        "tracker": tracker.to_dict(),
+        "completed": ["2024-06-01"],
+        "failed": ["2024-05-01"],
+        "imported_end": "2024-06-02T07:00:00+00:00",
+    }
+    tasks = _bind_reauth(coord)
+    coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=PGEAuthenticationError("PGE password reset required"))
+    coord._refresh_job_active = True
+
+    async def _timeout_persist():
+        raise TimeoutError
+
+    coord.async_persist_sync_progress = _timeout_persist
+    with (
+        patch("custom_components.pge_energy.coordinator.async_import_with_baseline", AsyncMock()) as record_import,
+        patch("custom_components.pge_energy.coordinator.async_clear_import_state", AsyncMock()) as record_clear,
+        patch("custom_components.pge_energy.coordinator.async_save_import_state", AsyncMock()) as record_save,
+    ):
+        data = await coord._async_update_data()
+        coord.auth_manager.ensure_valid_token = AsyncMock(return_value="tok")
+        coord.client.get_usage = AsyncMock(side_effect=PGEAuthenticationError("Token expired or invalid"))
+        coord.auth_manager.force_renew = AsyncMock(side_effect=PGEAuthenticationError("Token expired or invalid"))
+        coord._refresh_job_active = False
+        await coord._async_update_data()
+    await _drain(tasks)
+
+    assert data["stale"] is True
+    assert coord.recent_intervals == before["intervals"]
+    assert (
+        coord.lifetime_energy_kwh,
+        coord.lifetime_return_kwh,
+        coord.lifetime_cost_usd,
+        coord.lifetime_compensation_usd,
+    ) == before["lifetimes"]
+    assert coord.account_snapshot is account
+    assert coord.programs_snapshot is programs
+    assert coord.tracker_estimates is tracker
+    assert account.to_dict() == before["account"]
+    assert programs.to_dict() == before["programs"]
+    assert tracker.to_dict() == before["tracker"]
+    assert coord._import_store.completed_local_dates == before["completed"]
+    assert coord._import_store.failed_local_dates == before["failed"]
+    assert coord._import_store.last_imported_end == before["imported_end"]
+    assert "PGE password reset required" in (coord.sync_progress.error or "")
+    record_import.assert_not_awaited()
+    record_clear.assert_not_awaited()
+    record_save.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mfa_poll_still_raises_config_entry_auth_failed():
+    from homeassistant.exceptions import ConfigEntryAuthFailed
+
+    from custom_components.pge_energy.exceptions import PGEMfaUnsupportedError
+
+    coord = _make_coordinator(auth_mode="credential")
+    _retain_usage(coord)
+    tasks = _bind_reauth(coord)
+    coord.auth_manager.ensure_valid_token = AsyncMock(side_effect=PGEMfaUnsupportedError("PGE login requires MFA"))
+    with pytest.raises(ConfigEntryAuthFailed, match="MFA"):
+        await coord._async_update_data()
+    await _drain(tasks)
+    assert tasks == []
+
+
+@pytest.mark.asyncio
+async def test_backfill_poll_does_not_force_credential_login():
+    coord = _make_coordinator(auth_mode="credential")
+    _retain_usage(coord)
+    coord._backfill_in_progress = True
+    tasks = _bind_reauth(coord)
+    coord.client.get_usage = AsyncMock(side_effect=PGEAuthenticationError("Token expired or invalid"))
+    coord.auth_manager.force_renew = AsyncMock(side_effect=PGEAuthenticationError("Token expired or invalid"))
+    try:
+        await coord._async_update_data()
+    finally:
+        await _drain(tasks)
+    assert coord.auth_manager.ensure_valid_token.await_args_list[0].kwargs.get("force") is False

@@ -12,7 +12,7 @@ Protocol notes for the unofficial Portland General Electric portal login chain u
    - Merge (union, defaults first) so non-default accounts on a shared login are selectable in config flow. Soft-fail transient detail-list errors and keep `getAccountInfo` defaults; MFA/CAPTCHA challenges on the detail-list call fail closed.
 4. Runtime renewal prefers password re-login when stored; falls back to `REFRESH_TOKEN_AUTH` only on recoverable credential auth errors (not throttle).
 
-MFA / CAPTCHA challenges fail closed (`PGEMfaUnsupportedError` / `PGECaptchaUnsupportedError`).
+MFA / CAPTCHA challenges fail closed at setup and in the options flow (`PGEMfaUnsupportedError` / `PGECaptchaUnsupportedError`). A runtime poll that raises `PGECaptchaUnsupportedError` keeps already downloaded data and does not ask for the password again. That is containment, not CAPTCHA support. A usage 401 whose renewal returns MFA raises `ConfigEntryAuthFailed` and does not use the password soft-fail reauth.
 
 Sanitized DEBUG diagnostics log discovery counts and account-number last-4 digits only (never full numbers, encrypted ids, or tokens).
 
@@ -43,6 +43,9 @@ Fixtures:
 - No password→refresh InitiateAuth fallback on rate-limit (would amplify load).
 - Shared per-email cooldown in `hass.data[DOMAIN]["cognito_rate_limit_until"]` (default **60s** for `TooManyRequests`, **900s** for password-attempt lockout; cap 900s).
 - Coordinator soft-fails with retained sensors; **does not** open reauth UI for Cognito rate-limit.
+- Ordinary poll authentication failures log `Authentication failed: <safe cause> [<exception class>]` and request one reauth flow until a later token acquisition clears the debounce.
+- A poll CAPTCHA logs that re-entering the password will not clear the device challenge, keeps retained sensors, and raises `UpdateFailed` only when nothing has been downloaded. It does not reset an existing reauth debounce by itself.
+- Usage GraphQL authentication is classified to a fixed category (`unauthenticated`, rejected access token, or generic authentication). The server message is not copied into the exception, because it can contain emails, ids, tokens, or passwords.
 - Poll `update_interval` stretches to remaining cooldown when longer than the normal/catch-up schedule.
 - Concurrent `force_renew` waiters coalesce onto one Cognito login when a peer already replaced the token.
 
