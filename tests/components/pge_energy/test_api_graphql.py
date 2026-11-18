@@ -72,7 +72,8 @@ class TestGraphQLErrors:
     def test_graphql_non_auth_error_does_not_expose_server_secrets(self):
         email = "user@example.com"
         jwt = (
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_Z99UmkT1A1kK2kK2k"
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+            + "dozjgNryP4J3jVmNHl0w5N_Z99UmkT1A1kK2kK2k"
         )
         password = "pw-SENTINEL-hunter2"
         bearer = "opaque-SENTINEL-secret"
