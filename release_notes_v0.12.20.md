@@ -9,8 +9,9 @@ A failed poll logged only `Authentication failed`, so the password, token, or po
 ## Changes
 
 - Both poll authentication paths now log a safe cause and the exception class, and store that same text on the last error and a tracked sync failure.
-- Usage GraphQL authentication errors use a fixed category. Emails, account ids, tokens, and passwords from the server message are not copied into the exception or the poll log.
+- Usage GraphQL authentication, authorization, and other errors use a fixed category. Emails, account ids, tokens, and passwords from the server message are not copied into the exception or the poll log.
 - A CAPTCHA during the initial login, a proactive token check, or a 401 renewal keeps downloaded usage and billing, does not open a password reauth flow, and does not immediately retry the login. With nothing downloaded yet, the poll raises `UpdateFailed` instead of `ConfigEntryAuthFailed`.
+- MFA during poll start, or during a usage 401 renewal, raises `ConfigEntryAuthFailed`. It does not open Update credentials through the password soft-fail.
 - Setup and the options flow still reject CAPTCHA and MFA. Ordinary wrong-password failures still request one reauth flow until a later token acquisition resets that debounce.
 
 ## Limitations

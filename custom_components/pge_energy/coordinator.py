@@ -836,7 +836,7 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.persist_auth_to_entry()
         try:
             return await self.client.get_usage(resolution, start, end, self.account_key)
-        except PGECaptchaUnsupportedError:
+        except (PGECaptchaUnsupportedError, PGEMfaUnsupportedError):
             raise
         except PGEAuthenticationError:
             if self.auth_manager.auth_mode != "credential":
@@ -855,7 +855,7 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.persist_auth_to_entry()
         try:
             return await self.client.get_monthly_usage_paged(start, end, self.account_key)
-        except PGECaptchaUnsupportedError:
+        except (PGECaptchaUnsupportedError, PGEMfaUnsupportedError):
             raise
         except PGEAuthenticationError:
             if self.auth_manager.auth_mode != "credential":
@@ -1093,6 +1093,13 @@ class PGECoordinator(DataUpdateCoordinator[dict[str, Any]]):
             iso = day.isoformat()
             try:
                 response = await self.async_get_usage_with_auth_retry(day_start, request_end)
+            except PGEMfaUnsupportedError as exc:
+                # A 401 renewal inside this loop never reaches the poll-start
+                # handler. MFA cannot be fixed by Update credentials.
+                if tracking:
+                    self.fail_sync_job(str(exc))
+                    await self.async_persist_sync_progress()
+                raise ConfigEntryAuthFailed(str(exc)) from exc
             except PGECaptchaUnsupportedError as exc:
                 return await self._async_soft_fail_poll(
                     self._captcha_failure_message(exc),

@@ -324,14 +324,23 @@ def _graphql_authentication_reason(joined: str) -> str:
     return "GraphQL authentication failed"
 
 
+def _graphql_authorization_reason(joined: str) -> str:
+    """Fixed authorization category. Server text is only a classifier."""
+    if "forbidden" in joined:
+        return "GraphQL rejected the request as forbidden"
+    if "access denied" in joined:
+        return "GraphQL rejected the request as access denied"
+    return "GraphQL rejected the request as not allowed"
+
+
 def _classify_graphql_errors(errors: list[dict[str, Any]]) -> None:
     messages = " | ".join(str(e.get("message", e)) for e in errors)
     joined = messages.lower()
     if any(x in joined for x in ("unauthoriz", "unauthenticated", "token", "auth")):
         raise PGEAuthenticationError(_graphql_authentication_reason(joined))
     if any(x in joined for x in ("forbidden", "not allowed", "access denied")):
-        raise PGEAuthorizationError(f"GraphQL authorization error: {messages}")
-    raise PGEGraphQLError(f"GraphQL errors: {messages}", errors)
+        raise PGEAuthorizationError(_graphql_authorization_reason(joined))
+    raise PGEGraphQLError("GraphQL request failed", errors)
 
 
 def _parse_usage_response(

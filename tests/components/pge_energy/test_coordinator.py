@@ -1155,6 +1155,50 @@ async def test_monthly_captcha_does_not_force_renew():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("monthly", [False, True])
+async def test_mfa_usage_does_not_force_renew(monthly):
+    from custom_components.pge_energy.exceptions import PGEMfaUnsupportedError
+
+    coord = _make_coordinator(auth_mode="credential")
+    challenge = PGEMfaUnsupportedError("PGE login requires MFA")
+    if monthly:
+        coord.client.get_monthly_usage_paged = AsyncMock(side_effect=challenge)
+        with pytest.raises(PGEMfaUnsupportedError):
+            await coord.async_get_monthly_usage_with_auth_retry(datetime.now(UTC), datetime.now(UTC))
+        assert coord.client.get_monthly_usage_paged.await_count == 1
+    else:
+        coord.client.get_usage = AsyncMock(side_effect=challenge)
+        with pytest.raises(PGEMfaUnsupportedError):
+            await coord.async_get_usage_with_auth_retry(datetime.now(UTC), datetime.now(UTC))
+        assert coord.client.get_usage.await_count == 1
+    coord.auth_manager.force_renew.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_mfa_during_usage_renewal_raises_config_entry_auth_failed():
+    """A 401 renewal that returns MFA must not open the password reauth flow."""
+    from homeassistant.exceptions import ConfigEntryAuthFailed
+
+    from custom_components.pge_energy.exceptions import PGEMfaUnsupportedError
+
+    coord = _make_coordinator(auth_mode="credential")
+    prior = _retain_usage(coord)
+    coord._backfill_in_progress = True
+    tasks = _bind_reauth(coord)
+    coord.client.get_usage = AsyncMock(side_effect=PGEAuthenticationError("Token expired or invalid"))
+    coord.auth_manager.force_renew = AsyncMock(side_effect=PGEMfaUnsupportedError("PGE login requires MFA"))
+    with pytest.raises(ConfigEntryAuthFailed, match="MFA"):
+        await coord._async_update_data()
+    await _drain(tasks)
+    assert tasks == []
+    coord.hass.config_entries.flow.async_init.assert_not_called()
+    assert coord._reauth_requested is False
+    assert coord.recent_intervals == prior
+    assert coord.auth_manager.ensure_valid_token.await_args_list[0].kwargs.get("force") is False
+    coord.auth_manager.force_renew.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("where", ["initial", "mid-fetch"])
 async def test_captcha_without_retained_state_is_update_failure(where):
     """A challenge with nothing downloaded is an update failure, not a password prompt."""

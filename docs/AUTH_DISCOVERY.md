@@ -12,7 +12,7 @@ Protocol notes for the unofficial Portland General Electric portal login chain u
    - Merge (union, defaults first) so non-default accounts on a shared login are selectable in config flow. Soft-fail transient detail-list errors and keep `getAccountInfo` defaults; MFA/CAPTCHA challenges on the detail-list call fail closed.
 4. Runtime renewal prefers password re-login when stored; falls back to `REFRESH_TOKEN_AUTH` only on recoverable credential auth errors (not throttle).
 
-MFA / CAPTCHA challenges fail closed at setup and in the options flow (`PGEMfaUnsupportedError` / `PGECaptchaUnsupportedError`). A runtime poll that raises `PGECaptchaUnsupportedError` keeps already downloaded data and does not ask for the password again. That is containment, not CAPTCHA support.
+MFA / CAPTCHA challenges fail closed at setup and in the options flow (`PGEMfaUnsupportedError` / `PGECaptchaUnsupportedError`). A runtime poll that raises `PGECaptchaUnsupportedError` keeps already downloaded data and does not ask for the password again. That is containment, not CAPTCHA support. A usage 401 whose renewal returns MFA raises `ConfigEntryAuthFailed` and does not use the password soft-fail reauth.
 
 Sanitized DEBUG diagnostics log discovery counts and account-number last-4 digits only (never full numbers, encrypted ids, or tokens).
 
